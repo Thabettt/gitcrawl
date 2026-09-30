@@ -222,3 +222,9 @@
 - Never forward unknown params upstream; never treat `total_count` as ground truth; never ETag the search path
 - Commit after each task or logical group; stop at any checkpoint to validate
 - Re-verify quarterly: API version pin, star/pricing/version numbers, `robots.txt`
+
+---
+
+## Phase 8: Operator Console (US4) — see `console-plan.md`
+
+Tasks **T052–T059** (console models/migration, executor, library, diff, UI shell/detail/history-keyboard-dark, polish) are defined in `design/console-plan.md`, together with the **batch queue B1–B10** that executes them alongside the outstanding **T019–T037 and T051** (US2 + US3). That queue is the overnight run of record; briefs for each batch quote the exact task text and interfaces. US4 contract additions: `design/console-spec.md`; routes table and DDL live there.

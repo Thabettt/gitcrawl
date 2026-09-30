@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-29
 
-**Status**: Frozen (v2 — 2026-09-30 amendment: background freshness cut, US2 = fetch-moment lifecycle)
+**Status**: Frozen (v3 — 2026-10-01 amendment: US4 operator console added, see `console-spec.md`; run history is operator-triggered artifacts, live-only freshness unchanged)
 
 **Input**: Ultimate crawler design per `findings/00–06` (SEART-style crawl → store → serve, hardened with `05` gap fixes + efficiency review). Scope: cross-GitHub public · Stack: Python + Postgres · Freshness: live-at-fetch only (no background polling — entire job runs on the go at `ran_at`).
 
@@ -140,3 +140,7 @@ Consumers query gitcrawl's own API with filters GitHub never built (`has_dockerf
 - `X-GitHub-Api-Version` pinned (e.g. `2022-11-28`) and re-verified quarterly; all numbers marked "as of 2026-09-29" are refreshed before capacity/cost commitments.
 - Bulk-dump bootstrap (BQ/WoC/SWH) is an optional seed, not a v1 dependency; default bootstrap is `since`-enumeration + ecosyste.ms (zero-token metadata).
 - Geo resolution targets country-level ISO only (no city lat/long product); unmatched bucket is an accepted outcome.
+
+## Amendment v3 — US4 Operator Console (2026-10-01)
+
+Adds **US4**: a local single-operator web console (FastAPI + Jinja2 + htmx, assets vendored, no Node at runtime) with run persistence (`runs`, `run_items`, `saved_filters`), a dashboard, the full filter form, run detail with sortable/paginated results, run history, run-to-run diff, saved filter library, optional clone control, keyboard-first navigation, and dark mode. This amendment also commits the delivery of US2 (within-run lifecycle) and US3 (enrichment + serve deck) that the console depends on. Success criteria **SC-005–SC-008** and the exact routes/DDL/behaviors are defined in `console-spec.md`; execution order is `console-plan.md` (batches B1–B10, tasks T052–T059 added alongside T019–T037/T051). Live-only freshness is unchanged: run history stores operator-triggered run artifacts, never a background index.

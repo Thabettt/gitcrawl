@@ -126,3 +126,7 @@ Fetching never clones. After results display, a **Clone** control offers a slide
 ```
 
 `buckets` declares old/new sampling frames; `attrition: "count"` records private/deleted/dotfiles drops instead of hiding them; `size_splits` tags every repo; `study_window` bounds commit history; `star_floor` is optional (Dabic frame). All fields optional; all recorded verbatim in the run bundle for cross-stack comparison.
+
+## Console routes (US4)
+
+The operator console adds server-rendered pages and run endpoints on top of this JSON contract — full route table (dashboard, `/find`, `/runs`, run detail/export/replay, diff, `/filters`, htmx partials, `/health`) and their rules live in `../console-spec.md`. This file remains the authority for `GET /vsearch/repos`, `POST /vsearch/run`, and `GET /vsearch/runs/{filter_hash}`.

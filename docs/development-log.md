@@ -52,6 +52,20 @@ Source note: VS Code extension `kilocode.kilo-code-7.8.1-win32-x64` is installed
 | R15 | Real Redis via the existing WSL Ubuntu service | service location change |
 | R16 | `GITHUB_TOKEN` sourced from the authenticated `gh` keyring (broad OAuth token; fine-grained PAT can replace it) | scope breadth |
 | R17 | Services auto-start via per-user logon scheduled tasks | manual start needed |
+| R18 | US1 executed as 3 reviewable batches | review cadence |
+| R19 | pipeline lives in `discover/pipeline.py` | move file |
+| R20 | golden-org parity = cross-path + bounded since sample | adjust test |
+| R21 | `request_with_retry` added to `lib/gh_client.py` | refactor later |
+| R22 | bootstrap inserts first-insert history | missing/extra history rows |
+| R23 | TEXT COPY (PG18 forbids binary `ON_ERROR`) | slower bulk load |
+| R24 | multi-worker machinery built but unwired (documented) | hidden dead code until wired |
+| R25 | live delta probe test added | two extra API calls |
+| R26 | Console docs live in `design/console-spec.md` + `console-plan.md`; plan format compressed to interface-level (writing-plans adapted for scope) | implementer gaps caught at review |
+| R27 | Overnight work continues on `001-gitcrawl` (no new branch); integration decision stays pending | branch semantics |
+| R28 | AC standby/hibernate disabled for the overnight run (`powercfg`) | machine sleeps mid-run |
+| R29 | Spec review deferred to morning per operator's continuous-run instruction | unreviewed spec assumptions |
+| R30 | Single-worker in-process run executor (no Redis queue for runs) | run concurrency limited |
+| R31 | Front-end assets vendored committed (Tailwind standalone output preferred, hand-rolled CSS fallback) | design quality varies by path |
 
 ## Task progress (commits on `001-gitcrawl`)
 
@@ -93,9 +107,10 @@ The final whole-branch review triaged every prior deferred minor as **"Can ship"
 ## Current status & how to resume
 
 - **Done**: T000; Phase 1 (T001–T004); Phase 2 (T005–T009); **US1 complete** (T010–T018 + T011 live parity); **final whole-branch review clean after one fix wave** (`f64bd69`). 350 tests green incl. live parity (A=566/B=566) and live delta probe (34,207,993 → 11,756).
-- **Not built (still in the plan)**: US2 current-state lifecycle (T019–T023), US3 enrich/serve + polish (T025–T051); thesis tracks T038–T045 remain parked.
-- **Known gap — built-but-unwired (ruling R24)**: `limiter/retry.py::RetryQueue`, `scheduler/state_machine.py::retry_or_dlq`/`reclaim_stale`/`pel_size`, `scheduler/tiering.py::order_shards`, `discover/since_scan.py::plan_id_ranges` are implemented and unit-tested for the multi-worker design but have no call sites in the single-consumer US1 path. Wiring them (queue retry/DLQ/reaper, ID-range parallel since scan, survivor ordering) belongs to the multi-worker slice; this is deliberate, not dead code by accident.
-- **Branch state**: `001-gitcrawl` at `f64bd69`, working tree clean; awaiting the finishing decision (merge to `main`, keep the branch, or further work).
+- **Overnight run (2026-10-01 → 02)**: operator approved completing **US2 + US3 + US4 console in one continuous run** (backend first, then UI), no check-ins, spec review deferred to morning, continuing on `001-gitcrawl`; machine kept awake (R28). Plan of record: `design/console-spec.md` + `design/console-plan.md` (batches B1–B10) executing outstanding tasks T019–T037/T051 plus new console tasks T052–T059.
+- **Live progress ledger**: `.superpowers/sdd/tasks/progress.md` (recreated for part 2; scratch, points at this log). Completed batches and rulings R18–R31 accumulate there and in the tables above.
+- **Known gap — built-but-unwired (ruling R24)**: `limiter/retry.py::RetryQueue`, `scheduler/state_machine.py::retry_or_dlq`/`reclaim_stale`/`pel_size`, `scheduler/tiering.py::order_shards`, `discover/since_scan.py::plan_id_ranges` remain deliberately unwired for the single-consumer path.
+- **Morning leftovers**: branch integration decision (merge/PR/keep), the residual minors ledger, and any parked findings surfaced by the final console review.
 - **Temporary workspace**: `.superpowers/sdd/tasks/` (gitignored) holds the SDD ledger, task briefs, reports, and review packages. It is scratch — this log is the durable mirror; the workspace is deleted after the final whole-branch review.
 - **Execution process**: subagent-driven development — fresh implementer per task/batch, scripted task briefs, spec+quality review after each batch, scoped re-review per fix round, whole-branch review at the end. Deferred findings above are triaged at that final review.
 

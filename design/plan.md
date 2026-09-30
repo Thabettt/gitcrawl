@@ -135,3 +135,7 @@ tests/
 | Dual discovery paths (search shards + `since` scan + org enum) | No single path covers filtered queries (search), bulk coverage (`since`), and org scopes (enum) within budget | Search-only backfill is 2.8× slower with scan distortion (efficiency review C2); `since`-only can't filter |
 | Redis alongside Postgres | Per-bucket distributed rate coordination across workers can't live in Postgres row locks at poll rates | In-process limiter breaks with >1 worker; PG advisory locks add contention vs Lua buckets |
 | GraphQL client alongside REST | funding/discussions/sponsors/tiers have no REST equivalent; batch replaces ≥3 REST calls | REST-only leaves US3 acceptance (funding+discussions) unimplementable |
+
+## Console additions (US4 — see `console-spec.md` / `console-plan.md`)
+
+Additional source files: `src/serve/pages.py` (server-rendered routes), `src/serve/executor.py` (single-worker run executor), `src/serve/library.py` (saved filters), `src/serve/diff.py` (run diff), `src/serve/__main__.py` (dev server), `src/serve/templates/` (base/dashboard/run detail/history/diff/library/shortcuts + partials), `src/serve/static/` (vendored htmx + compiled CSS + app.js), `migrations/versions/0002_console.py` (runs/run_items/saved_filters). The console completes US2 (T019–T023) and US3 (T025–T037, T051) per `console-plan.md` batches B1–B10.
