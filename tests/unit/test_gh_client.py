@@ -1,17 +1,23 @@
 import hashlib
 
+import fakeredis
 import httpx
+import pytest
 
 from lib.gh_client import (
     ACCEPT,
     API_BASE,
     API_VERSION,
     USER_AGENT,
+    ThrottledError,
     build_headers,
     create_client,
     load_tokens,
+    request_with_retry,
+    resource_for_url,
     token_fingerprint,
 )
+from limiter.buckets import BucketLimiter
 
 
 def test_constants_pin_github_api_values():
@@ -144,3 +150,112 @@ def test_create_client_uses_default_timeout(monkeypatch):
 def test_create_client_honors_custom_timeout(monkeypatch):
     captured, _ = capture_client_traffic(monkeypatch, None, timeout=5.0)
     assert captured["timeout"] == 5.0
+
+
+@pytest.mark.parametrize(
+    ("url", "resource"),
+    [
+        ("https://api.github.com/search/repositories", "search"),
+        ("https://api.github.com/search/repositories?q=x&page=2", "search"),
+        ("https://api.github.com/search/code", "code_search"),
+        ("https://api.github.com/repos/octocat/hello-world", "core"),
+        ("https://api.github.com/orgs/github/repos", "core"),
+        ("https://api.github.com/rate_limit", "core"),
+    ],
+)
+def test_resource_for_url_maps_github_resources(url, resource):
+    assert resource_for_url(url) == resource
+
+
+def test_request_with_retry_deny_loop_raises_throttled_error_without_http():
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"search": (0, 60.0)}, max_concurrent=100)
+    sleeps = []
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        raise AssertionError("HTTP must not be attempted while the limiter denies")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ThrottledError) as excinfo:
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/search/repositories?q=x",
+            limiter=limiter,
+            token_id="tok",
+            max_attempts=3,
+            sleep=sleeps.append,
+            now=lambda: 1000.0,
+        )
+    assert excinfo.value.retry_after == 20.0
+    assert sleeps == [20.0, 20.0]
+    assert requests == []
+
+
+def test_request_with_retry_propagates_on_response_exceptions():
+    def handler(request):
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    def boom(response, latency_ms):
+        raise RuntimeError("audit exploded")
+
+    with pytest.raises(RuntimeError, match="audit exploded"):
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/x",
+            on_response=boom,
+            now=lambda: 1.0,
+        )
+
+
+def test_malformed_retry_after_falls_back_to_backoff():
+    sleeps = []
+    responses = iter(
+        [
+            httpx.Response(403, headers={"retry-after": "soon"}, json={"message": "slow down"}),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/x",
+        sleep=sleeps.append,
+        now=lambda: 1000.0,
+        jitter=lambda: 0.0,
+    )
+    assert response.status_code == 200
+    assert sleeps == [60.0]
+
+
+def test_spam_422_error_code_drives_backoff():
+    sleeps = []
+    responses = iter(
+        [
+            httpx.Response(
+                422,
+                json={
+                    "message": "You have exceeded a secondary rate limit",
+                    "errors": [{"code": "custom"}],
+                },
+            ),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/search/repositories?q=x",
+        sleep=sleeps.append,
+        now=lambda: 1000.0,
+        jitter=lambda: 0.0,
+    )
+    assert response.status_code == 200
+    assert sleeps == [60.0]
