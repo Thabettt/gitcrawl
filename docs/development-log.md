@@ -19,6 +19,18 @@ gitcrawl is a **live-only** GitHub repository discovery tool: one operator-trigg
 
 Full commands, credential handling, rotation, and troubleshooting: **`docs/environment.md`**.
 
+## Cleanup note — stray Kilo Code worktree (2026-10-01)
+
+While preparing the opencode restart, a `.kilo/` directory was found in the repo root. Investigation (read-only) established:
+
+- It was a **registered git worktree** of this repo: `.kilo/worktrees/spiky-door`, detached HEAD at `784117b` (our Phase 2a fix commit), created 2026-09-30 23:33:30 by git identity `Thabettt <thabetology@gmail.com>`; admin metadata `.git/worktrees/spiky-door/kilo-agent-manager-metadata.json`.
+- Content was **identical to our commit at the blob level** (sampled sha1s match; working-tree hash differences were CRLF-only reproductions of the same blobs). Working tree clean, no commits, no extra branches, no running process.
+- Kilo Code had written 28 ignore lines into `.git/info/exclude` (`.kilo/worktrees/`, `.kilo/agent-manager.json`, `.kilo/setup-script*`, `.kilocode/*`), which is why `git status` never showed it.
+
+Owner states Kilo Code was never used. **Removed**: `git worktree remove .kilo/worktrees/spiky-door --force`, `git worktree prune`, deleted `.kilo/`, restored `.git/info/exclude` to its default comments. Verified after: single worktree, branches only `main` + `001-gitcrawl`, `git status` clean, zero "kilo" mentions in git metadata.
+
+Source note: VS Code extension `kilocode.kilo-code-7.8.1-win32-x64` is installed in `~/.vscode/extensions` (installed 2026-09-26 15:49); no Kilo task state (`globalStorage`/`workspaceStorage`) or logs retained. Uninstall offered to the owner. Separately, the design-doc v2 edits observed at 2026-09-30 22:45–22:50 predate this worktree and were not made by this session; they remain unexplained.
+
 ## Rulings record
 
 | # | Ruling | Cost if wrong |
