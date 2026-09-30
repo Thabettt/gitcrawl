@@ -7,10 +7,10 @@ from collections.abc import Iterator
 import httpx
 import pytest
 from alembic import command
-from discover.pipeline import Deps, run_org_enum
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from discover.pipeline import Deps, run_org_enum
 from discover.search_shards import iter_shard_pages
 from discover.since_scan import iter_since_pages
 from lib.gh_client import build_headers, token_fingerprint
