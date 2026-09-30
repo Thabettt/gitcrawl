@@ -68,3 +68,17 @@ def test_order_repos_is_stable_for_full_ties():
     first = repo("first", stargazers=3, pushed_at="2024-01-01T00:00:00Z")
     second = repo("second", stargazers=3, pushed_at="2024-01-01T00:00:00Z")
     assert order_repos([first, second]) == [first, second]
+
+
+def test_order_repos_falls_back_to_stargazers_count():
+    legacy = repo("legacy", stargazers=10, pushed_at="2024-01-01T00:00:00Z")
+    raw = {"full_name": "raw", "stargazers_count": 20, "pushed_at": "2024-01-01T00:00:00Z"}
+    assert order_repos([legacy, raw]) == [raw, legacy]
+
+
+def test_order_repos_prefers_stargazers_over_stargazers_count():
+    preferred = repo("preferred", stargazers=100, pushed_at="2024-01-01T00:00:00Z")
+    preferred["stargazers_count"] = 1
+    fallback = repo("fallback", stargazers=50, pushed_at="2024-01-01T00:00:00Z")
+    fallback["stargazers_count"] = 1
+    assert order_repos([fallback, preferred]) == [preferred, fallback]

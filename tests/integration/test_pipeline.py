@@ -20,7 +20,8 @@ from discover.pipeline import (
     run_search_discovery,
     run_since_scan,
 )
-from discover.search_shards import RequestFailed
+from discover.search_shards import RequestFailed, iter_shard_pages
+from lib.gh_client import PartialResultsError
 from scheduler.state_machine import ShardQueue
 
 SEARCH_HEADERS = {"x-ratelimit-resource": "search"}
@@ -461,6 +462,19 @@ def test_audit_hook_exception_propagates(clean: Engine, monkeypatch):
     with pytest.raises(RuntimeError, match="audit sink down"):
         run_org_enum(deps, org="acme", jitter=lambda: 0.0)
     assert len(requests) == 1
+
+
+def test_sso_partial_results_aborts_shard_pagination():
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            json={"total_count": 1, "items": [repo_item(1)], "incomplete_results": False},
+            headers={"x-github-sso": "required; partial-results"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(PartialResultsError):
+        list(iter_shard_pages(client, "language:python", now=lambda: 1000.0))
 
 
 def test_run_emits_single_info_summary(clean: Engine, caplog):

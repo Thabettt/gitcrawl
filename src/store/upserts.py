@@ -77,6 +77,25 @@ def _last_segment(full_name: str) -> str:
     return full_name.rsplit("/", 1)[-1]
 
 
+def _coerce_count(value: object) -> int | None:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _valid_id(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def normalize_repo(item: dict) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -84,11 +103,26 @@ def normalize_repo(item: dict) -> dict | None:
     node_id = item.get("node_id")
     full_name = item.get("full_name")
     owner = item.get("owner")
-    if repo_id is None or not node_id or not full_name or not isinstance(owner, dict):
+    if not _valid_id(repo_id) or not isinstance(node_id, str) or not node_id:
+        return None
+    if not isinstance(full_name, str) or not full_name or not isinstance(owner, dict):
         return None
     owner_id = owner.get("id")
     owner_login = owner.get("login")
-    if owner_id is None or not owner_login:
+    if not _valid_id(owner_id) or not isinstance(owner_login, str) or not owner_login:
+        return None
+    topics_raw = item.get("topics")
+    if topics_raw is None:
+        topics: list[str] = []
+    elif isinstance(topics_raw, list) and all(isinstance(topic, str) for topic in topics_raw):
+        topics = list(topics_raw)
+    else:
+        return None
+    stargazers = _coerce_count(item.get("stargazers_count"))
+    forks_count = _coerce_count(item.get("forks_count"))
+    watchers = _coerce_count(item.get("watchers_count"))
+    open_issues = _coerce_count(item.get("open_issues_count"))
+    if stargazers is None or forks_count is None or watchers is None or open_issues is None:
         return None
     license_obj = item.get("license")
     parent = item.get("parent")
@@ -104,7 +138,7 @@ def normalize_repo(item: dict) -> dict | None:
         "homepage": item.get("homepage"),
         "language": item.get("language"),
         "license_spdx": license_obj.get("spdx_id") if isinstance(license_obj, dict) else None,
-        "topics": list(item.get("topics") or []),
+        "topics": topics,
         "visibility": visibility,
         "fork": bool(item.get("fork")),
         "parent_full_name": parent.get("full_name") if isinstance(parent, dict) else None,
@@ -114,10 +148,10 @@ def normalize_repo(item: dict) -> dict | None:
         "mirror_url": item.get("mirror_url"),
         "is_template": bool(item.get("is_template")),
         "size_kb": item.get("size"),
-        "stargazers": int(item.get("stargazers_count") or 0),
-        "forks_count": int(item.get("forks_count") or 0),
-        "watchers": int(item.get("watchers_count") or 0),
-        "open_issues": int(item.get("open_issues_count") or 0),
+        "stargazers": stargazers,
+        "forks_count": forks_count,
+        "watchers": watchers,
+        "open_issues": open_issues,
         "default_branch": item.get("default_branch"),
         "has_wiki": item.get("has_wiki"),
         "has_issues": item.get("has_issues"),
@@ -294,21 +328,43 @@ def _copy_row(row: dict, indexed_at: datetime) -> tuple:
     ) + (indexed_at,)
 
 
-def _merge_staging(connection: Connection, table_name: str) -> int:
+def _merge_staging(connection: Connection, table_name: str) -> tuple[int, int]:
     columns = ", ".join(_REPO_FIELDS)
     updates = ", ".join(f"{field} = EXCLUDED.{field}" for field in _REPO_FIELDS if field != "id")
+    inserted = int(
+        connection.scalar(
+            text(
+                f"SELECT count(*) FROM {table_name} s"
+                f" WHERE NOT EXISTS (SELECT 1 FROM repos r WHERE r.id = s.id)"
+            )
+        )
+        or 0
+    )
+    renamed = int(
+        connection.scalar(
+            text(
+                f"SELECT count(*) FROM {table_name} s JOIN repos r ON r.id = s.id"
+                f" WHERE r.full_name IS DISTINCT FROM s.full_name"
+            )
+        )
+        or 0
+    )
     statement = text(
-        f"WITH new_repos AS ("
+        f"WITH existing AS ("
+        f" SELECT r.id, r.full_name FROM repos r JOIN {table_name} s ON s.id = r.id"
+        f" WHERE r.full_name IS DISTINCT FROM s.full_name"
+        f"), new_repos AS ("
         f" SELECT s.id, s.full_name FROM {table_name} s"
         f" WHERE NOT EXISTS (SELECT 1 FROM repos r WHERE r.id = s.id)"
         f"), merged AS ("
         f" INSERT INTO repos ({columns}) SELECT {columns} FROM {table_name}"
         f" ON CONFLICT (id) DO UPDATE SET {updates}"
         f") INSERT INTO full_name_history (repo_id, full_name)"
-        f" SELECT id, full_name FROM new_repos"
+        f" SELECT id, full_name FROM existing"
+        f" UNION ALL SELECT id, full_name FROM new_repos"
     )
-    result = connection.execute(statement)
-    return int(result.rowcount or 0)
+    connection.execute(statement)
+    return inserted, renamed
 
 
 def _bootstrap_chunk(
@@ -320,18 +376,24 @@ def _bootstrap_chunk(
     table_name = f"repos_staging_{uuid4().hex}"
     indexed_at = datetime.now(UTC)
     with engine.begin() as connection:
-        _upsert_owners(connection, owners, stats)
-        connection.execute(text(f"CREATE UNLOGGED TABLE IF NOT EXISTS {table_name} (LIKE repos)"))
-        driver = connection.connection.driver_connection
-        with driver.cursor() as cursor:
-            with cursor.copy(_copy_sql(table_name)) as copy:
-                for row in normalized:
-                    copy.write_row(_copy_row(row, indexed_at))
-        staged = connection.scalar(text(f"SELECT count(*) FROM {table_name}")) or 0
-        inserted = _merge_staging(connection, table_name)
-        connection.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
-        stats.inserted += inserted
-        stats.history_rows += inserted
+        try:
+            with connection.begin_nested():
+                _upsert_owners(connection, owners, stats)
+                _rename_stale_full_names(connection, normalized, stats)
+                connection.execute(
+                    text(f"CREATE UNLOGGED TABLE IF NOT EXISTS {table_name} (LIKE repos)")
+                )
+                driver = connection.connection.driver_connection
+                with driver.cursor() as cursor:
+                    with cursor.copy(_copy_sql(table_name)) as copy:
+                        for row in normalized:
+                            copy.write_row(_copy_row(row, indexed_at))
+                staged = int(connection.scalar(text(f"SELECT count(*) FROM {table_name}")) or 0)
+                inserted, renamed = _merge_staging(connection, table_name)
+                stats.inserted += inserted
+                stats.history_rows += inserted + renamed
+        finally:
+            connection.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
     return staged
 
 

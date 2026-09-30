@@ -93,12 +93,25 @@ def iter_shard_pages(
             on_response=on_response,
         )
         if response.status_code == 200:
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError:
+                raise RequestFailed(200, _short_message(response)) from None
+            if isinstance(payload, list):
+                raw_items = payload
+                total_count = 0
+                incomplete = False
+            elif isinstance(payload, dict):
+                raw_items = payload.get("items")
+                total_count = int(payload.get("total_count") or 0)
+                incomplete = bool(payload.get("incomplete_results"))
+            else:
+                raise RequestFailed(200, _short_message(response))
             page = ShardPage(
                 url=url,
-                items=tuple(payload.get("items") or ()),
-                total_count=int(payload.get("total_count") or 0),
-                incomplete=bool(payload.get("incomplete_results")),
+                items=tuple(raw_items or ()),
+                total_count=total_count,
+                incomplete=incomplete,
                 next_url=_next_link(response.headers.get("link")),
             )
             yield page

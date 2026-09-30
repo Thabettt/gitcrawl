@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlparse
 import fakeredis
 import httpx
 import pytest
-from discover.search_shards import RequestFailed, SearchCapExceeded, iter_shard_pages
 
+from discover.search_shards import RequestFailed, SearchCapExceeded, iter_shard_pages
 from lib.gh_client import API_BASE, build_headers, load_tokens, request_with_retry
 from limiter.buckets import BucketLimiter
 
@@ -246,3 +246,26 @@ def test_not_modified_returns_a_response_without_retry():
     response = request_with_retry(client, "GET", f"{API_BASE}/repos/octocat/hello-world")
     assert response.status_code == 304
     assert len(captured) == 1
+
+
+def test_list_200_body_is_treated_as_items_with_zero_total():
+    client = client_from([httpx.Response(200, json=[{"id": 1}, {"id": 2}])])
+    pages = list(iter_shard_pages(client, QUERY))
+    assert pages[0].items == ({"id": 1}, {"id": 2})
+    assert pages[0].total_count == 0
+    assert pages[0].incomplete is False
+
+
+def test_non_json_200_body_raises_request_failed():
+    client = client_from([httpx.Response(200, text="<html>proxy error</html>")])
+    with pytest.raises(RequestFailed) as excinfo:
+        list(iter_shard_pages(client, QUERY, now=lambda: 1000.0))
+    assert excinfo.value.status == 200
+    assert "proxy error" in excinfo.value.message
+
+
+def test_scalar_json_200_body_raises_request_failed():
+    client = client_from([httpx.Response(200, json=7)])
+    with pytest.raises(RequestFailed) as excinfo:
+        list(iter_shard_pages(client, QUERY, now=lambda: 1000.0))
+    assert excinfo.value.status == 200

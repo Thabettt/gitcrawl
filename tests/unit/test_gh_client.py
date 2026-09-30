@@ -9,6 +9,7 @@ from lib.gh_client import (
     API_BASE,
     API_VERSION,
     USER_AGENT,
+    PartialResultsError,
     ThrottledError,
     build_headers,
     create_client,
@@ -211,6 +212,60 @@ def test_request_with_retry_propagates_on_response_exceptions():
             on_response=boom,
             now=lambda: 1.0,
         )
+
+
+def test_sso_partial_results_raises_on_200():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"X-GitHub-SSO": "required; partial-results"},
+                json={"ok": True},
+            )
+        )
+    )
+    with pytest.raises(PartialResultsError) as excinfo:
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/search/repositories?q=x",
+            now=lambda: 1000.0,
+        )
+    assert excinfo.value.status_code == 200
+
+
+def test_sso_partial_results_raises_before_status_triage():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                404,
+                headers={"x-github-sso": "required; partial-results"},
+                json={"message": "Not Found"},
+            )
+        )
+    )
+    with pytest.raises(PartialResultsError):
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/repos/octo/missing",
+            now=lambda: 1000.0,
+        )
+
+
+def test_sso_header_without_partial_results_stays_successful():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, headers={"x-github-sso": "required"}, json={})
+        )
+    )
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/repos/octo/hello-world",
+        now=lambda: 1000.0,
+    )
+    assert response.status_code == 200
 
 
 def test_malformed_retry_after_falls_back_to_backoff():

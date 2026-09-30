@@ -65,6 +65,22 @@ class ThrottledError(Exception):
         self.retry_after = retry_after
 
 
+class PartialResultsError(Exception):
+    def __init__(self, response: httpx.Response) -> None:
+        request_url = str(response.request.url) if response.request is not None else ""
+        super().__init__(
+            f"GitHub returned SAML SSO partial results for {request_url} "
+            f"(status {response.status_code})"
+        )
+        self.status_code = response.status_code
+        self.url = request_url
+
+
+def _sso_partial_results(headers: httpx.Headers) -> bool:
+    value = headers.get("x-github-sso")
+    return value is not None and "partial-results" in str(value).lower()
+
+
 def _error_fields(response: httpx.Response) -> tuple[str | None, str]:
     payload = None
     try:
@@ -121,6 +137,8 @@ def request_with_retry(
                 on_response(response, latency_ms)
             if limiter is not None:
                 limiter.update_from_headers(resource, token_id, response.headers, now=now())
+            if _sso_partial_results(response.headers):
+                raise PartialResultsError(response)
             if response.status_code not in _TRIAGE_STATUSES:
                 return response
             error_code, message = _error_fields(response)

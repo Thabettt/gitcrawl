@@ -17,6 +17,8 @@ def order_shards(specs: list[ShardSpec]) -> list[ShardSpec]:
 
 def _stars(item: dict) -> float:
     value = item.get("stargazers")
+    if value is None:
+        value = item.get("stargazers_count")
     return value if isinstance(value, (int, float)) else 0
 
 

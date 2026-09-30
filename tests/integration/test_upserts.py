@@ -258,6 +258,34 @@ def test_normalize_repo_does_not_mutate_its_input():
     assert item == snapshot
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"stargazers_count": "many"},
+        {"stargazers_count": [1, 2]},
+        {"forks_count": "lots"},
+        {"watchers_count": {"count": 1}},
+        {"open_issues_count": "n/a"},
+        {"topics": "ai"},
+        {"topics": [1, 2]},
+        {"topics": {"ai": True}},
+        {"id": 1.5},
+        {"id": "7"},
+        {"owner": {"id": 100.5, "login": "octo"}},
+        {"owner": {"id": "100", "login": "octo"}},
+        {"node_id": 123},
+    ],
+)
+def test_normalize_repo_rejects_dirty_counts_topics_and_ids(overrides):
+    assert normalize_repo(repo_item(1, **overrides)) is None
+
+
+def test_normalize_repo_coerces_coercible_numeric_counts():
+    row = normalize_repo(repo_item(1, stargazers_count="42", forks_count=7.0))
+    assert row["stargazers"] == 42
+    assert row["forks_count"] == 7
+
+
 def test_insert_new_repos_and_owners(clean: Engine):
     stats = upsert_repos(
         clean,
@@ -359,6 +387,20 @@ def test_malformed_rows_are_skipped_without_crashing(clean: Engine):
     assert [repo["id"] for repo in dump_repos(clean)] == [1]
 
 
+def test_dirty_page_rows_are_skipped_without_aborting_the_batch(clean: Engine):
+    stats = upsert_repos(
+        clean,
+        [
+            repo_item(1),
+            repo_item(2, stargazers_count="many"),
+            repo_item(3, topics="ai"),
+            repo_item(4, id=4.5),
+        ],
+    )
+    assert stats == UpsertStats(inserted=1, skipped=3, history_rows=1)
+    assert [repo["id"] for repo in dump_repos(clean)] == [1]
+
+
 def test_batch_size_splits_repo_writes(clean: Engine):
     statements = []
 
@@ -398,6 +440,69 @@ def test_bootstrap_copy_rejects_a_dirty_row_without_aborting(clean: Engine):
     assert stats.inserted == 2
     assert stats.skipped == 1
     assert [repo["id"] for repo in dump_repos(clean)] == [1, 3]
+
+
+def test_bootstrap_copy_skips_dirty_normalized_rows(clean: Engine):
+    stats = bootstrap_copy(
+        clean,
+        [
+            repo_item(1),
+            repo_item(2, stargazers_count="many"),
+            repo_item(3, topics="ai"),
+            repo_item(4, id=4.5),
+        ],
+    )
+    assert stats.inserted == 1
+    assert stats.skipped == 3
+    assert [repo["id"] for repo in dump_repos(clean)] == [1]
+
+
+def test_bootstrap_copy_rebootstrap_after_rename_matches_upsert_semantics(clean: Engine):
+    initial = [repo_item(1, full_name="octo/old")]
+    second = [repo_item(2, full_name="octo/old"), repo_item(1, full_name="octo/new")]
+    bootstrap_copy(clean, initial)
+    bootstrap_stats = bootstrap_copy(clean, second)
+    bootstrap_repos = [
+        {key: value for key, value in repo.items() if key != "indexed_at"}
+        for repo in dump_repos(clean)
+    ]
+    bootstrap_history = sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean))
+    with clean.begin() as connection:
+        connection.execute(
+            text("TRUNCATE TABLE owners, repos, full_name_history RESTART IDENTITY CASCADE")
+        )
+    bootstrap_copy(clean, initial)
+    upsert_stats = upsert_repos(clean, second)
+    upsert_repos_dump = [
+        {key: value for key, value in repo.items() if key != "indexed_at"}
+        for repo in dump_repos(clean)
+    ]
+    upsert_history = sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean))
+    assert {repo["id"]: repo["full_name"] for repo in bootstrap_repos} == {
+        1: "octo/new",
+        2: "octo/old",
+    }
+    assert bootstrap_repos == upsert_repos_dump
+    assert bootstrap_history == upsert_history
+    assert bootstrap_stats.conflicts == upsert_stats.conflicts == 1
+    assert bootstrap_stats.history_rows == upsert_stats.history_rows == 3
+
+
+def test_bootstrap_copy_failure_drops_staging_table(clean: Engine, monkeypatch):
+    def boom(connection, table_name):
+        raise RuntimeError("merge exploded")
+
+    monkeypatch.setattr(upserts, "_merge_staging", boom)
+    with pytest.raises(RuntimeError, match="merge exploded"):
+        bootstrap_copy(clean, [repo_item(1)])
+    with clean.connect() as connection:
+        leftovers = connection.scalar(
+            text(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_name LIKE 'repos_staging_%'"
+            )
+        )
+    assert leftovers == 0
 
 
 def test_bootstrap_copy_writes_first_insert_history_rows(clean: Engine):
