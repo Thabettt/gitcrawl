@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 
 import fakeredis
@@ -200,6 +201,15 @@ def test_retry_reenqueue_preserves_single_live_copy(redis):
     new_id = queue.retry_or_dlq(stream_id, 7, attempts=1)
     assert queue.pel_size() == 0
     assert redis.xlen("gitcrawl:shards:lane:0") == 1
+    assert queue.claim("worker-1") == [QueuedShard(stream_id=new_id, shard_id=7, attempts=1)]
+
+
+def test_retry_reenqueue_redelivers_within_the_same_millisecond(redis, monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    queue = ShardQueue(redis, lanes=1)
+    stream_id = queue.enqueue(7)
+    assert queue.claim("worker-1") == [QueuedShard(stream_id=stream_id, shard_id=7, attempts=0)]
+    new_id = queue.retry_or_dlq(stream_id, 7, attempts=1)
     assert queue.claim("worker-1") == [QueuedShard(stream_id=new_id, shard_id=7, attempts=1)]
 
 

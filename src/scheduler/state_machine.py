@@ -233,12 +233,14 @@ class ShardQueue:
     def retry_or_dlq(self, stream_id: str, shard_id: int, *, attempts: int) -> str:
         key = self._lane_key(self.lane_for(shard_id))
         self._redis.xack(key, _GROUP, stream_id)
+        fields = {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)}
+        if attempts < self._max_attempts:
+            new_id = self._redis.xadd(key, fields)
+            self._redis.xdel(key, stream_id)
+            return _as_text(new_id)
+        dlq_id = self._redis.xadd(self._dlq_key, fields)
         self._redis.xdel(key, stream_id)
-        target = key if attempts < self._max_attempts else self._dlq_key
-        new_id = self._redis.xadd(
-            target, {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)}
-        )
-        return _as_text(new_id)
+        return _as_text(dlq_id)
 
     def reclaim_stale(
         self, consumer: str, *, min_idle_ms: int = 60000, count: int = 10

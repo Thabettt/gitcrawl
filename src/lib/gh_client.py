@@ -113,28 +113,34 @@ def request_with_retry(
                 sleep(acquired.retry_after)
                 continue
             denials = 0
-        started = now()
-        response = client.request(method, url)
-        latency_ms = (now() - started) * 1000.0
-        if on_response is not None:
-            on_response(response, latency_ms)
-        if limiter is not None:
-            limiter.update_from_headers(resource, token_id, response.headers, now=now())
-        if response.status_code not in _TRIAGE_STATUSES:
-            return response
-        error_code, message = _error_fields(response)
-        extra = {} if jitter is None else {"jitter": jitter}
-        decision = classify(
-            response.status_code,
-            response.headers,
-            attempt=attempt,
-            error_code=error_code,
-            message=message,
-            now=now(),
-            **extra,
-        )
+        try:
+            started = now()
+            response = client.request(method, url)
+            latency_ms = (now() - started) * 1000.0
+            if on_response is not None:
+                on_response(response, latency_ms)
+            if limiter is not None:
+                limiter.update_from_headers(resource, token_id, response.headers, now=now())
+            if response.status_code not in _TRIAGE_STATUSES:
+                return response
+            error_code, message = _error_fields(response)
+            extra = {} if jitter is None else {"jitter": jitter}
+            decision = classify(
+                response.status_code,
+                response.headers,
+                attempt=attempt,
+                error_code=error_code,
+                message=message,
+                now=now(),
+                **extra,
+            )
+        finally:
+            if limiter is not None:
+                limiter.release(resource, token_id)
         if decision.action in _RETRYABLE_ACTIONS:
-            sleep(decision.sleep_seconds)
             attempt += 1
+            if attempt >= max_attempts:
+                return response
+            sleep(decision.sleep_seconds)
             continue
         return response

@@ -259,3 +259,134 @@ def test_spam_422_error_code_drives_backoff():
     )
     assert response.status_code == 200
     assert sleeps == [60.0]
+
+
+def test_request_with_retry_releases_limiter_slot_between_sequential_calls():
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"core": (5000, 3600.0)}, max_concurrent=1)
+
+    def handler(request):
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    for _ in range(3):
+        response = request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/repos/octocat/hello-world",
+            limiter=limiter,
+            token_id="tok",
+            now=lambda: 1000.0,
+        )
+        assert response.status_code == 200
+
+
+def test_request_with_retry_releases_limiter_slot_when_send_raises():
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"core": (5000, 3600.0)}, max_concurrent=1)
+    attempts = {"count": 0}
+
+    def handler(request):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise httpx.ConnectError("connection reset")
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.ConnectError):
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/repos/octocat/hello-world",
+            limiter=limiter,
+            token_id="tok",
+            now=lambda: 1000.0,
+        )
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/repos/octocat/hello-world",
+        limiter=limiter,
+        token_id="tok",
+        now=lambda: 1000.0,
+    )
+    assert response.status_code == 200
+    assert attempts["count"] == 2
+
+
+def test_persistent_retry_after_stops_at_max_attempts():
+    sends = []
+    sleeps = []
+
+    def handler(request):
+        sends.append(request)
+        if len(sends) > 3:
+            raise AssertionError("retried past max_attempts")
+        return httpx.Response(403, headers={"retry-after": "5"}, json={"message": "slow"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/search/repositories?q=x",
+        max_attempts=3,
+        sleep=sleeps.append,
+        now=lambda: 1000.0,
+    )
+    assert response.status_code == 403
+    assert len(sends) == 3
+    assert sleeps == [5.0, 5.0]
+
+
+def test_persistent_wait_reset_stops_at_max_attempts():
+    sends = []
+    sleeps = []
+
+    def handler(request):
+        sends.append(request)
+        if len(sends) > 2:
+            raise AssertionError("retried past max_attempts")
+        return httpx.Response(
+            429,
+            headers={
+                "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": "1300",
+                "x-ratelimit-resource": "search",
+            },
+            json={"message": "API rate limit exceeded"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/search/repositories?q=x",
+        max_attempts=2,
+        sleep=sleeps.append,
+        now=lambda: 1000.0,
+    )
+    assert response.status_code == 429
+    assert len(sends) == 2
+    assert sleeps == [300.0]
+
+
+def test_limiter_deny_loop_raises_at_configured_cap():
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"search": (0, 60.0)}, max_concurrent=100)
+    sleeps = []
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    )
+    with pytest.raises(ThrottledError) as excinfo:
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/search/repositories?q=x",
+            limiter=limiter,
+            token_id="tok",
+            max_attempts=2,
+            sleep=sleeps.append,
+            now=lambda: 1000.0,
+        )
+    assert len(sleeps) == 1
+    assert excinfo.value.retry_after == 20.0
