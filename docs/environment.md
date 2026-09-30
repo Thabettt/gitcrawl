@@ -1,0 +1,164 @@
+# Development Environment (Windows, local)
+
+**Provisioned**: 2026-10-01 · **Host**: ZENBOOK (Windows, user `ZENBOOK\Abdul`, non-elevated shell)
+Companion: `development-log.md` (what was built and why) · `design/plan.md` (stack decisions)
+
+This document records every service, credential location, env var, and start/stop command for the local gitcrawl development environment, so nothing depends on session memory.
+
+## At a glance
+
+| Service | Endpoint | Started by | Auto-start | Credentials live in |
+|---|---|---|---|---|
+| PostgreSQL 18.1 (project-local cluster) | `localhost:5433` | `pg_ctl` (user process, no Windows service) | logon task `gitcrawl-postgres` | User env `DATABASE_URL` / `TEST_DATABASE_URL` |
+| Redis 7 (WSL2 Ubuntu service) | `redis://localhost:6379/0` | WSL `service redis-server` | logon task `gitcrawl-redis` | none (localhost only) |
+| GitHub API | `https://api.github.com` | app code (`httpx`) | — | User env `GITHUB_TOKEN` |
+
+All env vars are set at **User** level (`HKCU\Environment`), never committed to the repo. A running opencode process does **not** see env vars set after it started — restart opencode after any change.
+
+## Why a project-local PostgreSQL instead of the machine's PG service
+
+The machine runs `postgresql-x64-18` on port **5432** (the user's own instance). We did not use it because:
+
+- `pg_hba.conf` requires `scram-sha-256` for all local TCP connections and we do not have its superuser password;
+- editing `pg_hba.conf` requires elevation and we deliberately did not modify the user's existing server;
+- the shell is **not elevated** (`elevated: False`), so service installs / admin changes are out anyway.
+
+Instead, a **second, project-local cluster** was initialized from the same PG 18 binaries into a user-writable directory. The user's 5432 service is untouched.
+
+## PostgreSQL — project-local cluster
+
+- **Data dir**: `%LOCALAPPDATA%\gitcrawl\pgdata`
+- **Log**: `%LOCALAPPDATA%\gitcrawl\pg.log`
+- **Port**: `5433` (set in `postgresql.conf`: `port = 5433`, `listen_addresses = 'localhost'`)
+- **Role (superuser of this cluster)**: `gitcrawl`
+- **Databases**: `gitcrawl` (dev), `gitcrawl_test` (tests — migration tests upgrade/downgrade it)
+- **Auth**: `scram-sha-256` for `127.0.0.1`/`::1` (generated 28-char alphanumeric password)
+
+### How it was created
+
+```powershell
+$bin = 'C:\Program Files\PostgreSQL\18\bin'
+$data = "$env:LOCALAPPDATA\gitcrawl\pgdata"
+# password generated in-memory, written to a temp --pwfile, deleted afterwards
+& "$bin\initdb.exe" -D $data -U gitcrawl --auth-host=scram-sha-256 --auth-local=scram-sha-256 `
+  --pwfile=<temp-file> --encoding=UTF8 --locale=C
+Add-Content "$data\postgresql.conf" "`nport = 5433`nlisten_addresses = 'localhost'"
+& "$bin\pg_ctl.exe" start -D $data -l "$env:LOCALAPPDATA\gitcrawl\pg.log"
+& "$bin\createdb.exe" -h localhost -p 5433 -U gitcrawl gitcrawl
+& "$bin\createdb.exe" -h localhost -p 5433 -U gitcrawl gitcrawl_test
+```
+
+The generated password exists **only** inside the two User-level env vars (below). It is not written to the repo, not in git, not in this doc.
+
+### Start / stop / status
+
+```powershell
+$bin = 'C:\Program Files\PostgreSQL\18\bin'
+$data = "$env:LOCALAPPDATA\gitcrawl\pgdata"
+
+# start (detached — run via Start-Process in scripts so no console pipe is held)
+Start-Process -FilePath "$bin\pg_ctl.exe" -ArgumentList @('start','-D',$data,'-l',"$env:LOCALAPPDATA\gitcrawl\pg.log") -WindowStyle Hidden
+
+& "$bin\pg_ctl.exe" status -D $data          # status
+& "$bin\pg_isready.exe" -h localhost -p 5433 # readiness
+& "$bin\pg_ctl.exe" stop -D $data -m fast    # stop
+```
+
+### Connecting
+
+```powershell
+$dsn = [Environment]::GetEnvironmentVariable('DATABASE_URL','User')   # contains the password — do not paste into logs
+$env:PGPASSWORD = [regex]::Match($dsn,'://[^:]+:([^@]+)@').Groups[1].Value
+& "$bin\psql.exe" -h localhost -p 5433 -U gitcrawl -d gitcrawl -w -c 'select 1'
+Remove-Item Env:PGPASSWORD
+```
+
+### Password rotation / rebuild
+
+- **Rotate**: connect (as above) → `ALTER ROLE gitcrawl PASSWORD '<new>';` → update both User env vars with the new DSN → restart any process that had the old DSN.
+- **Rebuild from scratch** (destroys data): `pg_ctl stop -D $data -m fast`; delete `%LOCALAPPDATA%\gitcrawl\pgdata`; repeat "How it was created".
+
+## Redis — WSL2 Ubuntu
+
+Redis was **already installed** in the WSL2 `Ubuntu` distro (`/usr/bin/redis-server`); no package install was needed. It runs as a distro service:
+
+```powershell
+wsl -u root -- service redis-server start     # start
+wsl -u root -- service redis-server status    # status
+wsl -u root -- redis-cli ping                 # expect: PONG
+```
+
+Verified from Windows (WSL2 localhost forwarding): `.venv\Scripts\python.exe -c "import redis; print(redis.Redis(host='localhost',port=6379).ping())"` → `True`.
+
+- Config: `/etc/redis/redis.conf` (bind `127.0.0.1`), data `/var/lib/redis/`.
+- Unit tests use **fakeredis** so they run without any server; real Redis is the integration/validation target.
+- If WSL is shut down, `wsl -u root -- service redis-server start` brings both up.
+
+## Auto-start at logon (non-elevated scheduled tasks)
+
+Two per-user scheduled tasks start the services after login:
+
+| Task | Action script | Effect |
+|---|---|---|
+| `gitcrawl-postgres` | `%LOCALAPPDATA%\gitcrawl\start-postgres.ps1` | `pg_ctl start` the 5433 cluster |
+| `gitcrawl-redis` | `%LOCALAPPDATA%\gitcrawl\start-redis.ps1` | `wsl -u root -- service redis-server start` |
+
+Manual control:
+
+```powershell
+Start-ScheduledTask -TaskName gitcrawl-postgres
+Unregister-ScheduledTask -TaskName gitcrawl-postgres -Confirm:$false   # remove
+Unregister-ScheduledTask -TaskName gitcrawl-redis -Confirm:$false
+```
+
+## Environment variables (User level, secrets never committed)
+
+| Name | Value (shape) | Used by |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+psycopg://gitcrawl:<pw>@localhost:5433/gitcrawl` | Alembic, app |
+| `TEST_DATABASE_URL` | `postgresql+psycopg://gitcrawl:<pw>@localhost:5433/gitcrawl_test` | DB integration tests (destructive-safe) |
+| `REDIS_URL` | `redis://localhost:6379/0` | limiter / queues at runtime |
+| `GITHUB_TOKEN` | OAuth token from the authenticated `gh` CLI keyring | live GitHub calls (fingerprint-only logging) |
+
+**Set/update pattern** (no secret echoed):
+
+```powershell
+[Environment]::SetEnvironmentVariable('NAME','value','User')
+[Environment]::GetEnvironmentVariable('NAME','User')   # retrieve
+```
+
+### GitHub token sourcing
+
+`gh auth status` shows the machine is logged in to `github.com` as `Thabettt`; `GITHUB_TOKEN` was set by piping `gh auth token` directly into the User env var (the value was never printed or written to disk). Notes:
+
+- Current token is a broad OAuth token (scopes: `gist`, `read:org`, `repo`) — acceptable for read-only public discovery, broader than the plan's preferred fine-grained `metadata:read` PAT.
+- To switch to a least-privilege PAT later: create it in the GitHub UI, then set `GITHUB_TOKEN` via the pattern above and restart opencode.
+- Never log or store the raw token; audit records only its SHA-256 fingerprint (see `src/lib/gh_client.py`).
+
+## Handling the opencode restart requirement
+
+Windows processes inherit the environment of their parent; an already-running opencode does not see newly-set User env vars. Two options:
+
+1. **Restart opencode** (clean; all tools/subagents inherit the vars) — the supported path.
+2. Per-command injection (fallback): read the registry into the process env inside a command, e.g. `$env:DATABASE_URL = [Environment]::GetEnvironmentVariable('DATABASE_URL','User')`. Avoid for `GITHUB_TOKEN` unless piped from `gh` — never type a token into a command line.
+
+## Deviations from `design/plan.md`
+
+| Plan | Here | Reason |
+|---|---|---|
+| PostgreSQL 17 via docker-compose | PostgreSQL 18.1, project-local cluster on 5433 | Docker Desktop deliberately skipped (WSL available); local PG 18 already installed; no admin needed |
+| Redis 7 via docker-compose | WSL2 Redis 7 service | same |
+| `REDIS_URL` integration | fakeredis in unit tests; real Redis for integration/validation | keeps unit tests hermetic |
+
+`docker-compose.yml` (Postgres 17 + Redis 7) remains in the repo for environments that do have Docker; it is not used on this machine.
+
+## Provisioning incident note
+
+During provisioning, a combined setup command was killed by the tool's pipe handling because the freshly-started `postgres.exe` daemon inherited the tool's stdout pipe. Recovery: the never-used cluster was wiped, re-initialized, then started via `Start-Process -WindowStyle Hidden` (no pipe inheritance); DB creation and env wiring ran with `-w` (never-prompt) flags. No data was lost (nothing had been created in the cluster yet).
+
+## Troubleshooting
+
+- **`fe_sendauth: no password supplied`** → use the DSN extraction snippet above, or `-w` will fail fast instead of prompting.
+- **`connection refused` on 5433** → cluster down: run the start command or `Start-ScheduledTask -TaskName gitcrawl-postgres`; check `%LOCALAPPDATA%\gitcrawl\pg.log`.
+- **Windows can't reach Redis** → `wsl -u root -- redis-cli ping` first (distro may be stopped); then the Python check. If localhost forwarding ever fails, use the WSL IP (`wsl hostname -I`) in `REDIS_URL` as a temporary fallback.
+- **Env vars "missing" in a shell** → that shell predates the change; restart opencode or read them from the registry as shown above.
