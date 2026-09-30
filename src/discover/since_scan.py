@@ -86,7 +86,12 @@ def iter_since_pages(
         if response.status_code != 200:
             raise RequestFailed(int(response.status_code), _short_message(response))
         payload = response.json()
-        raw_items = payload.get("items") if isinstance(payload, dict) else None
+        if isinstance(payload, list):
+            raw_items = payload
+        elif isinstance(payload, dict):
+            raw_items = payload.get("items")
+        else:
+            raw_items = None
         items = tuple(raw_items or ())
         max_id = _page_max_id(items)
         next_url = _next_link(response.headers.get("link"))

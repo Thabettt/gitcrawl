@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
-from sqlalchemy import column, func, insert, select, table, text, update
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
 
@@ -294,16 +294,21 @@ def _copy_row(row: dict, indexed_at: datetime) -> tuple:
     ) + (indexed_at,)
 
 
-def _merge_staging(connection: Connection, table_name: str) -> None:
-    staging = table(table_name, *(column(field) for field in _REPO_FIELDS))
-    selectable = select(*(staging.c[field] for field in _REPO_FIELDS))
-    statement = pg_insert(Repo).from_select(_REPO_FIELDS, selectable)
-    connection.execute(
-        statement.on_conflict_do_update(
-            index_elements=["id"],
-            set_={field: statement.excluded[field] for field in _REPO_FIELDS if field != "id"},
-        )
+def _merge_staging(connection: Connection, table_name: str) -> int:
+    columns = ", ".join(_REPO_FIELDS)
+    updates = ", ".join(f"{field} = EXCLUDED.{field}" for field in _REPO_FIELDS if field != "id")
+    statement = text(
+        f"WITH new_repos AS ("
+        f" SELECT s.id, s.full_name FROM {table_name} s"
+        f" WHERE NOT EXISTS (SELECT 1 FROM repos r WHERE r.id = s.id)"
+        f"), merged AS ("
+        f" INSERT INTO repos ({columns}) SELECT {columns} FROM {table_name}"
+        f" ON CONFLICT (id) DO UPDATE SET {updates}"
+        f") INSERT INTO full_name_history (repo_id, full_name)"
+        f" SELECT id, full_name FROM new_repos"
     )
+    result = connection.execute(statement)
+    return int(result.rowcount or 0)
 
 
 def _bootstrap_chunk(
@@ -316,7 +321,6 @@ def _bootstrap_chunk(
     indexed_at = datetime.now(UTC)
     with engine.begin() as connection:
         _upsert_owners(connection, owners, stats)
-        before = connection.scalar(select(func.count()).select_from(Repo)) or 0
         connection.execute(text(f"CREATE UNLOGGED TABLE IF NOT EXISTS {table_name} (LIKE repos)"))
         driver = connection.connection.driver_connection
         with driver.cursor() as cursor:
@@ -324,10 +328,10 @@ def _bootstrap_chunk(
                 for row in normalized:
                     copy.write_row(_copy_row(row, indexed_at))
         staged = connection.scalar(text(f"SELECT count(*) FROM {table_name}")) or 0
-        _merge_staging(connection, table_name)
-        after = connection.scalar(select(func.count()).select_from(Repo)) or 0
+        inserted = _merge_staging(connection, table_name)
         connection.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
-        stats.inserted += after - before
+        stats.inserted += inserted
+        stats.history_rows += inserted
     return staged
 
 

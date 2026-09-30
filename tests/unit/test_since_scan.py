@@ -18,7 +18,7 @@ NEXT_URL = "https://api.github.com/repositories?since=98765&per_page=100&odd=kee
 
 
 def since_page(items, *, headers=None):
-    return httpx.Response(200, json={"items": items}, headers=headers or {})
+    return httpx.Response(200, json=list(items), headers=headers or {})
 
 
 def client_from(responses, recorder=None):
@@ -42,6 +42,14 @@ def test_first_request_uses_since_cursor_and_repositories_endpoint():
     assert pages[0].since == 0
     assert pages[0].items == ({"id": 1},)
     assert pages[0].max_id == 1
+
+
+def test_dict_envelope_with_items_is_also_accepted():
+    response = httpx.Response(200, json={"items": [{"id": 4}, {"id": 8}]})
+    client = client_from([response])
+    pages = list(iter_since_pages(client, since=0))
+    assert pages[0].items == ({"id": 4}, {"id": 8})
+    assert pages[0].max_id == 8
 
 
 def test_link_next_url_is_followed_verbatim_and_next_since_is_parsed():

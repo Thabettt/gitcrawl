@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -9,6 +10,7 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+import store.upserts as upserts
 from store.models import Owner, Repo
 from store.upserts import UpsertStats, bootstrap_copy, normalize_repo, upsert_repos
 
@@ -398,6 +400,37 @@ def test_bootstrap_copy_rejects_a_dirty_row_without_aborting(clean: Engine):
     assert [repo["id"] for repo in dump_repos(clean)] == [1, 3]
 
 
+def test_bootstrap_copy_writes_first_insert_history_rows(clean: Engine):
+    stats = bootstrap_copy(
+        clean, [repo_item(1, full_name="octo/one"), repo_item(2, full_name="octo/two")]
+    )
+    assert stats.history_rows == 2
+    assert sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean)) == [
+        (1, "octo/one"),
+        (2, "octo/two"),
+    ]
+
+
+def test_bootstrap_copy_accounts_stats_without_full_repo_scans(clean: Engine, monkeypatch):
+    monkeypatch.setattr(upserts, "_COPY_BATCH", 2)
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.lower().split()))
+
+    sa.event.listen(clean, "before_cursor_execute", capture)
+    try:
+        stats = bootstrap_copy(clean, [repo_item(i) for i in range(1, 6)])
+    finally:
+        sa.event.remove(clean, "before_cursor_execute", capture)
+    assert stats.inserted == 5
+    assert stats.history_rows == 5
+    assert stats.skipped == 0
+    assert not any(
+        re.search(r"count\(\*\) from repos(?![_a-z0-9])", statement) for statement in statements
+    )
+
+
 def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine):
     items = [
         repo_item(1),
@@ -412,6 +445,7 @@ def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine):
     ]
     bootstrap_stats = bootstrap_copy(clean, items)
     assert bootstrap_stats.inserted == 3
+    assert bootstrap_stats.history_rows == 3
     bootstrap_repos = [
         {key: value for key, value in repo.items() if key != "indexed_at"}
         for repo in dump_repos(clean)
@@ -420,6 +454,7 @@ def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine):
         {key: value for key, value in owner.items() if key != "synced_at"}
         for owner in dump_owners(clean)
     ]
+    bootstrap_history = sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean))
     with clean.begin() as connection:
         connection.execute(
             text("TRUNCATE TABLE owners, repos, full_name_history RESTART IDENTITY CASCADE")
@@ -436,3 +471,8 @@ def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine):
     ]
     assert upsert_repos_dump == bootstrap_repos
     assert upsert_owners == bootstrap_owners
+    assert upsert_stats.history_rows == 3
+    assert (
+        sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean))
+        == bootstrap_history
+    )
