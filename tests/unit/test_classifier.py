@@ -172,6 +172,35 @@ def test_422_custom_error_takes_precedence_over_cap_message():
     assert decision.action is Action.BACKOFF
 
 
+def test_422_custom_error_attempt_four_still_backs_off():
+    decision = classify(
+        422,
+        {},
+        error_code="custom",
+        message="Secondary rate limit",
+        now=0.0,
+        attempt=4,
+        jitter=no_jitter,
+    )
+    assert decision.action is Action.BACKOFF
+    assert decision.sleep_seconds == 480.0
+
+
+def test_422_custom_error_attempt_five_fails_loud():
+    decision = classify(
+        422,
+        {},
+        error_code="custom",
+        message="Secondary rate limit",
+        now=0.0,
+        attempt=5,
+        jitter=no_jitter,
+    )
+    assert decision.action is Action.FAIL_LOUD
+    assert decision.sleep_seconds is None
+    assert decision.reason == "retries exhausted"
+
+
 def test_422_result_cap_shards():
     decision = classify(
         422, {}, message="Only the first 1000 search results are available", now=0.0

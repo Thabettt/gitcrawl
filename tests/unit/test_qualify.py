@@ -188,6 +188,16 @@ def test_props_allowed_with_repeated_same_org():
     assert validate("org:github org:github props.environment:production").ok is True
 
 
+def test_props_rejected_when_org_is_only_excluded():
+    result = validate("props.environment:production -org:github")
+    assert result.ok is False
+    assert "add a single org: scope" in result.hints
+
+
+def test_props_allowed_with_one_positive_org_and_an_exclusion():
+    assert validate("org:github -org:microsoft props.environment:production").ok is True
+
+
 def test_props_without_dot_is_invalid():
     result = validate("org:github props:production")
     assert result.ok is False

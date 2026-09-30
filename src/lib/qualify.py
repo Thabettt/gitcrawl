@@ -97,7 +97,8 @@ def validate(query: str) -> ValidationResult:
         if token in OPERATORS:
             operator_count += 1
             continue
-        stripped = token[1:] if token.startswith("-") else token
+        excluded = token.startswith("-")
+        stripped = token[1:] if excluded else token
         if ":" not in stripped:
             keywords.append(stripped)
             continue
@@ -128,7 +129,7 @@ def validate(query: str) -> ValidationResult:
         if not value:
             errors.append(f"qualifier `{stripped}` has an empty value")
             continue
-        if name == "org":
+        if name == "org" and not excluded:
             org_values.add(value.lower())
 
     if prop_tokens and len(org_values) != 1:

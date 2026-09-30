@@ -39,7 +39,7 @@ def test_search_allows_thirty_per_window_and_denies_the_next(redis):
     assert denied.retry_after == 50.0
 
 
-def test_search_boundary_twenty_ninth_allowed_thirtieth_denied(redis):
+def test_search_boundary_thirtieth_allowed_thirty_first_denied(redis):
     limiter = window_limiter(redis, specs={"search": (30, 60.0)})
     for _ in range(29):
         assert limiter.acquire("search", "token-a", now=0.0).allowed

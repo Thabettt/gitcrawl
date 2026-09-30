@@ -76,6 +76,8 @@ def classify(
         return Decision(Action.BACKOFF, _backoff_seconds(attempt, jitter), resource, "backoff")
     if status == 422:
         if error_code == "custom":
+            if attempt >= 5:
+                return Decision(Action.FAIL_LOUD, None, resource, "retries exhausted")
             return Decision(
                 Action.BACKOFF, _backoff_seconds(attempt, jitter), resource, "spam signature"
             )
