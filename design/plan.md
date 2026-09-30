@@ -14,7 +14,7 @@ Build the SEART-pattern crawler hardened per the `05` gaps + efficiency review, 
 
 **Language/Version**: Python 3.12+ (replication package requires 3.12+)
 
-**Primary Dependencies**: FastAPI (serve + workers API), httpx (GitHub REST/GraphQL clients), SQLAlchemy 2 + Alembic (Postgres), psycopg3 (pipeline mode for OLTP writes, `COPY BINARY` for bootstrap; `stmt_cache_size=0` under PgBouncer), redis-py (token buckets + Streams queue), pydantic v2 (contracts/validation), pg_partman + pg_cron (partition retention), PyYAML + exact version pins to be locked at setup
+**Primary Dependencies**: FastAPI (serve + workers API), httpx (GitHub REST/GraphQL clients), SQLAlchemy 2 + Alembic (Postgres), psycopg3 (pipeline mode for OLTP writes, `COPY` TEXT + `ON_ERROR ignore` for bootstrap — ruling R23; `stmt_cache_size=0` under PgBouncer), redis-py (token buckets + Streams queue), pydantic v2 (contracts/validation), pg_partman + pg_cron (partition retention), PyYAML + exact version pins to be locked at setup
 
 **Storage**: SQLite for walking skeleton + laptop use (runs/bundles/cache); PostgreSQL 17 for scale (primary: `repos`, `full_name_history`, `owners`, `shards`, `audit_log`, `geo_cache`); Redis 7 (rate buckets, shard queue, ETag cache) at scale; PgBouncer transaction mode in front of Postgres; object/blob storage explicitly N/A for v1 (no clone corpus by default)
 

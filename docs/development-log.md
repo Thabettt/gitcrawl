@@ -2,7 +2,7 @@
 
 **Purpose**: durable, committed record of what has been done, decided, and is next — so nothing is lost when a session, tool, or the temporary SDD workspace disappears. Environment details live in `environment.md`.
 
-**Updated**: 2026-10-01 · **Branch**: `001-gitcrawl` · **HEAD**: `784117b`
+**Updated**: 2026-10-01 · **Branch**: `001-gitcrawl` · **HEAD**: `9f0488d`
 
 ## Objective (frozen 2026-09-30)
 
@@ -67,8 +67,12 @@ Source note: VS Code extension `kilocode.kilo-code-7.8.1-win32-x64` is installed
 | T006 | Throttle classifier (`src/limiter/classifier.py`) | `01cfdc3` | ✅ after fix round |
 | T007 | Qualifier allowlist + delta test (`src/lib/qualify.py`) | `f583db8` | ✅ after fix round |
 | T006/T007 fix | 422 attempt-5 escalation, `props.*` org-scope (R11), test rename | `784117b` | ✅ re-review: all addressed |
+| Phase 2b | T008 models + Alembic migration; T009 audit record + SLO snapshot | `dcba8e4`, `663196f` | ✅ approved |
+| US1a | T010 pagination contract test; T012 shard planner; T013 shard state machine + Streams queue + ordering; T014 sharded search (`request_with_retry` extension) | `0d777d7`..`db5f69f` | ✅ after 1 fix round (limiter slot leak; retry cap; bonus queue fix) |
+| US1b | T015 since cursor scan + ID-range sharding + checkpoint; T016 org/user enumeration; T017 upserts + COPY bootstrap (R22/R23) | `e26c300`..`33182f0` | ✅ after 1 fix round (array envelope; bootstrap stats O(N²); first-insert history) |
+| US1c | T011 live golden-org parity test; T018 discovery pipeline + audit logging | `6d53778`..`9f0488d` | ✅ approved; live **A=566 B=566**, empty symmetric difference |
 
-Test status at `784117b`: **140 tests passing** (`tests/unit/`), `ruff` + `black` clean.
+Test status at `9f0488d`: **322 tests passing** (including the live golden-org test), `ruff` + `black` clean.
 
 **Reviews conducted**: T000 (approved), Phase 1 batch (approved), Phase 2a (1 Important finding → 1 fix round → approved). Every batch passed a spec-compliance + code-quality gate before completion.
 
@@ -83,8 +87,9 @@ Test status at `784117b`: **140 tests passing** (`tests/unit/`), `ruff` + `black
 
 ## Current status & how to resume
 
-- **Done**: T000; Phase 1 (T001–T004); Phase 2a (T005–T007 + fix round). **Next**: Phase 2b — T008 (models + Alembic) and T009 (audit + SLO), brief already written at `.superpowers/sdd/tasks/task-8-9-brief.md`.
-- **Blocker resolved**: DB/Redis/token provisioning is complete; the only remaining step is an **opencode restart** so this session inherits the new User env vars. After restart, continue the session and dispatch Phase 2b, then US1 (T010–T018, golden-org parity).
+- **Done**: T000; Phase 1 (T001–T004); Phase 2 (T005–T009); **US1 complete** (T010–T018 + T011 live parity). The executed scope of this project phase is finished and green: 322 tests, live golden-org parity A=566/B=566.
+- **Not built (still in the plan)**: US2 current-state lifecycle (T019–T023), US3 enrich/serve + polish (T025–T051); thesis tracks T038–T045 remain parked.
+- **Next**: the final whole-branch review of the executed scope runs at the end of this session; residual findings and rulings land in this log. After that, schedule US2/US3 or stop at the current slice per operator direction.
 - **Temporary workspace**: `.superpowers/sdd/tasks/` (gitignored) holds the SDD ledger, task briefs, reports, and review packages. It is scratch — this log is the durable mirror; the workspace is deleted after the final whole-branch review.
 - **Execution process**: subagent-driven development — fresh implementer per task/batch, scripted task briefs, spec+quality review after each batch, scoped re-review per fix round, whole-branch review at the end. Deferred findings above are triaged at that final review.
 

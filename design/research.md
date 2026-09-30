@@ -62,7 +62,7 @@
 ## D10. Postgres/Redis hardening (deep research 2026-09-29 — extends data-model.md)
 
 - Gate no-op upserts in app/Redis first (bloom/dirty-flag/`pushed_at` compare): `ON CONFLICT ... WHERE` still writes WAL + takes the lock (2× disk, 4× syncs at scale); `fillfactor=80`; monitor `n_tup_hot_upd`.
-- Bootstrap via `COPY BINARY` (~72% faster than multi-row INSERT); `INSERT...ON CONFLICT` for deltas only; PG17 `COPY ... ON_ERROR ignore + REJECT_LIMIT` tolerates dirty payloads (`tuples_skipped` accounting).
+- Bootstrap via `COPY` (TEXT + `ON_ERROR ignore + REJECT_LIMIT`; binary mode forbids ON_ERROR on PG18 and silently truncates out-of-range ints, so TEXT is used for dirty-payload tolerance — ruling R23); `INSERT...ON CONFLICT` for deltas only. The original ~72% binary speedup no longer applies.
 - Staging: per-batch `UNLOGGED` (visible cross-workers; TEMP is session-private), never flip main table (full rewrite + replica break); `COPY` → `INSERT...SELECT` → `DROP`.
 - Autovacuum per table (`scale_factor 0.02–0.05`, OFF during load + `VACUUM ANALYZE` after); PG16+ BRIN is HOT-safe — use for `pushed_at` if insert order correlates, else btree.
 - Driver: `psycopg3` pipeline mode for OLTP writes (coalesced round-trips; `COPY` unsupported in pipeline); prepared statements break under PgBouncer txn mode (`stmt_cache_size=0`); pools: `(cores×2)+1` backends, 1–2 conns per network-bound worker, PgBouncer txn mode; migrations with `lock_timeout=50ms`/`statement_timeout=5s`.

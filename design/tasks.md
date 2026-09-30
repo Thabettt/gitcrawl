@@ -71,7 +71,7 @@
 - [ ] T014 [US1] Implement sharded search discovery (`per_page=100`, `Link: rel="next"` verbatim, `incomplete_results` → narrow-once + mark) in `src/discover/search_shards.py` (depends on T012)
 - [ ] T015 [US1] Implement `since` cursor scan + ID-range sharding + `max(id)` checkpoint in `src/discover/since_scan.py`
 - [ ] T016 [US1] Implement org/user enumeration (`/orgs/{org}/repos`, `/users/{u}/repos`) in `src/discover/org_enum.py`
-- [ ] T017 [US1] Implement batched upserts (`INSERT ... ON CONFLICT (id)` with app-side no-op gating first — `WHERE` still writes WAL+locks — 500–1000/batch, `COPY BINARY` bootstrap path with `ON_ERROR ignore + REJECT_LIMIT`, per-batch `UNLOGGED` staging) in `src/store/upserts.py`
+- [ ] T017 [US1] Implement batched upserts (`INSERT ... ON CONFLICT (id)` with app-side no-op gating first — `WHERE` still writes WAL+locks — 500–1000/batch, `COPY` bootstrap path (TEXT + `ON_ERROR ignore + REJECT_LIMIT`; PG18 forbids ON_ERROR in BINARY and binary silently truncates out-of-range ints — ruling R23) per-batch `UNLOGGED` staging) in `src/store/upserts.py`
 - [ ] T018 [US1] Wire US1 pipeline + logging (query hash, `total_count`/`incomplete_results`, token fingerprint, latency)
 
 **Checkpoint**: US1 fully functional and testable independently — golden-org parity green
@@ -157,7 +157,7 @@
 
 - [ ] T046 Documentation updates (README runbook pointers, `docs/legal-gates.md` review notes)
 - [ ] T047 [P] Additional unit tests for classifier/watermark/trees-first edge cases in `tests/unit/`
-- [ ] T048 Performance pass: batch sizes, per-table autovacuum tuning (OFF during load + `VACUUM ANALYZE`), `CONCURRENTLY` index builds (+ per-partition attach), `pg_cron`+`pg_partman` retention, pool sizing (`(cores×2)+1`, PgBouncer txn, `stmt_cache_size=0`), migration `lock_timeout=50ms`/`statement_timeout=5s`, `COPY BINARY` bootstrap validation
+- [ ] T048 Performance pass: batch sizes, per-table autovacuum tuning (OFF during load + `VACUUM ANALYZE`), `CONCURRENTLY` index builds (+ per-partition attach), `pg_cron`+`pg_partman` retention, pool sizing (`(cores×2)+1`, PgBouncer txn, `stmt_cache_size=0`), migration `lock_timeout=50ms`/`statement_timeout=5s`, `COPY` bootstrap validation
 - [ ] T049 Security hardening: token vault/OIDC, secret-scanning, least-privilege fine-grained PAT review, Dependabot
 - [ ] T050 Run `quickstart.md` validation end-to-end (golden org → lifecycle → serve → geo) and record evidence
 

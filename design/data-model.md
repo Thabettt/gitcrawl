@@ -174,7 +174,7 @@ CREATE INDEX vsamp_repo_idx ON validation_samples (repo_id);
 1. Upsert on `id` only (`ON CONFLICT (id) DO UPDATE`); `full_name` conflicts insert history rows, never new repo rows.
 2. `GET` 200 with `full_name` mismatch → update `repos.full_name` + history row. `301` → follow, same. `404` → set `deleted_at=now()` (quarantine from serve; purge after retention window).
 3. Live-only snapshot (no persistent watermark): record current `max(pushed_at)` per shard at `ran_at`; `id`-dedupe absorbs overlap pages within the run. No 1h overlap reads across runs, no tier cadences.
-4. Bootstrap: `COPY BINARY` into per-batch `UNLOGGED` staging → merge → rebuild GIN; `INSERT...ON CONFLICT` for steady-state deltas only; PG17 `COPY ... ON_ERROR ignore + REJECT_LIMIT` tolerates dirty payloads (`tuples_skipped` accounting); never row-by-row for >100k rows.
+4. Bootstrap: `COPY` (TEXT + `ON_ERROR ignore + REJECT_LIMIT` — PG18 forbids ON_ERROR in BINARY mode and binary silently truncates out-of-range ints, ruling R23) into per-batch `UNLOGGED` staging → merge → rebuild GIN; `INSERT...ON CONFLICT` for steady-state deltas only; PG17 `COPY ... ON_ERROR ignore + REJECT_LIMIT` tolerates dirty payloads (`tuples_skipped` accounting); never row-by-row for >100k rows.
 
 ## Indexes recap
 
