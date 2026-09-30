@@ -2,7 +2,7 @@
 
 **Purpose**: durable, committed record of what has been done, decided, and is next — so nothing is lost when a session, tool, or the temporary SDD workspace disappears. Environment details live in `environment.md`.
 
-**Updated**: 2026-10-01 · **Branch**: `001-gitcrawl` · **HEAD**: `9f0488d`
+**Updated**: 2026-10-01 · **Branch**: `001-gitcrawl` · **HEAD**: `f64bd69`
 
 ## Objective (frozen 2026-09-30)
 
@@ -71,12 +71,17 @@ Source note: VS Code extension `kilocode.kilo-code-7.8.1-win32-x64` is installed
 | US1a | T010 pagination contract test; T012 shard planner; T013 shard state machine + Streams queue + ordering; T014 sharded search (`request_with_retry` extension) | `0d777d7`..`db5f69f` | ✅ after 1 fix round (limiter slot leak; retry cap; bonus queue fix) |
 | US1b | T015 since cursor scan + ID-range sharding + checkpoint; T016 org/user enumeration; T017 upserts + COPY bootstrap (R22/R23) | `e26c300`..`33182f0` | ✅ after 1 fix round (array envelope; bootstrap stats O(N²); first-insert history) |
 | US1c | T011 live golden-org parity test; T018 discovery pipeline + audit logging | `6d53778`..`9f0488d` | ✅ approved; live **A=566 B=566**, empty symmetric difference |
+| Final whole-branch review | Senior review of `717c9b3..a0d3b92` (8,077-line package) + one fix wave: SSO `partial-results` loud-fail on 2xx, dirty-payload tolerance, bootstrap rename/staging, `order_repos` key fallback, live delta probe, non-dict body guard | `f64bd69` | ✅ all findings addressed; no new Critical/Important. Live delta probe `language:python` 34,207,993 → `+stars:>1000` 11,756 (`delta_narrows=True`) |
 
-Test status at `9f0488d`: **322 tests passing** (including the live golden-org test), `ruff` + `black` clean.
+Test status at `f64bd69`: **350 tests passing** (including live golden-org parity and the live delta probe), `ruff` + `black` clean.
 
 **Reviews conducted**: T000 (approved), Phase 1 batch (approved), Phase 2a (1 Important finding → 1 fix round → approved). Every batch passed a spec-compliance + code-quality gate before completion.
 
-## Deferred Minor findings (open, for final review triage)
+## Deferred Minor findings — triaged by the final review
+
+The final whole-branch review triaged every prior deferred minor as **"Can ship"** (none block a merge); the only cross-cutting one — `order_repos` keyed on `stargazers` vs raw `stargazers_count` — was fixed in the wave. Residual minors from the fix-wave re-review (also "can ship"): `_coerce_count` catches only `TypeError`/`ValueError` so a JSON `Infinity`/`1e400` could still raise `OverflowError`; the `response.request is not None` guard in the SSO check is inert (httpx raises on unset request, real responses always carry one); the staging `finally` DROP could mask the original exception on a dead connection. Fix these opportunistically when touching those modules.
+
+### Original deferred list (for reference)
 
 - `src/skeleton.py`: wire header casing via `urllib.add_header` (`X-github-api-version`); `Retry-After` HTTP-date form unparsed; `json.loads` of a 200 body unguarded. File is currently `extend-exclude`d from ruff/black — fix it and drop the excludes in a later task.
 - `tests/unit/test_gh_client.py`: default-timeout test exercises the helper's explicit value, not `create_client`'s own default.
@@ -87,9 +92,10 @@ Test status at `9f0488d`: **322 tests passing** (including the live golden-org t
 
 ## Current status & how to resume
 
-- **Done**: T000; Phase 1 (T001–T004); Phase 2 (T005–T009); **US1 complete** (T010–T018 + T011 live parity). The executed scope of this project phase is finished and green: 322 tests, live golden-org parity A=566/B=566.
+- **Done**: T000; Phase 1 (T001–T004); Phase 2 (T005–T009); **US1 complete** (T010–T018 + T011 live parity); **final whole-branch review clean after one fix wave** (`f64bd69`). 350 tests green incl. live parity (A=566/B=566) and live delta probe (34,207,993 → 11,756).
 - **Not built (still in the plan)**: US2 current-state lifecycle (T019–T023), US3 enrich/serve + polish (T025–T051); thesis tracks T038–T045 remain parked.
-- **Next**: the final whole-branch review of the executed scope runs at the end of this session; residual findings and rulings land in this log. After that, schedule US2/US3 or stop at the current slice per operator direction.
+- **Known gap — built-but-unwired (ruling R24)**: `limiter/retry.py::RetryQueue`, `scheduler/state_machine.py::retry_or_dlq`/`reclaim_stale`/`pel_size`, `scheduler/tiering.py::order_shards`, `discover/since_scan.py::plan_id_ranges` are implemented and unit-tested for the multi-worker design but have no call sites in the single-consumer US1 path. Wiring them (queue retry/DLQ/reaper, ID-range parallel since scan, survivor ordering) belongs to the multi-worker slice; this is deliberate, not dead code by accident.
+- **Branch state**: `001-gitcrawl` at `f64bd69`, working tree clean; awaiting the finishing decision (merge to `main`, keep the branch, or further work).
 - **Temporary workspace**: `.superpowers/sdd/tasks/` (gitignored) holds the SDD ledger, task briefs, reports, and review packages. It is scratch — this log is the durable mirror; the workspace is deleted after the final whole-branch review.
 - **Execution process**: subagent-driven development — fresh implementer per task/batch, scripted task briefs, spec+quality review after each batch, scoped re-review per fix round, whole-branch review at the end. Deferred findings above are triaged at that final review.
 
