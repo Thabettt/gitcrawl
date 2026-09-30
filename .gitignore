@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Secrets — env only, never committed
+.env
+.env.*
+
+# Runtime artifacts
+runs/
+clones/
+
+# SDD scratch workspace (git-ignored by design)
+.superpowers/
