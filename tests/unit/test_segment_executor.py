@@ -267,6 +267,26 @@ def test_survivors_return_in_ascending_id_order():
     assert survivors == [1, 2, 3]
 
 
+def test_segment_bucketing_is_single_pass(monkeypatch):
+    from enrich import segment_executor
+
+    calls: list[int] = []
+    real = segment_executor.bisect_left
+    monkeypatch.setattr(
+        segment_executor,
+        "bisect_left",
+        lambda seq, value: (calls.append(value), real(seq, value))[1],
+    )
+    candidates = [(repo_id, 0, None) for repo_id in range(1, 101)]
+
+    def handler(ids):
+        return ids, 0
+
+    execute_segments(candidates, {"x": handler}, segments=10)
+
+    assert len(calls) == 100
+
+
 def test_execute_segments_rejects_unknown_order():
     with pytest.raises(ValueError, match="random"):
         execute_segments([1], {}, order="random")

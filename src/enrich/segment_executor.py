@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from bisect import bisect_left
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -84,20 +86,25 @@ def execute_segments(
     ranked = order_repos(views)
     ranked_ids = [view["id"] for view in ranked]
     rank = {repo_id: index for index, repo_id in enumerate(ranked_ids)}
-    work: list[tuple[Segment, list[int]]] = []
-    for segment in plan_segments(ranked_ids, segments=segments):
-        ids = [repo_id for repo_id in ranked_ids if segment.start < repo_id <= segment.end]
-        if ids:
-            work.append((segment, ids))
+    segments_plan = plan_segments(ranked_ids, segments=segments)
+    ends = [segment.end for segment in segments_plan]
+    buckets: list[list[int]] = [[] for _ in segments_plan]
+    for repo_id in ranked_ids:
+        buckets[bisect_left(ends, repo_id)].append(repo_id)
+    work: list[tuple[Segment, list[int]]] = [
+        (segment, ids)
+        for segment, ids in zip(segments_plan, buckets, strict=True)
+        if ids
+    ]
     work.sort(key=lambda item: rank[item[1][0]])
     field_names = list(handlers)
-    queue = [
+    queue: deque[dict] = deque(
         {"segment": segment, "ids": list(ids), "field_index": 0, "requeues": 0}
         for segment, ids in work
-    ]
+    )
     survivors: list[int] = []
     while queue:
-        item = queue.pop(0)
+        item = queue.popleft()
         ids = item["ids"]
         failed: Exception | None = None
         try:
@@ -116,7 +123,7 @@ def execute_segments(
             if item["requeues"] < max_requeues:
                 stats.requeues += 1
                 item["requeues"] += 1
-                queue.insert(1 if queue else 0, item)
+                queue.insert(1, item)
             else:
                 message = (
                     f"segment ({item['segment'].start}, {item['segment'].end}] dropped "
