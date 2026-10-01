@@ -86,10 +86,20 @@
     return false;
   }
 
+  var rowCache = null;
+
+  function invalidateRowCache() {
+    rowCache = null;
+  }
+
   function selectableRows() {
-    return Array.prototype.slice.call(document.querySelectorAll("tbody tr")).filter(function (row) {
+    if (rowCache) {
+      return rowCache;
+    }
+    rowCache = Array.prototype.slice.call(document.querySelectorAll("tbody tr")).filter(function (row) {
       return !row.hidden && row.querySelector("a[href]");
     });
+    return rowCache;
   }
 
   function selectRow(delta) {
@@ -104,15 +114,11 @@
         break;
       }
     }
-    var next;
-    if (current < 0) {
-      next = delta > 0 ? 0 : rows.length - 1;
-    } else {
-      next = Math.min(Math.max(current + delta, 0), rows.length - 1);
+    var next = window.gitcrawlRowNav.nextIndex(current, delta, rows.length);
+    var previous = document.querySelector("tr.row-selected");
+    if (previous) {
+      previous.classList.remove("row-selected");
     }
-    rows.forEach(function (row) {
-      row.classList.remove("row-selected");
-    });
     rows[next].classList.add("row-selected");
     if (rows[next].scrollIntoView) {
       rows[next].scrollIntoView({ block: "nearest" });
@@ -253,6 +259,10 @@
   }
 
   function startClone(button) {
+    if (button.disabled) {
+      return;
+    }
+    button.disabled = true;
     var modal = document.getElementById("clone-modal");
     var runId =
       button.getAttribute("data-run-id") || (modal ? modal.getAttribute("data-run-id") : "");
@@ -288,6 +298,9 @@
       })
       .catch(function () {
         showToast("Clone request failed");
+      })
+      .finally(function () {
+        button.disabled = false;
       });
   }
 
@@ -308,6 +321,7 @@
       document.body.addEventListener("htmx:sendError", function () {
         showToast("Network error");
       });
+      document.body.addEventListener("htmx:afterSwap", invalidateRowCache);
     }
     syncCloneLimit();
     copyHash();
