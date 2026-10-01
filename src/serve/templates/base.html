@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>{% block title %}gitcrawl{% endblock %}</title>
+<script>
+(function () {
+  "use strict";
+  try {
+    var stored = window.localStorage.getItem("gc-theme");
+    if (stored === "light" || stored === "dark") {
+      document.documentElement.setAttribute("data-theme", stored);
+    }
+  } catch (error) {
+    document.documentElement.removeAttribute("data-theme");
+  }
+})();
+</script>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <a class="brand" href="/">gitcrawl</a>
+  <nav id="main-nav" class="site-nav" aria-label="Primary">
+    <a href="/">Dashboard</a>
+    <a href="/find">Find</a>
+    <a href="/runs">Runs</a>
+    <a href="/filters">Filters</a>
+  </nav>
+  <button id="theme-toggle" class="button ghost" type="button" aria-pressed="false">Theme</button>
+</header>
+<main id="content" class="content">
+{% block body %}{% endblock %}
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

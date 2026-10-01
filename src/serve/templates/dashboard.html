@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Dashboard</h1>
+  </div>
+  <div class="health-grid">
+    <div class="card health-card" id="health-db">
+      <span class="health-label">Database</span>
+      <span class="badge {{ 'ok' if health.database else 'down' }}" data-state="{{ 'ok' if health.database else 'down' }}">{{ 'ok' if health.database else 'down' }}</span>
+    </div>
+    <div class="card health-card" id="health-redis">
+      <span class="health-label">Redis</span>
+      <span class="badge {{ 'ok' if health.redis else 'down' }}" data-state="{{ 'ok' if health.redis else 'down' }}">{{ 'ok' if health.redis else 'down' }}</span>
+    </div>
+    <div class="card health-card" id="health-token">
+      <span class="health-label">GitHub token</span>
+      <span class="badge {{ 'ok' if health.github_token_present else 'down' }}" data-state="{{ 'ok' if health.github_token_present else 'down' }}">{{ 'ok' if health.github_token_present else 'absent' }}</span>
+    </div>
+  </div>
+</section>
+<section class="panel">
+  <div class="panel-head">
+    <h2>Quick find</h2>
+  </div>
+  <form id="quick-find" class="quick-find" action="/find" method="get">
+    <label class="sr-only" for="quick-find-q">Search query</label>
+    <input id="quick-find-q" name="q" type="search" placeholder="language:rust min_stars:50" autocomplete="off">
+    <button class="button primary" type="submit">Find</button>
+  </form>
+</section>
+<section class="panel">
+  <div class="panel-head">
+    <h2>Recent runs</h2>
+  </div>
+  <div class="table-wrap">
+    <table id="recent-runs" class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Run</th>
+          <th scope="col">Filter</th>
+          <th scope="col">Status</th>
+          <th scope="col">Total / kept</th>
+          <th scope="col">Duration</th>
+          <th scope="col">When</th>
+        </tr>
+      </thead>
+      <tbody id="recent-runs-body">
+      {% for run in runs %}
+        <tr id="run-{{ run.id }}">
+          <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+          <td class="mono">{{ run.hash_short }}</td>
+          <td><span class="pill {{ run.status }}">{{ run.status }}</span></td>
+          <td>{{ run.total_count if run.total_count is not none else '—' }} / {{ run.inserted }}</td>
+          <td>{{ run.duration }}</td>
+          <td>{{ run.ran_at }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not runs %}
+  <div id="empty-state" class="empty-state">
+    <p>No runs yet</p>
+    <p class="muted">Start with a quick find above or open <a href="/find">Find</a> for the full filter form.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

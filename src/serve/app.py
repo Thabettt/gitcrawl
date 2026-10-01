@@ -23,6 +23,7 @@ from serve.filter_spec import (
     spec_hash,
     spec_to_dict,
 )
+from serve.pages import register_pages
 from serve.runner import apply_sort, build_deps, make_runner
 from serve.runs import export_bundle, latest_run_for_hash
 from serve.virtual_params import VIRTUAL_FILTERS
@@ -257,6 +258,8 @@ def create_app(
     runner_factory: Callable[[Engine], Runner] | None = None,
     runs_root: str = "runs",
     clock: Callable[[], float] = time.time,
+    redis_ping: Callable[[], object] | None = None,
+    token_present: Callable[[], bool] | None = None,
 ) -> FastAPI:
     state: dict[str, object] = {"engine": engine, "runner": None}
     cache: dict[str, tuple[float, RunPayload]] = {}
@@ -476,6 +479,14 @@ def create_app(
             media_type=media_type,
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    register_pages(
+        application,
+        engine_factory=engine_for,
+        runs_root=runs_root,
+        redis_ping=redis_ping,
+        token_present=token_present,
+    )
 
     return application
 
