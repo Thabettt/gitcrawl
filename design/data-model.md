@@ -181,7 +181,7 @@ CREATE INDEX vsamp_repo_idx ON validation_samples (repo_id);
 - `repos(pushed_at)`, `repos(updated_at)`, `repos(stargazers DESC)`, `repos(owner_id)` (all `WHERE deleted_at IS NULL`); `GIN(topics)` post-bootstrap.
 - `owners(login)`, `geo_cache` PK lookup, `shards(state, tier)`, `audit_log(ts)`.
 
-## Console tables (US4, migration `0002_console.py`)
+## Console tables (US4, migration `0003_console.py` — ruling R38)
 
 `runs`, `run_items`, `saved_filters` — exact DDL and lifecycle in `console-spec.md` §Backend additions. Run history is operator-triggered artifacts (no background jobs); `run_items` snapshots power history/diff.
 

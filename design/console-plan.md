@@ -37,9 +37,9 @@
 
 ## New task definitions (T052–T059)
 
-### T052 — console persistence models + migration 0002
+### T052 — console persistence models + migration 0003
 - Modify: `src/store/models.py` (add `Runs`, `RunItem`, `SavedFilter` per console-spec DDL).
-- Create: `migrations/versions/0002_console.py` (reversible; indexes; FKs).
+- Create: `migrations/versions/0003_console.py` (reversible; indexes; FKs; `down_revision = "0002"` — ruling R38).
 - Test: `tests/integration/test_models_console.py` (tables/columns/indexes per spec; downgrade/upgrade round-trip on the guarded TEST DB).
 - Produces: `Runs`, `RunItem`, `SavedFilter` ORM classes.
 

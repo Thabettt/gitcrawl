@@ -15,7 +15,7 @@ A local single-operator web console for gitcrawl: run live Finds, watch progress
 
 ## Backend additions
 
-### Data model (migration 0002)
+### Data model (migration `0003_console.py`, down_revision `"0002"` — ruling R38)
 
 ```sql
 CREATE TABLE runs (

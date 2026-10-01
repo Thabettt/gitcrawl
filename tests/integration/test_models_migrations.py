@@ -10,7 +10,17 @@ from sqlalchemy.engine import Engine
 
 from store.models import Base
 
-TABLES = {"repos", "owners", "full_name_history", "geo_cache", "shards", "audit_log"}
+TABLES = {
+    "repos",
+    "owners",
+    "full_name_history",
+    "geo_cache",
+    "shards",
+    "audit_log",
+    "runs",
+    "run_items",
+    "saved_filters",
+}
 
 EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
     "repos": {

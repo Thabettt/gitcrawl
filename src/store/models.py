@@ -136,6 +136,72 @@ class Shard(Base):
     )
 
 
+class Runs(Base):
+    __tablename__ = "runs"
+    __table_args__ = (
+        Index("runs_created_idx", text("created_at DESC")),
+        Index("runs_filter_hash_idx", "filter_hash", text("created_at DESC")),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    filter_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    filter_spec: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    api_version: Mapped[str] = mapped_column(Text, nullable=False)
+    total_count: Mapped[int | None] = mapped_column(Integer)
+    fetched: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    inserted: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    updated: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    unchanged: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    skipped: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    incomplete_shards: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    bundle_dir: Mapped[str | None] = mapped_column(Text)
+
+
+class RunItem(Base):
+    __tablename__ = "run_items"
+    __table_args__ = (
+        Index("run_items_repo_idx", "repo_id"),
+        Index("run_items_stars_idx", "run_id", text("stargazers DESC")),
+    )
+
+    run_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    repo_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("repos.id"), primary_key=True)
+    full_name: Mapped[str] = mapped_column(CITEXT, nullable=False)
+    stargazers: Mapped[int | None] = mapped_column(Integer)
+    pushed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    archived: Mapped[bool | None] = mapped_column(Boolean)
+    language: Mapped[str | None] = mapped_column(Text)
+    license_spdx: Mapped[str | None] = mapped_column(Text)
+    country_iso: Mapped[str | None] = mapped_column(CHAR(2))
+    geo_confidence: Mapped[str | None] = mapped_column(Text)
+    virtuals: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
+
+
+class SavedFilter(Base):
+    __tablename__ = "saved_filters"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    filter_spec: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     __table_args__ = (Index("audit_ts_idx", "ts"),)
