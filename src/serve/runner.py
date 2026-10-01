@@ -589,6 +589,9 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         warnings=warnings,
         items=items,
         field_stats=asdict(segment_stats),
+        updated=stats.updated,
+        unchanged=stats.unchanged,
+        skipped=stats.skipped,
     )
 
 

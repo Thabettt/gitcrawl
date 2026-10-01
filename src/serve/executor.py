@@ -41,6 +41,9 @@ class RunPayload:
     fetched: int | None = None
     warnings: list[str] = field(default_factory=list)
     field_stats: dict = field(default_factory=dict)
+    updated: int | None = None
+    unchanged: int | None = None
+    skipped: int | None = None
 
 
 Runner = Callable[[int, dict], RunPayload]
@@ -213,6 +216,9 @@ def execute_run(
                     total_count=payload.total_count,
                     fetched=payload.fetched if payload.fetched is not None else len(payload.items),
                     inserted=len(payload.items),
+                    updated=payload.updated or 0,
+                    unchanged=payload.unchanged or 0,
+                    skipped=payload.skipped or 0,
                     incomplete_shards=1 if payload.incomplete else 0,
                     bundle_dir=bundle_dir,
                     finished_at=func.now(),

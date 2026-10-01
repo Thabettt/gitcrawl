@@ -833,6 +833,30 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
     assert bundle["field_stats"] == payload.field_stats
 
 
+def test_run_filter_reports_discovery_upsert_counters(clean: Engine, monkeypatch):
+    from discover.pipeline import DiscoveryStats
+
+    stats = DiscoveryStats(
+        shards=1,
+        pages=1,
+        fetched=2,
+        inserted=1,
+        updated=2,
+        unchanged=3,
+        skipped=4,
+    )
+    monkeypatch.setattr(runner_module.pipeline, "count_total", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(
+        runner_module.pipeline, "run_search_discovery", lambda *args, **kwargs: stats
+    )
+    client, _ = scripted(lambda request: httpx.Response(500))
+    payload = run_filter(make_deps(clean, client), spec_for(q="language:python"))
+
+    assert payload.updated == 2
+    assert payload.unchanged == 3
+    assert payload.skipped == 4
+
+
 def test_enrich_handlers_clamp_unsupported_full_depth_fields_without_raising(clean: Engine):
     handlers, unsupported = runner_module._enrich_handlers(
         None,

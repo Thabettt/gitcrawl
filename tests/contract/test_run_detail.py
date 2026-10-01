@@ -221,6 +221,22 @@ def test_run_page_reports_counts_and_export_links(clean: Engine, tmp_path):
     assert 'data-flag="truncation"' in html
 
 
+def test_run_page_reports_updated_unchanged_and_skipped(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    with clean.begin() as connection:
+        connection.execute(
+            text("UPDATE runs SET updated = 2, unchanged = 3, skipped = 4 WHERE id = :id"),
+            {"id": run_id},
+        )
+    client = make_client(clean, tmp_path)
+
+    html = client.get(f"/runs/{run_id}").text
+
+    assert 'data-count="updated">updated <strong>2</strong>' in html
+    assert 'data-count="unchanged">unchanged <strong>3</strong>' in html
+    assert 'data-count="skipped">skipped <strong>4</strong>' in html
+
+
 def test_run_page_shows_r44_and_failed_flags(clean: Engine, tmp_path):
     r44_spec = {**FILTER, "virtual": {"min_commits": 10, "min_loc": 500}}
     r44_run = seed_run(clean, tmp_path, spec=r44_spec, incomplete=True)

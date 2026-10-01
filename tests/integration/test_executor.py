@@ -396,6 +396,24 @@ def test_execute_run_empty_items_writes_header_only_csv(db: Engine, tmp_path):
     assert bundle["fetched"] is None
 
 
+def test_execute_run_persists_runner_upsert_counters(db: Engine, tmp_path):
+    run_id = create_run(db, FILTER, api_version="v1")
+    payload = RunPayload(
+        total_count=3,
+        fetched=3,
+        items=[_item()],
+        updated=2,
+        unchanged=3,
+        skipped=4,
+    )
+    execute_run(db, run_id, runner=lambda rid, spec: payload, runs_root=str(tmp_path))
+    status = run_status(db, run_id)
+    assert status["inserted"] == 1
+    assert status["updated"] == 2
+    assert status["unchanged"] == 3
+    assert status["skipped"] == 4
+
+
 def test_run_executor_submit_returns_a_per_run_completion_handle(db: Engine, tmp_path):
     run_id = create_run(db, FILTER, api_version="v1")
     executor = RunExecutor(
