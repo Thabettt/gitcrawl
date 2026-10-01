@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
+from fnmatch import translate
 
 import httpx
 
@@ -15,6 +16,12 @@ METAFILES_BASE_URL = "https://repos.ecosyste.ms/api/v1/hosts/GitHub/repositories
 
 _METAFILE_KEYS = ("manifests", "metafiles")
 _METAFILE_NAME_KEYS = ("filename", "path", "name")
+
+_LITERAL_CHARS = frozenset("*?[")
+
+
+def _is_literal(pattern: str) -> bool:
+    return not any(char in _LITERAL_CHARS for char in pattern)
 
 
 @dataclass(frozen=True)
@@ -28,9 +35,24 @@ class FilePresence:
         return path in self.paths
 
     def match(self, patterns: Sequence[str]) -> dict[str, bool]:
-        return {
-            pattern: any(fnmatchcase(path, pattern) for path in self.paths) for pattern in patterns
-        }
+        result: dict[str, bool] = {}
+        globs: list[tuple[str, re.Pattern[str]]] = []
+        for pattern in patterns:
+            if _is_literal(pattern):
+                result[pattern] = pattern in self.paths
+            else:
+                globs.append((pattern, re.compile(translate(pattern))))
+                result[pattern] = False
+        if globs:
+            pending = {pattern for pattern, _ in globs}
+            for path in self.paths:
+                for pattern, regex in globs:
+                    if pattern in pending and regex.match(path):
+                        pending.discard(pattern)
+                        result[pattern] = True
+                if not pending:
+                    break
+        return result
 
 
 def _require_json(response: httpx.Response) -> dict:

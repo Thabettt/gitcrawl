@@ -225,6 +225,38 @@ def test_match_equals_independent_prefix_scan():
     assert expected == {"Dockerfile": True, ".github/workflows/*": True}
 
 
+def test_match_handles_literals_without_fnmatch(monkeypatch):
+    from enrich import trees_first
+
+    def boom(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("fnmatchcase called for a literal pattern")
+
+    monkeypatch.setattr(trees_first, "fnmatchcase", boom, raising=False)
+    presence = trees_first.FilePresence(
+        repo_full_name="octo/mono",
+        paths=frozenset({"Dockerfile", "README.md", "src/main.py"}),
+        truncated=False,
+        source="tree",
+    )
+    assert presence.match(["Dockerfile", "LICENSE"]) == {"Dockerfile": True, "LICENSE": False}
+
+
+def test_match_still_supports_globs():
+    from enrich.trees_first import FilePresence
+
+    presence = FilePresence(
+        repo_full_name="octo/mono",
+        paths=frozenset({"Dockerfile", "src/main.py", "docs/guide.md"}),
+        truncated=False,
+        source="tree",
+    )
+    assert presence.match(["**/main.py", "*.md", "Dockerfile"]) == {
+        "**/main.py": True,
+        "*.md": True,
+        "Dockerfile": True,
+    }
+
+
 def test_fetch_metafiles_parses_list_of_dicts_and_filters_requested_names():
     from enrich.trees_first import fetch_metafiles
 
