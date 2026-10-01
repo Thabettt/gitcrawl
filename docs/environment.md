@@ -171,6 +171,30 @@ $env:PYTHONPATH = 'src'
 - **Keyboard**: `/` focuses quick search, `g h`/`g f`/`g r`/`g l` navigate, `j`/`k` select table rows, `Enter` opens the selected row, `?` toggles the shortcut help, `Esc` closes dialogs.
 - **Redis keeper session (R34)**: keep the hidden `wsl.exe -u root -- sleep infinity` session alive so WSL2 localhost forwarding stays up; the `gitcrawl-redis` logon task starts Redis plus that keeper. If `/health` shows Redis down, run `wsl -u root -- service redis-server status` and reopen the keeper.
 
+## Migrations
+
+### Migration locking
+
+Revisions 0005-0007 rewrite constraints/indexes on live tables and take write-blocking
+locks on them. On a large table, run these in a maintenance window rather than during
+active crawling. Suggested guards:
+
+```sql
+SET lock_timeout = '50ms';      -- fail fast instead of queueing behind readers
+SET statement_timeout = '5s';
+```
+
+| Revision | Lock taken | Note |
+|---|---|---|
+| 0005 (`full_name_history` unique) | `ACCESS EXCLUSIVE` for the constraint build | dedupe `DELETE` is a self-join; cost scales with table size |
+| 0006 (`repos_deleted_idx`) | `SHARE` on `repos` (blocks writes) | downgrade's `DROP INDEX` is `ACCESS EXCLUSIVE` |
+| 0007 (`run_items_stars_idx` rewrite) | `ACCESS EXCLUSIVE` (drop) then `SHARE` (create) on `run_items` | writes stall for the whole revision |
+
+For hot deployments, convert the index work to `CREATE UNIQUE INDEX CONCURRENTLY` /
+`CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` in an autocommit block
+(`op.get_bind().execution_options(isolation_level="AUTOCOMMIT")`) so no table-wide write
+lock is held.
+
 ## Deviations from `design/plan.md`
 
 | Plan | Here | Reason |

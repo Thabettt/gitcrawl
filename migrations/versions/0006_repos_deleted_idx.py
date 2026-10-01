@@ -2,6 +2,12 @@
 
 Revision ID: 0006
 Revises: 0005
+
+Locking: `CREATE INDEX` (non-concurrent) takes a SHARE lock on `repos`, which blocks
+writes for the duration of the build; the downgrade's `DROP INDEX` takes ACCESS
+EXCLUSIVE. Run this revision in a maintenance window on large tables, preferably with
+`SET lock_timeout = '50ms'` and `SET statement_timeout = '5s'`. For hot deployments,
+create the index with `CREATE INDEX CONCURRENTLY` in an autocommit block instead.
 """
 
 from __future__ import annotations

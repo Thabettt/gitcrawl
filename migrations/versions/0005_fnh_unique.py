@@ -2,6 +2,14 @@
 
 Revision ID: 0005
 Revises: 0004
+
+Locking: `ADD CONSTRAINT ... UNIQUE` takes an ACCESS EXCLUSIVE lock on
+`full_name_history` (blocking reads and writes) for the index build; the preceding
+dedupe `DELETE` is a self-join whose cost scales with the table size. Run this revision
+in a maintenance window on large tables, preferably with `SET lock_timeout = '50ms'`
+and `SET statement_timeout = '5s'` so it fails fast instead of queueing behind readers.
+For hot deployments, build the unique index with `CREATE UNIQUE INDEX CONCURRENTLY` in
+an autocommit block instead.
 """
 
 from __future__ import annotations

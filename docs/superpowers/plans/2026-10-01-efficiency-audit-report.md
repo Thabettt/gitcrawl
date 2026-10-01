@@ -157,6 +157,12 @@ Plan: enrich T2.
   errors: with n=1,000 failures ≈ **300 MB disk writes** and ~50–150 MB network/DOM churn;
   capped + throttled ⇒ <1 MB. Plan: enrich T4, frontend T1.
 
+**Status (2026-10-01):** the capability landed (`clone_repos` accepts `workers` and
+`clone_timeout`; progress is capped, throttled, and atomically written), but `start_clone`
+still calls `clone_repos` with the defaults (`workers=1`, no timeout), so the
+17–50 min → 2–7 min saving is **latent** until the call site is wired to non-default
+values.
+
 ### S11. GraphQL split discards successful work — `enrich/graphql_batch.py:213-245`
 
 A failing 20-repo batch can issue 1+2+4+8+16 = 31 POSTs (budget: core 5,000/hr) and if any
@@ -172,6 +178,12 @@ At console scale (≤500 items) this is ~1–2 MB and milliseconds — negligibl
 Streaming/SQL-diff ⇒ constant KB memory.
 Also fixes a real bug: `run_items.repo_id` is nullable (`0004`), and `diff_runs` keys on
 `None` → silent collapse or `TypeError`. Plan: serve T5 (streaming) and report item L2.
+
+**Status (2026-10-01):** JSON/CSV export now yields chunks instead of buffering the
+bundle 3–4×, and `diff_runs` is NULL-safe on `repo_id`; `_item_rows` still materializes
+the full row list, so export memory remains O(run) until a follow-up streams rows from
+the cursor. The realized win is removing the 3–4× bundle buffering (plus the diff bug);
+the constant-KB memory claim is latent.
 
 ### S13. Index mismatch and deep OFFSET — `migrations/0003_console.py:95`, `serve/pages.py:397-415`
 
@@ -341,3 +353,38 @@ migrations), 5 after 3/4.
 | Clone worker concurrency changes progress/emit timing | `workers` defaults to 1 (current behavior); lock-guarded emit; tests inject fake runner |
 | Frontend has no JS test runner | Pure helpers extracted and tested with `node --test` (node is guaranteed in this environment); pytest wrapper skips if node is absent |
 | Index order changes pinned SQL | Existing pinned tests updated in the same task; migration parity test enforces model/migration agreement |
+
+---
+
+## 6. Post-implementation status (2026-10-01)
+
+The `perf/efficiency-audit` branch implemented the plans above; this section records what
+the audit's numbers can and cannot claim after the code landed.
+
+**Realized (wired and tested):** Θ(k²) discovery accumulation (S1); chunked `IN` queries
+(S2/S3); lazy shard planning with root-count reuse (S3); bounded single-flight payload
+cache (S4); interactive lane + `_futures` pruning (S5); batched audit inserts with a
+single body parse (S6); single-write hydration with ETag and idempotent history (S7);
+batched geo lookups + process memo (S8); O(1) literal tree matching (S9); clone progress
+cap + throttle + atomic writes (part of S10); GraphQL split retaining successful partial
+results (S11); streaming export + NULL-safe diff (part of S12); `run_items` index/order
+alignment (S13); visibility-gated polling (S14); and the wired S15 micro-fixes.
+
+**Latent (capability exists, call sites unchanged):**
+
+- Clone workers/timeouts (S10): `start_clone` → `clone_repos(workers=1, no timeout)`; the
+  17–50 min → 2–7 min claim applies only after `start_clone` passes non-defaults.
+- GraphQL batching (S11) and mirrors (S16/#17): built but still unwired, so they save
+  nothing until the roadmap wires them.
+- Export memory (S12): the 3–4× bundle buffering is gone, but `_item_rows` still builds
+  the full row list, so peak memory stays O(run).
+
+**Follow-ups from the final whole-branch review:**
+
+- Chunk `GeoCache.put_many` writes instead of one unbounded statement per fill.
+- Transport-backoff schedule test: added in this fix (bounded 2/4/8 s, FAIL_LOUD at 3).
+- `/vsearch/repos` warm-cache hits still construct a runner via `runner_for()` before
+  `payload_cache.run_once` short-circuits; move construction into the miss path.
+- Stream `_item_rows` so export/diff peak memory becomes constant (closes S12).
+- `AuditBuffer.flush` clears its buffer before the insert, so a failed flush loses the
+  batch; re-queue or dead-letter on failure.
