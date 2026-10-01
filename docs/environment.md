@@ -142,6 +142,35 @@ Windows processes inherit the environment of their parent; an already-running op
 1. **Restart opencode** (clean; all tools/subagents inherit the vars) — the supported path.
 2. Per-command injection (fallback): read the registry into the process env inside a command, e.g. `$env:DATABASE_URL = [Environment]::GetEnvironmentVariable('DATABASE_URL','User')`. Avoid for `GITHUB_TOKEN` unless piped from `gh` — never type a token into a command line.
 
+## Running the app
+
+The operator console runs from the repo root with `PYTHONPATH=src` so `serve.app` imports work; env vars come from the User-level table above (restart opencode first if they were just set).
+
+```powershell
+$env:PYTHONPATH = 'src'
+.venv\Scripts\python.exe -m serve
+# equivalent explicit form:
+$env:PYTHONPATH = 'src'
+.venv\Scripts\python.exe -m uvicorn serve.app:app --host 127.0.0.1 --port 8000
+```
+
+`GITCRAWL_HOST` / `GITCRAWL_PORT` override host/port for `python -m serve` (defaults `127.0.0.1:8000`). The console binds localhost only, has no auth (single operator), and never renders secrets.
+
+| Path | What it does |
+|---|---|
+| `/` | Dashboard: health badges, quick find, recent runs |
+| `/find` | Full filter form (Find / Download as JSON / Upload and run / Save filter) |
+| `/runs` | Run history (`?status=`, `?hash=` exact or prefix, `?page=`, 50/page) |
+| `/runs/{id}` | Run detail: status polling, sortable results, flags, export/replay/clone |
+| `/runs/{id}/diff?against={baseline_id}` | Run-to-run diff; baseline defaults to the previous run with the same filter hash |
+| `/filters` | Saved filter library: browsers (Accept `text/html`) get the page, other clients get the JSON API |
+| `/health` | DB/Redis/token-present booleans only |
+
+- **No JS**: every read path (dashboard, history, diff, library, run table) is server-rendered, and forms POST normally with the hidden CSRF field; keyboard shortcuts, htmx polling/fragments, and the clone modal are enhancements.
+- **No Node / no Tailwind at runtime**: styling is the hand-rolled `src/serve/static/app.css` (R46); `htmx.min.js` and `app.js` are vendored and committed — no CDN or build step.
+- **Keyboard**: `/` focuses quick search, `g h`/`g f`/`g r`/`g l` navigate, `j`/`k` select table rows, `Enter` opens the selected row, `?` toggles the shortcut help, `Esc` closes dialogs.
+- **Redis keeper session (R34)**: keep the hidden `wsl.exe -u root -- sleep infinity` session alive so WSL2 localhost forwarding stays up; the `gitcrawl-redis` logon task starts Redis plus that keeper. If `/health` shows Redis down, run `wsl -u root -- service redis-server status` and reopen the keeper.
+
 ## Deviations from `design/plan.md`
 
 | Plan | Here | Reason |

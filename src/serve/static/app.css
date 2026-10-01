@@ -748,6 +748,15 @@ kbd {
   font-size: 0.85em;
 }
 
+.htmx-indicator {
+  display: none;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  display: inline;
+}
+
 .shortcuts-table td {
   white-space: normal;
 }

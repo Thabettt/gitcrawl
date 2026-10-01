@@ -17,7 +17,7 @@
   <div class="modal-panel">
     <div class="panel-head">
       <h2 id="clone-modal-title">Clone top repos</h2>
-      <button id="clone-close" class="button ghost" type="button" data-close="clone-modal">Close</button>
+      <button id="clone-close" class="button ghost" type="button" data-close="clone-modal" aria-label="Close clone dialog">Close</button>
     </div>
     <form id="clone-controls"
           hx-get="/runs/{{ run.id }}/clone-estimate"
@@ -27,7 +27,7 @@
       <div class="clone-limit-row">
         <label for="clone-limit">Repos to clone</label>
         <input id="clone-limit" name="limit" type="range" min="0" max="{{ run.item_count }}" value="{{ run.item_count }}" step="1">
-        <input id="clone-limit-input" type="number" min="0" max="{{ run.item_count }}" value="{{ run.item_count }}" step="1" inputmode="numeric">
+        <input id="clone-limit-input" type="number" min="0" max="{{ run.item_count }}" value="{{ run.item_count }}" step="1" inputmode="numeric" aria-label="Repos to clone (number)">
       </div>
       <fieldset class="clone-modes">
         <legend>Mode</legend>

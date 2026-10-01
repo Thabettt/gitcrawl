@@ -1,5 +1,6 @@
 {% set idle = progress.status == "done" and progress.total == 0 and progress.completed == 0 and progress.failed == 0 %}
-<div id="clone-progress" data-status="{{ progress.status }}"{% if progress.status == "running" %} hx-get="/partials/runs/{{ run_id }}/clone-progress" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+<div id="clone-progress" aria-live="polite" data-status="{{ progress.status }}"{% if progress.status == "running" %} hx-get="/partials/runs/{{ run_id }}/clone-progress" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  <span id="clone-progress-loading" class="htmx-indicator muted" role="status">Updating…</span>
   {% if idle %}
   <p id="clone-progress-idle" class="muted">No clone in progress.</p>
   {% else %}

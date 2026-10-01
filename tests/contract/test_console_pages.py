@@ -445,6 +445,73 @@ def test_diff_page_unknown_is_404(client: TestClient, clean, tmp_path):
     assert malformed.status_code == 404
 
 
+def test_status_and_clone_fragments_announce_updates(client: TestClient, clean, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+
+    status = client.get(f"/partials/runs/{run_id}/status")
+    progress = client.get(f"/partials/runs/{run_id}/clone-progress", headers={"HX-Request": "true"})
+
+    assert 'aria-live="polite"' in status.text
+    assert 'id="status-loading"' in status.text
+    assert 'class="htmx-indicator' in status.text
+    assert 'aria-live="polite"' in progress.text
+    assert 'id="clone-progress-loading"' in progress.text
+
+
+def test_run_table_has_a_loading_indicator(client: TestClient, clean, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+
+    html = client.get(f"/runs/{run_id}").text
+
+    assert 'id="table-loading"' in html
+    assert 'hx-indicator="#run-table"' in html
+
+
+def test_form_controls_have_labels_or_aria_labels(client: TestClient):
+    created = client.post("/filters", json={"name": "Rust", "spec": FILTER_A}).json()
+
+    dashboard = client.get("/").text
+    find = client.get("/find").text
+    runs = client.get("/runs").text
+    library = client.get("/filters", headers=HTML).text
+
+    assert 'for="quick-find-q"' in dashboard
+    assert 'for="field-keywords"' in find
+    assert 'for="field-name"' in find
+    assert 'for="run-filter-status"' in runs
+    assert 'for="run-filter-hash"' in runs
+    assert f'for="rename-{created["id"]}"' in library
+    assert 'aria-label="Delete Rust"' in library
+    assert 'aria-label="Toggle dark mode"' in dashboard
+
+
+def test_skip_link_scope_attributes_and_focus_styles(client: TestClient, clean, tmp_path):
+    baseline, viewed, _other = diff_seed(clean, tmp_path)
+
+    dashboard = client.get("/").text
+    assert 'class="skip-link"' in dashboard
+    assert 'href="#content"' in dashboard
+    assert 'id="content"' in dashboard
+
+    for html in (
+        client.get("/runs").text,
+        client.get("/filters", headers=HTML).text,
+        client.get(f"/runs/{viewed}/diff", params={"against": baseline}).text,
+    ):
+        assert 'scope="col"' in html
+
+    css = client.get("/static/app.css").text
+    assert ":focus-visible" in css
+
+
+def test_error_toasts_are_wired(client: TestClient):
+    script = client.get("/static/app.js").text
+
+    assert "htmx:responseError" in script
+    assert "htmx:sendError" in script
+    assert 'id="toast"' in client.get("/").text
+
+
 def test_shortcuts_modal_and_theme_toggle_markup(client: TestClient):
     html = client.get("/").text
 

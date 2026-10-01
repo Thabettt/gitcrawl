@@ -1,7 +1,8 @@
-<div id="run-status" data-status="{{ run.status }}"{% if run.polling %} hx-get="/partials/runs/{{ run.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+<div id="run-status" aria-live="polite" data-status="{{ run.status }}"{% if run.polling %} hx-get="/partials/runs/{{ run.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   <div class="run-status-line">
     <span id="run-status-pill" class="pill {{ run.status }}" data-status="{{ run.status }}">{{ run.status }}</span>
     <span id="run-total" class="muted" data-total="{{ run.total_count if run.total_count is not none else '' }}">total {{ run.total_count if run.total_count is not none else '—' }}</span>
+    <span id="status-loading" class="htmx-indicator muted" role="status">Updating…</span>
   </div>
   <div id="run-counts" class="run-counts">
     <span class="count" data-count="fetched">fetched <strong>{{ run.fetched }}</strong></span>
