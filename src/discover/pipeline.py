@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from datetime import time as wall_time
@@ -25,7 +25,7 @@ from limiter.buckets import BucketLimiter
 from scheduler.shard_planner import ShardPlanner, ShardSpec
 from scheduler.state_machine import ShardQueue, ShardRow, ShardState, ShardStore
 from serve import audit
-from store.upserts import UpsertStats, upsert_repos
+from store.upserts import UpsertStats, dedupe_items, upsert_repos
 
 logger = logging.getLogger("gitcrawl.discover")
 
@@ -80,6 +80,17 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
         audit.record_audit(deps.engine, record)
 
     return hook
+
+
+def _collect_ids(seen: set[int], collected: list[int], items: Iterable[Mapping]) -> None:
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        repo_id = item.get("id")
+        if isinstance(repo_id, bool) or not isinstance(repo_id, int) or repo_id in seen:
+            continue
+        seen.add(repo_id)
+        collected.append(repo_id)
 
 
 def _fold(stats: DiscoveryStats, upserted: UpsertStats) -> None:
@@ -183,6 +194,7 @@ def run_search_discovery(
     pending: list[int] = []
     created = 0
     seen_ids: set[int] = set()
+    collected_ids: list[int] = []
 
     def count_fn(candidate: str) -> int:
         return count_total(
@@ -246,19 +258,8 @@ def run_search_discovery(
                 fetched += len(page.items)
                 stats.fetched += len(page.items)
                 last_total = page.total_count
-                _fold(stats, upsert_repos(deps.engine, page.items))
-                for item in page.items:
-                    if not isinstance(item, Mapping):
-                        continue
-                    repo_id = item.get("id")
-                    if (
-                        isinstance(repo_id, bool)
-                        or not isinstance(repo_id, int)
-                        or repo_id in seen_ids
-                    ):
-                        continue
-                    seen_ids.add(repo_id)
-                    stats.repo_ids += (repo_id,)
+                _fold(stats, upsert_repos(deps.engine, dedupe_items(page.items)))
+                _collect_ids(seen_ids, collected_ids, page.items)
                 if page.exhausted:
                     stats.page_capped_shards += 1
                     incomplete = True
@@ -298,6 +299,7 @@ def run_search_discovery(
                 process(queued.shard_id)
                 queue.ack(queued.stream_id, queued.shard_id)
 
+    stats.repo_ids = tuple(collected_ids)
     _log_summary("search", stats)
     return stats
 
