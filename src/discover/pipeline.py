@@ -52,6 +52,7 @@ class DiscoveryStats:
     skipped: int = 0
     incomplete_shards: int = 0
     cap_splits: int = 0
+    repo_ids: tuple[int, ...] = ()
 
 
 def _request_params(response: httpx.Response) -> dict[str, object]:
@@ -103,15 +104,17 @@ def _log_summary(kind: str, stats: DiscoveryStats) -> None:
     )
 
 
-def _count_for_query(
+def count_total(
     deps: Deps,
     query: str,
     *,
-    on_response: Callable[[httpx.Response, float], None],
-    sleep: Callable[[float], None],
-    now: Callable[[], float],
-    jitter: Callable[[], float] | None,
+    on_response: Callable[[httpx.Response, float], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.time,
+    jitter: Callable[[], float] | None = None,
 ) -> int:
+    if on_response is None:
+        on_response = _audit_hook(deps)
     url = f"{API_BASE}/search/repositories?{urlencode({'q': query, 'per_page': 1, 'page': 1})}"
     response = request_with_retry(
         deps.client,
@@ -177,9 +180,10 @@ def run_search_discovery(
     queue = ShardQueue(deps.redis) if deps.redis is not None else None
     pending: list[int] = []
     created = 0
+    seen_ids: set[int] = set()
 
     def count_fn(candidate: str) -> int:
-        return _count_for_query(
+        return count_total(
             deps,
             candidate,
             on_response=on_response,
@@ -240,6 +244,18 @@ def run_search_discovery(
                 stats.fetched += len(page.items)
                 last_total = page.total_count
                 _fold(stats, upsert_repos(deps.engine, page.items))
+                for item in page.items:
+                    if not isinstance(item, Mapping):
+                        continue
+                    repo_id = item.get("id")
+                    if (
+                        isinstance(repo_id, bool)
+                        or not isinstance(repo_id, int)
+                        or repo_id in seen_ids
+                    ):
+                        continue
+                    seen_ids.add(repo_id)
+                    stats.repo_ids += (repo_id,)
                 if page.incomplete:
                     if not narrowed and spawn_narrower(row):
                         narrowed = True

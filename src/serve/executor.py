@@ -38,6 +38,7 @@ class RunPayload:
     items: list[RunPayloadItem]
     incomplete: bool = False
     fetched: int | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 Runner = Callable[[int, dict], RunPayload]

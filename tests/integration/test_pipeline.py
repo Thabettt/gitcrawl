@@ -177,7 +177,13 @@ def test_search_discovery_bisects_upserts_audits_and_drains_queue(clean: Engine,
     deps = make_deps(clean, scripted_client(handler, requests), redis)
     stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(shards=4, pages=4, fetched=8, inserted=8)
+    assert stats == DiscoveryStats(
+        shards=4,
+        pages=4,
+        fetched=8,
+        inserted=8,
+        repo_ids=(1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007),
+    )
     with clean.connect() as connection:
         states = dict(
             connection.execute(text("SELECT state, count(*) FROM shards GROUP BY state")).all()
@@ -226,7 +232,14 @@ def test_cap_422_splits_shard_into_two_subshards(clean: Engine, redis):
     deps = make_deps(clean, scripted_client(handler, requests), redis)
     stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(shards=3, pages=2, fetched=2, inserted=2, cap_splits=1)
+    assert stats == DiscoveryStats(
+        shards=3,
+        pages=2,
+        fetched=2,
+        inserted=2,
+        cap_splits=1,
+        repo_ids=(2002, 2003),
+    )
     assert len(page_requests) == 3
     assert len(set(page_requests)) == 3
     with clean.connect() as connection:
@@ -269,7 +282,14 @@ def test_incomplete_results_narrow_once_then_mark_incomplete(clean: Engine, redi
     deps = make_deps(clean, scripted_client(handler, requests), redis)
     stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(shards=3, pages=4, fetched=4, inserted=4, incomplete_shards=1)
+    assert stats == DiscoveryStats(
+        shards=3,
+        pages=4,
+        fetched=4,
+        inserted=4,
+        incomplete_shards=1,
+        repo_ids=(3000, 3001, 3003, 3004),
+    )
     with clean.connect() as connection:
         rows = connection.execute(
             text("SELECT id, state, incomplete FROM shards ORDER BY id")
@@ -300,7 +320,7 @@ def test_max_shards_bound_creates_only_cap(clean: Engine, redis):
     deps = make_deps(clean, scripted_client(handler, requests), redis)
     stats = run_search_discovery(deps, "topic:ai", max_shards=1, jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(shards=1, pages=1, fetched=1, inserted=1)
+    assert stats == DiscoveryStats(shards=1, pages=1, fetched=1, inserted=1, repo_ids=(4001,))
     assert len(page_requests) == 1
     assert scalar(clean, "SELECT count(*) FROM shards") == 1
     assert scalar(clean, "SELECT state FROM shards") == "done"
@@ -360,7 +380,7 @@ def test_sequential_path_without_queue(clean: Engine):
     deps = make_deps(clean, scripted_client(handler, requests), redis=None)
     stats = run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(shards=2, pages=2, fetched=2, inserted=2)
+    assert stats == DiscoveryStats(shards=2, pages=2, fetched=2, inserted=2, repo_ids=(5001, 5002))
     assert len(page_requests) == 2
     with clean.connect() as connection:
         states = dict(
