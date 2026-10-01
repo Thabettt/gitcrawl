@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import itertools
 import json
 import queue
 import threading
-import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -239,7 +239,12 @@ class RunExecutor:
         self._engine = engine
         self._runner = runner
         self._runs_root = runs_root
-        self._queue: queue.Queue[tuple[Callable[[], object], Future]] = queue.Queue()
+        self._queue: queue.PriorityQueue[
+            tuple[int, int, Callable[[], object], Future]
+        ] = queue.PriorityQueue()
+        self._sequence = itertools.count()
+        self._idle = threading.Event()
+        self._idle.set()
         self._futures: dict[int, Future] = {}
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._work, daemon=True)
@@ -248,6 +253,9 @@ class RunExecutor:
     def submit(self, run_id: int, runner: Runner | None = None) -> Future:
         future: Future = Future()
         with self._lock:
+            done = [key for key, value in self._futures.items() if value.done()]
+            for key in done:
+                del self._futures[key]
             self._futures[run_id] = future
 
         def job() -> None:
@@ -258,13 +266,17 @@ class RunExecutor:
                 runs_root=self._runs_root,
             )
 
-        self._queue.put((job, future))
+        self._enqueue(1, job, future)
         return future
 
     def submit_call(self, func: Callable[[], object]) -> Future:
         future: Future = Future()
-        self._queue.put((func, future))
+        self._enqueue(0, func, future)
         return future
+
+    def _enqueue(self, priority: int, job: Callable[[], object], future: Future) -> None:
+        self._idle.clear()
+        self._queue.put((priority, next(self._sequence), job, future))
 
     def wait_for(self, run_id: int, timeout: float | None = None) -> bool:
         with self._lock:
@@ -280,16 +292,11 @@ class RunExecutor:
         return True
 
     def wait(self, timeout: float | None = None) -> bool:
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while self._queue.unfinished_tasks:
-            if deadline is not None and time.monotonic() >= deadline:
-                return False
-            time.sleep(0.005)
-        return True
+        return self._idle.wait(timeout) and self._queue.unfinished_tasks == 0
 
     def _work(self) -> None:
         while True:
-            job, future = self._queue.get()
+            _priority, _sequence, job, future = self._queue.get()
             try:
                 result = job()
                 if not future.done():
@@ -299,3 +306,5 @@ class RunExecutor:
                     future.set_exception(exc)
             finally:
                 self._queue.task_done()
+                if self._queue.unfinished_tasks == 0:
+                    self._idle.set()

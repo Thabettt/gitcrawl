@@ -435,6 +435,41 @@ def test_run_executor_submit_call_runs_a_callable_on_the_worker(db: Engine, tmp_
         executor.submit_call(lambda: (_ for _ in ()).throw(RuntimeError("boom"))).result(timeout=10)
 
 
+def test_interactive_calls_jump_ahead_of_bulk_runs(db: Engine, tmp_path):
+    order: list[str] = []
+    release = threading.Event()
+
+    def slow(run_id: int, spec: dict) -> RunPayload:
+        order.append(f"bulk-{run_id}")
+        release.wait(timeout=2)
+        return RunPayload(1, [_item()])
+
+    first = create_run(db, FILTER, api_version="v1")
+    second = create_run(db, FILTER, api_version="v1")
+    executor = RunExecutor(db, runner=slow, runs_root=str(tmp_path))
+    executor.submit(first)
+    time.sleep(0.05)
+    bulk = executor.submit(second)
+    interactive = executor.submit_call(lambda: order.append("interactive") or "done")
+    release.set()
+    assert interactive.result(timeout=2) == "done"
+    bulk.result(timeout=2)
+    assert order.index("interactive") < order.index(f"bulk-{second}")
+
+
+def test_run_executor_prunes_completed_futures(db: Engine, tmp_path):
+    executor = RunExecutor(
+        db, runner=lambda rid, spec: RunPayload(1, [_item()]), runs_root=str(tmp_path)
+    )
+    first = create_run(db, FILTER, api_version="v1")
+    executor.submit(first).result(timeout=10)
+    assert first in executor._futures
+
+    second = create_run(db, FILTER, api_version="v1")
+    executor.submit(second).result(timeout=10)
+    assert first not in executor._futures
+
+
 def test_run_executor_fifo_and_single_worker(db: Engine, tmp_path):
     events: list[tuple[str, int]] = []
     lock = threading.Lock()
