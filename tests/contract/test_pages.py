@@ -282,6 +282,7 @@ def test_validate_csrf_honors_header_match_and_mismatch(clean: Engine, tmp_path,
 
     assert asyncio.run(validate_csrf(make_request(cookie=token, header=token))) is True
     assert asyncio.run(validate_csrf(make_request(cookie=token, header="wrong-token"))) is False
+    assert asyncio.run(validate_csrf(make_request(cookie=token, header="tökén"))) is False
     assert asyncio.run(validate_csrf(make_request(cookie=token))) is False
     assert asyncio.run(validate_csrf(make_request(header=token))) is False
     assert asyncio.run(validate_csrf(make_request())) is False

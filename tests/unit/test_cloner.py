@@ -128,6 +128,26 @@ def test_estimate_selects_top_n_by_stars_then_repo_id(clean: Engine):
     assert estimate.estimated_mb == pytest.approx((1024 + 4096) / 1024)
 
 
+def test_estimate_orders_null_stars_and_repo_ids_last(clean: Engine):
+    run_id, _ = seed_run(
+        clean,
+        [(1, "octo/one", 4096, 50), (2, "octo/null-stars", 1024, None)],
+    )
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO run_items (run_id, repo_id, full_name, stargazers) "
+                "VALUES (:run, NULL, 'octo/detached', 50)"
+            ),
+            {"run": run_id},
+        )
+
+    estimate = estimate_clone(clean, run_id, limit=1, mode=CloneMode.SHALLOW)
+
+    assert estimate.repos == 1
+    assert estimate.estimated_mb == pytest.approx(4.0)
+
+
 def test_estimate_caps_at_the_available_repos_and_treats_missing_size_as_zero(clean: Engine):
     run_id, _ = seed_run(clean, [(1, "octo/one", None, 10), (2, "octo/two", 1024, 5)])
 

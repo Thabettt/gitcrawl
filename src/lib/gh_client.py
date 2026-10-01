@@ -110,6 +110,7 @@ def request_with_retry(
     *,
     json_body: dict | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    auth: bool = True,
     limiter: BucketLimiter | None = None,
     token_id: str | None = None,
     max_attempts: int = 5,
@@ -138,7 +139,12 @@ def request_with_retry(
             denials = 0
         try:
             started = now()
-            response = client.request(method, url, **request_kwargs)
+            if auth:
+                response = client.request(method, url, **request_kwargs)
+            else:
+                request = client.build_request(method, url, **request_kwargs)
+                request.headers.pop("Authorization", None)
+                response = client.send(request)
             latency_ms = (now() - started) * 1000.0
             if on_response is not None:
                 on_response(response, latency_ms)

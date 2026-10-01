@@ -14,8 +14,8 @@ from sqlalchemy.engine import Engine
 from discover.search_shards import RequestFailed
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve.app import create_app
-from serve.executor import RunPayload, RunPayloadItem
-from serve.filter_spec import parse_filter_spec, spec_hash
+from serve.executor import RunPayload, RunPayloadItem, create_run, execute_run
+from serve.filter_spec import parse_filter_spec, spec_hash, spec_to_dict
 from serve.runner import RunnerConfig, build_deps, make_runner
 
 SEARCH_PATH = "/search/repositories"
@@ -208,6 +208,24 @@ def test_get_known_params_with_invalid_values_are_400(clean: Engine, tmp_path, p
     assert body["error"] == "invalid_param"
     assert body["param"] == param
     assert body["hint"]
+    assert calls == []
+
+
+@pytest.mark.parametrize("params", [{"q": ""}, {"q": "   "}, {}])
+def test_get_without_a_keyword_or_filter_is_a_400_instead_of_an_upstream_call(
+    clean: Engine, tmp_path, params
+):
+    calls: list = []
+    client = make_client(clean, counting_runner(RunPayload(0, []), calls), runs_root=tmp_path)
+
+    response = client.get("/vsearch/repos", params=params)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_param",
+        "param": "q",
+        "hint": "provide at least one keyword or filter",
+    }
     assert calls == []
 
 
@@ -416,6 +434,42 @@ def test_replay_returns_the_latest_run_and_404_when_unknown(clean: Engine, tmp_p
     missing = client.get("/vsearch/runs/" + "0" * 64)
     assert missing.status_code == 404
     assert missing.json()["error"] == "run_not_found"
+
+
+def test_replay_uses_the_latest_completed_run_when_the_newest_run_failed(clean: Engine, tmp_path):
+    calls: list = []
+    payload = RunPayload(total_count=9, fetched=1, items=[payload_item()])
+    client = make_client(clean, counting_runner(payload, calls), runs_root=tmp_path)
+    document = {"gitcrawl_filter": 1, "q": "language:rust"}
+
+    spec = parse_filter_spec(document)
+    created = client.post("/vsearch/run", json=document)
+    assert created.status_code == 200
+    filter_hash = created.json()["filter_hash"]
+    failed_id = create_run(clean, spec_to_dict(spec), api_version=API_VERSION)
+
+    def failing(_run_id: int, _spec: dict) -> RunPayload:
+        raise RuntimeError("upstream exploded")
+
+    execute_run(clean, failed_id, runner=failing, runs_root=str(tmp_path))
+
+    replayed = client.get(f"/vsearch/runs/{filter_hash}")
+
+    assert replayed.status_code == 200
+    assert replayed.json() == created.json()
+
+
+def test_replay_is_409_when_only_non_terminal_runs_exist(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(clean, counting_runner(RunPayload(0, []), calls), runs_root=tmp_path)
+    document = {"gitcrawl_filter": 1, "q": "language:rust"}
+    filter_hash = spec_hash(parse_filter_spec(document))
+    create_run(clean, spec_to_dict(parse_filter_spec(document)), api_version=API_VERSION)
+
+    response = client.get(f"/vsearch/runs/{filter_hash}")
+
+    assert response.status_code == 409
+    assert response.json() == {"error": "run_not_ready", "filter_hash": filter_hash}
 
 
 def test_sort_order_is_shared_by_get_post_and_replay(clean: Engine, tmp_path):

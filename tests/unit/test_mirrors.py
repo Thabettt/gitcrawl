@@ -234,6 +234,30 @@ def test_fetch_scorecard_non_200_raises_request_failed():
     assert excinfo.value.status == 400
 
 
+@pytest.mark.parametrize(
+    ("fetch", "payload"),
+    [
+        (fetch_ecosystems_repo, ECOSYSTEMS_PAYLOAD),
+        (fetch_depsdev_project, DEPSDEV_PAYLOAD),
+        (fetch_scorecard, SCORECARD_PAYLOAD),
+    ],
+)
+def test_third_party_fetchers_never_send_the_github_authorization(fetch, payload):
+    captured = []
+    client = httpx.Client(
+        headers={"Authorization": "Bearer ghp_secret", "User-Agent": "gitcrawl/0.0.1"},
+        transport=httpx.MockTransport(
+            lambda request: (captured.append(request), httpx.Response(200, json=payload))[1]
+        ),
+    )
+
+    fetch(client, "octo/hello")
+
+    assert len(captured) == 1
+    assert "authorization" not in captured[0].headers
+    assert captured[0].headers["user-agent"] == "gitcrawl/0.0.1"
+
+
 def test_fetchers_invoke_on_response_callback():
     seen = []
 

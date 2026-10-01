@@ -403,6 +403,35 @@ def test_purge_tombstones_removes_only_rows_past_retention(clean: Engine):
     assert repo_ids(clean) == [2, 3]
 
 
+def test_purge_tombstones_nulls_snapshot_repo_ids(clean: Engine):
+    from serve.executor import create_run
+    from store.lifecycle import purge_tombstones
+
+    seed(clean, "octo/gone", repo_id=1)
+    run_id = create_run(clean, {"gitcrawl_filter": 1, "q": "language:rust"}, api_version="v1")
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO run_items (run_id, repo_id, full_name) "
+                "VALUES (:run, 1, 'octo/gone')"
+            ),
+            {"run": run_id},
+        )
+        connection.execute(
+            text("UPDATE repos SET deleted_at = :ts WHERE id = 1"),
+            {"ts": now - timedelta(days=31)},
+        )
+
+    assert purge_tombstones(clean, retention_days=30, now=now) == 1
+
+    with clean.connect() as connection:
+        rows = connection.execute(
+            text("SELECT repo_id, full_name FROM run_items WHERE run_id = :run"), {"run": run_id}
+        ).all()
+    assert [(row[0], row[1]) for row in rows] == [(None, "octo/gone")]
+
+
 def test_purge_tombstones_keeps_rows_at_exactly_the_retention_boundary(clean: Engine):
     from store.lifecycle import purge_tombstones
 

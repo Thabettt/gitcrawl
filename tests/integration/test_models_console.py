@@ -7,7 +7,6 @@ from sqlalchemy import CHAR, BigInteger, Integer, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
 
 from store.models import Base
 
@@ -46,8 +45,9 @@ RUN_COLUMNS: dict[str, bool] = {
 }
 
 RUN_ITEM_COLUMNS: dict[str, bool] = {
+    "id": False,
     "run_id": False,
-    "repo_id": False,
+    "repo_id": True,
     "full_name": False,
     "stargazers": True,
     "pushed_at": True,
@@ -99,7 +99,7 @@ def _indexdefs(engine: Engine) -> dict[str, str]:
 
 
 def test_single_alembic_head(alembic_config):
-    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0003"]
+    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0004"]
 
 
 def test_metadata_declares_exactly_the_expected_tables():
@@ -146,14 +146,16 @@ def test_run_items_types_primary_key_and_foreign_keys(migrated: Engine):
     assert columns["pushed_at"]["type"].timezone is True
     assert "'{}'" in (columns["virtuals"]["default"] or "")
     inspector = inspect(migrated)
-    assert inspector.get_pk_constraint("run_items")["constrained_columns"] == ["run_id", "repo_id"]
+    assert inspector.get_pk_constraint("run_items")["constrained_columns"] == ["id"]
     foreign_keys = {
         fk["constrained_columns"][0]: fk for fk in inspector.get_foreign_keys("run_items")
     }
     assert foreign_keys["run_id"]["referred_table"] == "runs"
     assert foreign_keys["run_id"]["options"].get("ondelete") == "CASCADE"
     assert foreign_keys["repo_id"]["referred_table"] == "repos"
-    assert foreign_keys["repo_id"]["options"].get("ondelete") is None
+    assert foreign_keys["repo_id"]["options"].get("ondelete") == "SET NULL"
+    unique = {tuple(item["column_names"]) for item in inspector.get_unique_constraints("run_items")}
+    assert ("run_id", "repo_id") in unique
 
 
 def test_saved_filters_unique_name_and_types(migrated: Engine):
@@ -210,7 +212,7 @@ def test_deleting_run_cascades_to_run_items(clean: Engine):
     assert remaining == 0
 
 
-def test_repo_delete_is_restricted_while_snapshot_exists(clean: Engine):
+def test_repo_delete_nulls_snapshot_repo_ids(clean: Engine):
     with clean.begin() as connection:
         connection.execute(text("INSERT INTO owners (id, login, type) VALUES (1, 'octo', 'User')"))
         connection.execute(
@@ -228,8 +230,11 @@ def test_repo_delete_is_restricted_while_snapshot_exists(clean: Engine):
         connection.execute(
             text("INSERT INTO run_items (run_id, repo_id, full_name) VALUES (1, 1, 'octo/hello')")
         )
-        with pytest.raises(IntegrityError):
-            connection.execute(text("DELETE FROM repos WHERE id = 1"))
+        connection.execute(text("DELETE FROM repos WHERE id = 1"))
+        rows = connection.execute(
+            text("SELECT repo_id, full_name FROM run_items WHERE run_id = 1")
+        ).all()
+    assert [(row[0], row[1]) for row in rows] == [(None, "octo/hello")]
 
 
 def test_console_migration_round_trip(alembic_config, alembic_engine: Engine):

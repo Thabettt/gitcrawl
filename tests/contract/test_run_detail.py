@@ -388,6 +388,45 @@ def test_table_fragment_badges_and_geo(clean: Engine, tmp_path):
     assert 'data-country="DE"' in html
 
 
+def test_table_fragment_non_integer_page_is_a_friendly_400(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    client = make_client(clean, tmp_path)
+
+    response = client.get(f"/partials/runs/{run_id}/table", params={"page": "abc"})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_param",
+        "param": "page",
+        "hint": "page must be an integer >= 1",
+    }
+
+
+def test_status_fragment_refreshes_flags_when_the_run_becomes_terminal(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    with clean.begin() as connection:
+        connection.execute(
+            text("UPDATE runs SET status = 'running' WHERE id = :id"), {"id": run_id}
+        )
+    client = make_client(clean, tmp_path)
+
+    running = client.get(f"/partials/runs/{run_id}/status")
+    assert 'id="run-flags"' not in running.text
+
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE runs SET status = 'partial', incomplete_shards = 1, finished_at = now() "
+                "WHERE id = :id"
+            ),
+            {"id": run_id},
+        )
+    terminal = client.get(f"/partials/runs/{run_id}/status")
+
+    assert 'id="run-flags"' in terminal.text
+    assert 'data-flag="incomplete"' in terminal.text
+
+
 def test_table_fragment_unknown_run_is_404(clean: Engine, tmp_path):
     client = make_client(clean, tmp_path)
 

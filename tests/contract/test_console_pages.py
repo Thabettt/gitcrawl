@@ -337,6 +337,18 @@ def test_runs_page_filters_by_status_and_hash(client: TestClient, clean, tmp_pat
     assert 'id="run-history"' in no_match
 
 
+@pytest.mark.parametrize("value", ["abc", "0", "-1"])
+def test_runs_page_non_integer_page_is_a_friendly_400(client: TestClient, value):
+    response = client.get("/runs", params={"page": value})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_param",
+        "param": "page",
+        "hint": "page must be an integer >= 1",
+    }
+
+
 def test_runs_page_empty_state(client: TestClient):
     html = client.get("/runs").text
 

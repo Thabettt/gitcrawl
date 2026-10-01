@@ -396,6 +396,45 @@ def test_execute_run_empty_items_writes_header_only_csv(db: Engine, tmp_path):
     assert bundle["fetched"] is None
 
 
+def test_run_executor_submit_returns_a_per_run_completion_handle(db: Engine, tmp_path):
+    run_id = create_run(db, FILTER, api_version="v1")
+    executor = RunExecutor(
+        db, runner=lambda rid, spec: RunPayload(1, [_item()]), runs_root=str(tmp_path)
+    )
+
+    future = executor.submit(run_id)
+    future.result(timeout=10)
+    assert run_status(db, run_id)["status"] == "done"
+    assert executor.wait_for(run_id, timeout=10) is True
+    assert executor.wait_for(999999, timeout=0) is False
+
+
+def test_run_executor_submit_accepts_a_per_run_runner(db: Engine, tmp_path):
+    run_id = create_run(db, FILTER, api_version="v1")
+    executor = RunExecutor(
+        db,
+        runner=lambda rid, spec: RunPayload(1, [_item()]),
+        runs_root=str(tmp_path),
+    )
+
+    executor.submit(
+        run_id, runner=lambda rid, spec: RunPayload(1, [_item(repo_id=2, full_name="octo/world")])
+    ).result(timeout=10)
+
+    with db.connect() as connection:
+        rows = connection.execute(text("SELECT repo_id FROM run_items ORDER BY repo_id")).scalars()
+    assert list(rows) == [2]
+
+
+def test_run_executor_submit_call_runs_a_callable_on_the_worker(db: Engine, tmp_path):
+    executor = RunExecutor(db, runs_root=str(tmp_path))
+
+    assert executor.submit_call(lambda: "payload").result(timeout=10) == "payload"
+
+    with pytest.raises(RuntimeError, match="boom"):
+        executor.submit_call(lambda: (_ for _ in ()).throw(RuntimeError("boom"))).result(timeout=10)
+
+
 def test_run_executor_fifo_and_single_worker(db: Engine, tmp_path):
     events: list[tuple[str, int]] = []
     lock = threading.Lock()

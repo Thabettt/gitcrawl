@@ -91,6 +91,15 @@ def test_max_pages_caps_requests_even_with_next_links():
     pages = list(iter_shard_pages(client, QUERY, max_pages=2))
     assert len(captured) == 2
     assert len(pages) == 2
+    assert pages[0].exhausted is False
+    assert pages[1].exhausted is True
+
+
+def test_exhausted_flag_is_false_when_the_final_page_has_no_next_link():
+    client = client_from([search_page()])
+    pages = list(iter_shard_pages(client, QUERY, max_pages=1))
+    assert len(pages) == 1
+    assert pages[0].exhausted is False
 
 
 def test_result_cap_422_raises_search_cap_exceeded_with_single_request():

@@ -263,6 +263,8 @@ def test_normalize_repo_does_not_mutate_its_input():
     [
         {"stargazers_count": "many"},
         {"stargazers_count": [1, 2]},
+        {"stargazers_count": float("inf")},
+        {"forks_count": float("1e400")},
         {"forks_count": "lots"},
         {"watchers_count": {"count": 1}},
         {"open_issues_count": "n/a"},

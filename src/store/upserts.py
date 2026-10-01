@@ -87,7 +87,7 @@ def _coerce_count(value: object) -> int | None:
     if isinstance(value, (float, str)):
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
     return None
 

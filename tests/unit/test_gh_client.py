@@ -454,6 +454,46 @@ def test_request_with_retry_posts_json_body_and_extra_headers():
     assert captured["headers"]["User-Agent"] == "gitcrawl/0.0.1"
 
 
+def test_request_with_retry_auth_false_strips_client_authorization():
+    captured = {}
+
+    def handler(request):
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(
+        headers={"Authorization": "Bearer ghp_secret", "User-Agent": "gitcrawl/0.0.1"},
+        transport=httpx.MockTransport(handler),
+    )
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://repos.ecosyste.ms/api/v1/hosts/GitHub/repositories/octo%2Fhello",
+        auth=False,
+        now=lambda: 1000.0,
+    )
+
+    assert response.status_code == 200
+    assert "Authorization" not in captured["headers"]
+    assert captured["headers"]["User-Agent"] == "gitcrawl/0.0.1"
+
+
+def test_request_with_retry_auth_default_keeps_client_authorization():
+    captured = {}
+
+    def handler(request):
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(
+        headers={"Authorization": "Bearer ghp_secret"},
+        transport=httpx.MockTransport(handler),
+    )
+    request_with_retry(client, "GET", "https://api.github.com/repos/octo/hello", now=lambda: 1.0)
+
+    assert captured["headers"]["Authorization"] == "Bearer ghp_secret"
+
+
 def test_request_with_retry_merges_extra_headers_over_client_defaults():
     captured = {}
 

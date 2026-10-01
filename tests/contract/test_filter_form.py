@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 
 import fakeredis
 import pytest
@@ -214,12 +216,13 @@ def payload_item(**overrides) -> RunPayloadItem:
     return RunPayloadItem(**values)
 
 
-def make_client(engine: Engine, tmp_path, *, calls: list | None = None) -> TestClient:
+def make_client(engine: Engine, tmp_path, *, calls: list | None = None, runner=None) -> TestClient:
     captured = calls if calls is not None else []
+    if runner is None:
 
-    def runner(run_id: int, filter_spec: dict) -> RunPayload:
-        captured.append(filter_spec)
-        return RunPayload(total_count=1, fetched=1, items=[payload_item()])
+        def runner(run_id: int, filter_spec: dict) -> RunPayload:
+            captured.append(filter_spec)
+            return RunPayload(total_count=1, fetched=1, items=[payload_item()])
 
     application = create_app(
         engine=engine,
@@ -229,6 +232,19 @@ def make_client(engine: Engine, tmp_path, *, calls: list | None = None) -> TestC
         token_present=lambda: True,
     )
     return TestClient(application, raise_server_exceptions=False, follow_redirects=False)
+
+
+def wait_for_run(engine: Engine, run_id: int, timeout: float = 10.0) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as connection:
+            status = connection.scalar(
+                text("SELECT status FROM runs WHERE id = :id"), {"id": run_id}
+            )
+        if status in ("done", "partial", "failed"):
+            return str(status)
+        time.sleep(0.01)
+    raise AssertionError(f"run {run_id} did not reach a terminal status in {timeout}s")
 
 
 def csrf_token(client: TestClient) -> str:
@@ -468,6 +484,7 @@ def test_find_action_creates_a_run_and_redirects_to_it(clean: Engine, tmp_path):
     location = response.headers["location"]
     assert re.fullmatch(r"/runs/\d+", location)
     run_id = int(location.rsplit("/", 1)[1])
+    assert wait_for_run(clean, run_id) == "done"
     assert client.get(location).status_code == 200
     with clean.connect() as connection:
         row = connection.execute(
@@ -488,6 +505,35 @@ def test_find_action_creates_a_run_and_redirects_to_it(clean: Engine, tmp_path):
     ]
 
 
+def test_find_redirects_before_the_run_finishes(clean: Engine, tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking(_run_id: int, _spec: dict) -> RunPayload:
+        started.set()
+        assert release.wait(10)
+        return RunPayload(total_count=1, fetched=1, items=[payload_item()])
+
+    client = make_client(clean, tmp_path, runner=blocking)
+    token = csrf_token(client)
+
+    began = time.monotonic()
+    response = client.post(
+        "/find", data={"csrf": token, "action": "find", "keywords": "language:rust"}
+    )
+    elapsed = time.monotonic() - began
+
+    assert response.status_code == 303
+    assert elapsed < 2.0
+    assert started.wait(10)
+    run_id = int(response.headers["location"].rsplit("/", 1)[1])
+    with clean.connect() as connection:
+        status = connection.scalar(text("SELECT status FROM runs WHERE id = :id"), {"id": run_id})
+    assert status in ("queued", "running")
+    release.set()
+    assert wait_for_run(clean, run_id) == "done"
+
+
 def test_upload_action_runs_the_uploaded_spec(clean: Engine, tmp_path):
     client = make_client(clean, tmp_path)
     token = csrf_token(client)
@@ -506,6 +552,8 @@ def test_upload_action_runs_the_uploaded_spec(clean: Engine, tmp_path):
 
     assert response.status_code == 303
     assert re.fullmatch(r"/runs/\d+", response.headers["location"])
+    run_id = int(response.headers["location"].rsplit("/", 1)[1])
+    assert wait_for_run(clean, run_id) == "done"
 
 
 def test_upload_action_rejects_a_broken_file_and_missing_file(clean: Engine, tmp_path):
@@ -610,6 +658,7 @@ def test_replay_creates_a_new_run_and_redirects_back(clean: Engine, tmp_path):
     assert re.fullmatch(r"/runs/\d+", location)
     new_id = int(location.rsplit("/", 1)[1])
     assert new_id != run_id
+    assert wait_for_run(clean, new_id) == "done"
     assert client.get(location).status_code == 200
     assert len(calls) == 1
     with clean.connect() as connection:

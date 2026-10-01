@@ -49,15 +49,15 @@ def _iso(value: object) -> str | None:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def latest_run_for_hash(engine: Engine, filter_hash: str) -> Row | None:
+def latest_run_for_hash(
+    engine: Engine, filter_hash: str, *, statuses: tuple[str, ...] | None = None
+) -> Row | None:
+    statement = select(Runs).where(Runs.filter_hash == filter_hash)
+    if statuses is not None:
+        statement = statement.where(Runs.status.in_(statuses))
     with engine.connect() as connection:
         return (
-            connection.execute(
-                select(Runs)
-                .where(Runs.filter_hash == filter_hash)
-                .order_by(Runs.created_at.desc(), Runs.id.desc())
-                .limit(1)
-            )
+            connection.execute(statement.order_by(Runs.created_at.desc(), Runs.id.desc()).limit(1))
             .mappings()
             .one_or_none()
         )

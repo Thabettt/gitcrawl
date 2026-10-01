@@ -320,11 +320,37 @@ def test_max_shards_bound_creates_only_cap(clean: Engine, redis):
     deps = make_deps(clean, scripted_client(handler, requests), redis)
     stats = run_search_discovery(deps, "topic:ai", max_shards=1, jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(shards=1, pages=1, fetched=1, inserted=1, repo_ids=(4001,))
+    assert stats == DiscoveryStats(
+        shards=1, pages=1, fetched=1, inserted=1, repo_ids=(4001,), plan_capped=True
+    )
     assert len(page_requests) == 1
     assert scalar(clean, "SELECT count(*) FROM shards") == 1
     assert scalar(clean, "SELECT state FROM shards") == "done"
     assert queue_is_empty(redis)
+
+
+def test_page_cap_marks_the_shard_incomplete_and_counts_the_capped_page(clean: Engine, redis):
+    requests: list = []
+
+    def handler(request: httpx.Request):
+        query = q_of(request)
+        if params_of(request).get("per_page") == ["1"]:
+            return count_response(500)
+        return page_response([repo_item(6000)], next_url=next_page_url(query, 2))
+
+    deps = make_deps(clean, scripted_client(handler, requests), redis)
+    stats = run_search_discovery(deps, "topic:ai", max_pages=1, jitter=lambda: 0.0)
+
+    assert stats == DiscoveryStats(
+        shards=1,
+        pages=1,
+        fetched=1,
+        inserted=1,
+        incomplete_shards=1,
+        page_capped_shards=1,
+        repo_ids=(6000,),
+    )
+    assert scalar(clean, "SELECT state FROM shards") == "incomplete"
 
 
 def test_non_200_exhaustion_raises_request_failed(clean: Engine):

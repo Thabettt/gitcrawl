@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlencode
 
 import httpx
@@ -34,6 +34,7 @@ class ShardPage:
     total_count: int
     incomplete: bool
     next_url: str | None
+    exhausted: bool = False
 
 
 def _next_link(header: str | None) -> str | None:
@@ -107,16 +108,19 @@ def iter_shard_pages(
                 incomplete = bool(payload.get("incomplete_results"))
             else:
                 raise RequestFailed(200, _short_message(response))
+            next_url = _next_link(response.headers.get("link"))
+            pages += 1
             page = ShardPage(
                 url=url,
                 items=tuple(raw_items or ()),
                 total_count=total_count,
                 incomplete=incomplete,
-                next_url=_next_link(response.headers.get("link")),
+                next_url=next_url,
             )
+            if next_url is not None and pages >= max_pages:
+                page = replace(page, exhausted=True)
             yield page
-            pages += 1
-            url = page.next_url
+            url = next_url
             continue
         message = _short_message(response)
         if response.status_code == 422 and _CAP_MESSAGE in message.lower():

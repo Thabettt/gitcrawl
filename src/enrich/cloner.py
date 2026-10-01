@@ -104,7 +104,7 @@ def _top_items(engine: Engine, run_id: int, limit: int) -> list[RowMapping]:
                 )
                 .outerjoin(Repo, Repo.id == RunItem.repo_id)
                 .where(RunItem.run_id == run_id)
-                .order_by(RunItem.stargazers.desc(), RunItem.repo_id)
+                .order_by(RunItem.stargazers.desc().nullslast(), RunItem.repo_id.nullslast())
                 .limit(limit)
             ).mappings()
         )

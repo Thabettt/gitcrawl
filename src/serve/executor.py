@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -238,12 +239,45 @@ class RunExecutor:
         self._engine = engine
         self._runner = runner
         self._runs_root = runs_root
-        self._queue: queue.Queue[int] = queue.Queue()
+        self._queue: queue.Queue[tuple[Callable[[], object], Future]] = queue.Queue()
+        self._futures: dict[int, Future] = {}
+        self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._work, daemon=True)
         self._thread.start()
 
-    def submit(self, run_id: int) -> None:
-        self._queue.put(run_id)
+    def submit(self, run_id: int, runner: Runner | None = None) -> Future:
+        future: Future = Future()
+        with self._lock:
+            self._futures[run_id] = future
+
+        def job() -> None:
+            execute_run(
+                self._engine,
+                run_id,
+                runner=runner or self._runner,
+                runs_root=self._runs_root,
+            )
+
+        self._queue.put((job, future))
+        return future
+
+    def submit_call(self, func: Callable[[], object]) -> Future:
+        future: Future = Future()
+        self._queue.put((func, future))
+        return future
+
+    def wait_for(self, run_id: int, timeout: float | None = None) -> bool:
+        with self._lock:
+            future = self._futures.get(run_id)
+        if future is None:
+            return False
+        try:
+            future.result(timeout=timeout)
+        except TimeoutError:
+            return False
+        except Exception:
+            return True
+        return True
 
     def wait(self, timeout: float | None = None) -> bool:
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -255,15 +289,13 @@ class RunExecutor:
 
     def _work(self) -> None:
         while True:
-            run_id = self._queue.get()
+            job, future = self._queue.get()
             try:
-                execute_run(
-                    self._engine,
-                    run_id,
-                    runner=self._runner,
-                    runs_root=self._runs_root,
-                )
-            except Exception:
-                continue
+                result = job()
+                if not future.done():
+                    future.set_result(result)
+            except Exception as exc:
+                if not future.done():
+                    future.set_exception(exc)
             finally:
                 self._queue.task_done()

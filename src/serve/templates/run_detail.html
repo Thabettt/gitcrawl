@@ -34,15 +34,6 @@
     </form>
     <button id="clone-open" class="button" type="button" data-open="clone-modal">Clone</button>
   </div>
-  {% if run.flags %}
-  <div id="run-flags" class="flags">
-    <ul>
-      {% for flag in run.flags %}
-      <li class="flag {{ flag.kind }}" data-flag="{{ flag.kind }}">{{ flag.label }}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
 </section>
 <span id="table-loading" class="htmx-indicator muted" role="status">Loading results…</span>
 <div id="run-table">{% include "partials/table.html" %}</div>

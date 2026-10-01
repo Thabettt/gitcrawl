@@ -11,4 +11,13 @@
     <span class="count" data-count="skipped">skipped <strong>{{ run.skipped }}</strong></span>
     <span class="count" data-count="incomplete">incomplete <strong>{{ run.incomplete_shards }}</strong></span>
   </div>
+  {% if run.flags %}
+  <div id="run-flags" class="flags">
+    <ul>
+      {% for flag in run.flags %}
+      <li class="flag {{ flag.kind }}" data-flag="{{ flag.kind }}">{{ flag.label }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
 </div>

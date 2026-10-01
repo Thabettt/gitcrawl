@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CHAR, BigInteger, Boolean, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import (
+    CHAR,
+    BigInteger,
+    Boolean,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -171,12 +181,16 @@ class RunItem(Base):
     __table_args__ = (
         Index("run_items_repo_idx", "repo_id"),
         Index("run_items_stars_idx", "run_id", text("stargazers DESC")),
+        UniqueConstraint("run_id", "repo_id", name="run_items_run_repo_key"),
     )
 
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("runs.id", ondelete="CASCADE"), primary_key=True
+        BigInteger, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
     )
-    repo_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("repos.id"), primary_key=True)
+    repo_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("repos.id", ondelete="SET NULL")
+    )
     full_name: Mapped[str] = mapped_column(CITEXT, nullable=False)
     stargazers: Mapped[int | None] = mapped_column(Integer)
     pushed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

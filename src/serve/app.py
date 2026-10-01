@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
 import os
 import re
@@ -16,13 +17,14 @@ from sqlalchemy.engine import Engine
 from discover.search_shards import RequestFailed
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve.diff import diff_runs
-from serve.executor import Runner, RunPayload, RunPayloadItem, create_run, execute_run
+from serve.executor import RunExecutor, Runner, RunPayload, RunPayloadItem, create_run
 from serve.filter_spec import (
     FILTER_SPEC_VERSION,
     FilterSpecError,
     parse_filter_spec,
     spec_hash,
     spec_to_dict,
+    spec_to_query,
 )
 from serve.library import (
     LibraryError,
@@ -45,6 +47,7 @@ from store.models import Owner, Repo, RunItem, Runs
 CACHE_TTL_SECONDS = 120.0
 DEFAULT_PER_PAGE = 20
 PER_PAGE_RANGE = (1, 100)
+READY_STATUSES = frozenset({"done", "partial"})
 _GET_PARAMS = ("q", "sort", "order", "per_page", "page", *VIRTUAL_FILTERS)
 _GET_PARAM_SET = frozenset(_GET_PARAMS)
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
@@ -294,7 +297,7 @@ def create_app(
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
 ) -> FastAPI:
-    state: dict[str, object] = {"engine": engine, "runner": None}
+    state: dict[str, object] = {"engine": engine, "runner": None, "executor": None}
     cache: dict[str, tuple[float, RunPayload]] = {}
     lock = threading.Lock()
     application = FastAPI(title="gitcrawl", version="0.0.1")
@@ -317,6 +320,13 @@ def create_app(
             else:
                 bound = runner_factory(engine_for())
             state["runner"] = bound
+        return bound
+
+    def executor_for() -> RunExecutor:
+        bound = state["executor"]
+        if not isinstance(bound, RunExecutor):
+            bound = RunExecutor(engine_for(), runs_root=runs_root)
+            state["executor"] = bound
         return bound
 
     @application.get("/vsearch/repos")
@@ -369,11 +379,21 @@ def create_app(
                     "hint": _spec_error_hint(exc, param),
                 },
             )
+        if not spec_to_query(spec):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_param",
+                    "param": "q",
+                    "hint": "provide at least one keyword or filter",
+                },
+            )
         key = spec_hash(spec)
         payload = _cached_payload(cache, lock, key, clock)
         if payload is None:
+            runner = runner_for()
             try:
-                payload = runner_for()(0, spec_to_dict(spec))
+                payload = executor_for().submit_call(lambda: runner(0, spec_to_dict(spec))).result()
             except (RequestFailed, PartialResultsError):
                 return JSONResponse(
                     status_code=502,
@@ -445,7 +465,7 @@ def create_app(
                 captured.append(exc)
                 raise
 
-        execute_run(bound_engine, run_id, runner=capturing, runs_root=runs_root)
+        await asyncio.wrap_future(executor_for().submit(run_id, runner=capturing))
         if captured:
             error = captured[0]
             if isinstance(error, ThrottledError):
@@ -471,11 +491,17 @@ def create_app(
     @application.get("/vsearch/runs/{filter_hash}")
     def replay(filter_hash: str):
         bound_engine = engine_for()
-        run_row = latest_run_for_hash(bound_engine, filter_hash)
+        ready_statuses = tuple(sorted(READY_STATUSES))
+        run_row = latest_run_for_hash(bound_engine, filter_hash, statuses=ready_statuses)
         if run_row is None:
+            if latest_run_for_hash(bound_engine, filter_hash) is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "run_not_found", "filter_hash": filter_hash},
+                )
             return JSONResponse(
-                status_code=404,
-                content={"error": "run_not_found", "filter_hash": filter_hash},
+                status_code=409,
+                content={"error": "run_not_ready", "filter_hash": filter_hash},
             )
         return _replay_body(bound_engine, run_row, run_row["id"])
 
@@ -491,11 +517,17 @@ def create_app(
                 },
             )
         bound_engine = engine_for()
-        run_row = latest_run_for_hash(bound_engine, filter_hash)
+        ready_statuses = tuple(sorted(READY_STATUSES))
+        run_row = latest_run_for_hash(bound_engine, filter_hash, statuses=ready_statuses)
         if run_row is None:
+            if latest_run_for_hash(bound_engine, filter_hash) is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "run_not_found", "filter_hash": filter_hash},
+                )
             return JSONResponse(
                 status_code=404,
-                content={"error": "run_not_found", "filter_hash": filter_hash},
+                content={"error": "run_not_ready", "filter_hash": filter_hash},
             )
         try:
             content, media_type = export_bundle(
@@ -662,6 +694,7 @@ def create_app(
         redis_ping=redis_ping,
         token_present=token_present,
         runner_factory=runner_for,
+        executor_factory=executor_for,
     )
 
     return application

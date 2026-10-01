@@ -51,7 +51,9 @@ class DiscoveryStats:
     unchanged: int = 0
     skipped: int = 0
     incomplete_shards: int = 0
+    page_capped_shards: int = 0
     cap_splits: int = 0
+    plan_capped: bool = False
     repo_ids: tuple[int, ...] = ()
 
 
@@ -207,6 +209,7 @@ def run_search_discovery(
 
     for spec in ShardPlanner(count_fn).plan(query):
         if create_shard(spec) is None:
+            stats.plan_capped = True
             break
 
     def spawn_narrower(row: ShardRow) -> bool:
@@ -256,6 +259,9 @@ def run_search_discovery(
                         continue
                     seen_ids.add(repo_id)
                     stats.repo_ids += (repo_id,)
+                if page.exhausted:
+                    stats.page_capped_shards += 1
+                    incomplete = True
                 if page.incomplete:
                     if not narrowed and spawn_narrower(row):
                         narrowed = True

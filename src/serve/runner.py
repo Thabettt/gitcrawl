@@ -420,11 +420,14 @@ def _enrich_handlers(
     budget: dict,
     hook: Callable[[httpx.Response, float], None],
     skipped: dict,
-) -> dict:
+    *,
+    depth: str = "page",
+) -> tuple[dict, list[str]]:
     rows_by_id = {row["id"]: row for row in rows}
     handlers: dict = {}
+    unsupported: list[str] = []
     geo_claimed = False
-    for step in plan_enrichment(list(virtual), depth="page").steps:
+    for step in plan_enrichment(list(virtual), depth=depth).steps:
         if step.field in ("min_stars", "team_topic"):
             handlers[step.field] = _record_handler(rows_by_id, step.field, virtual)
         elif step.field in ("owner_country", "min_geo_confidence"):
@@ -438,8 +441,8 @@ def _enrich_handlers(
                 deps, rows_by_id, virtual.get("has_dockerfile"), budget, hook, skipped
             )
         else:
-            raise ValueError(f"no enrich handler for field `{step.field}`")
-    return handlers
+            unsupported.append(step.field)
+    return handlers, unsupported
 
 
 def _payload_item(row: dict, virtual: dict) -> RunPayloadItem:
@@ -506,6 +509,15 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
         warnings.append(
             f"{stats.incomplete_shards} discovery shard(s) incomplete; results are partial"
         )
+    if stats.page_capped_shards > 0:
+        warnings.append(
+            f"{stats.page_capped_shards} discovery shard(s) hit the page cap "
+            f"(max_pages={spec.max_pages}) with more pages available; results are incomplete"
+        )
+    if stats.plan_capped:
+        warnings.append(
+            f"discovery shard plan stopped at max_shards={cfg.max_shards}; results are incomplete"
+        )
     hook = _audit_hook(deps)
     ordered = _ordered_rows(deps.engine, list(stats.repo_ids))
     dropped_candidates = max(0, len(ordered) - cfg.max_candidates)
@@ -525,7 +537,12 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
     budget = {"remaining": cfg.max_enrich}
     skipped = {"geo": 0, "dockerfile": 0}
-    handlers = _enrich_handlers(deps, rows, virtual, budget, hook, skipped)
+    handlers, unsupported = _enrich_handlers(deps, rows, virtual, budget, hook, skipped)
+    for field in unsupported:
+        warnings.append(
+            f"`{field}` requires full-depth enrichment, which is not wired yet; "
+            "results are incomplete"
+        )
     survivors, segment_stats = execute_segments([row["id"] for row in rows], handlers, segments=1)
     surviving = set(survivors)
     rows = [row for row in rows if row["id"] in surviving]

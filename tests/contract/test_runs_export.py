@@ -10,8 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from lib.gh_client import API_VERSION
 from serve.app import create_app
-from serve.executor import RunPayload, RunPayloadItem
+from serve.executor import RunPayload, RunPayloadItem, create_run, execute_run
+from serve.filter_spec import parse_filter_spec, spec_to_dict
 from serve.runs import export_bundle, latest_run_for_hash, run_bundle_dir
 
 FILTER = {"gitcrawl_filter": 1, "q": "language:rust"}
@@ -107,6 +109,21 @@ def seed_run(client: TestClient, engine: Engine) -> tuple[str, int]:
     return filter_hash, int(run_id)
 
 
+def seed_failed_run(engine: Engine, filter_spec: dict | None = None) -> tuple[str, int]:
+    normalized = spec_to_dict(parse_filter_spec(filter_spec or FILTER))
+    run_id = create_run(engine, normalized, api_version=API_VERSION)
+
+    def failing(_run_id: int, _spec: dict) -> RunPayload:
+        raise RuntimeError("upstream exploded")
+
+    execute_run(engine, run_id, runner=failing, runs_root="runs")
+    with engine.connect() as connection:
+        filter_hash = connection.scalar(
+            text("SELECT filter_hash FROM runs WHERE id = :id"), {"id": run_id}
+        )
+    return str(filter_hash), int(run_id)
+
+
 def stored_filter_spec(engine: Engine, run_id: int) -> dict:
     with engine.connect() as connection:
         return connection.scalar(
@@ -182,6 +199,32 @@ def test_export_uses_the_latest_run_for_the_hash(clean: Engine, tmp_path):
     assert response.status_code == 200
     assert response.content == disk
     assert f"gitcrawl-{filter_hash}-{second_id}.json" in response.headers["content-disposition"]
+
+
+def test_export_uses_the_latest_completed_run_when_the_newest_run_failed(clean: Engine, tmp_path):
+    payload = RunPayload(total_count=1, fetched=1, items=[payload_item()])
+    client = make_client(clean, payload, tmp_path)
+    filter_hash, done_id = seed_run(client, clean)
+    failed_hash, failed_id = seed_failed_run(clean)
+    assert failed_hash == filter_hash and failed_id > done_id
+    disk = (tmp_path / filter_hash / str(done_id) / "bundle.json").read_bytes()
+
+    response = client.get(f"/vsearch/runs/{filter_hash}/export")
+
+    assert response.status_code == 200
+    assert response.content == disk
+    assert f"gitcrawl-{filter_hash}-{done_id}.json" in response.headers["content-disposition"]
+
+
+def test_export_is_404_when_only_non_terminal_runs_exist(clean: Engine, tmp_path):
+    payload = RunPayload(total_count=1, fetched=1, items=[payload_item()])
+    client = make_client(clean, payload, tmp_path)
+    filter_hash, _ = seed_failed_run(clean)
+
+    response = client.get(f"/vsearch/runs/{filter_hash}/export")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "run_not_ready", "filter_hash": filter_hash}
 
 
 def test_export_unknown_hash_is_404(clean: Engine, tmp_path):

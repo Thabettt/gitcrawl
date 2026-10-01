@@ -235,6 +235,57 @@ def test_run_filter_marks_incomplete_when_a_discovery_shard_is_incomplete(clean:
     assert any("shard" in warning and "incomplete" in warning for warning in payload.warnings)
 
 
+def test_run_filter_marks_incomplete_when_the_page_cap_truncates(clean: Engine):
+    page = [repo_item(1)]
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(500)
+            return page_response(page, next_url=next_page_url(query_of(request), 2))
+        if path == "/repos/owner1/repo1":
+            return httpx.Response(200, json=repo_item(1))
+        return httpx.Response(404)
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="topic:ai", page={"per_page": 1, "max_pages": 1}),
+        config=RunnerConfig(max_shards=1, max_enrich=0),
+    )
+
+    assert payload.fetched == 1
+    assert payload.incomplete is True
+    assert any("page cap" in warning and "incomplete" in warning for warning in payload.warnings)
+
+
+def test_run_filter_marks_incomplete_when_the_shard_plan_is_capped(clean: Engine):
+    page = [repo_item(1)]
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(1600 if "created:" not in query_of(request) else 500)
+            return page_response(page)
+        if path == "/repos/owner1/repo1":
+            return httpx.Response(200, json=repo_item(1))
+        return httpx.Response(404)
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="topic:ai"),
+        config=RunnerConfig(max_shards=1, max_enrich=0),
+    )
+
+    assert payload.incomplete is True
+    assert any(
+        "max_shards=1" in warning and "incomplete" in warning for warning in payload.warnings
+    )
+
+
 def test_run_filter_applies_db_filters_and_builds_payload(clean: Engine):
     page = [
         repo_item(1, stars=7, topics=("rust",)),
@@ -739,6 +790,21 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
     status = run_status(clean, run_id)
     bundle = json.loads((Path(status["bundle_dir"]) / "bundle.json").read_text(encoding="utf-8"))
     assert bundle["field_stats"] == payload.field_stats
+
+
+def test_enrich_handlers_clamp_unsupported_full_depth_fields_without_raising(clean: Engine):
+    handlers, unsupported = runner_module._enrich_handlers(
+        None,
+        [],
+        {"min_stars": 5, "funding": True},
+        {"remaining": 0},
+        None,
+        {"geo": 0, "dockerfile": 0},
+        depth="full",
+    )
+
+    assert list(handlers) == ["min_stars"]
+    assert unsupported == ["funding"]
 
 
 def test_run_filter_surfaces_dropped_segments_as_incomplete(clean: Engine, monkeypatch):

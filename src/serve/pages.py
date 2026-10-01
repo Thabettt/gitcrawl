@@ -21,7 +21,7 @@ from sqlalchemy.engine import Engine
 from enrich.cloner import CloneMode, parse_mode
 from lib.gh_client import API_VERSION, load_tokens
 from serve.diff import diff_runs
-from serve.executor import Runner, create_run, execute_run
+from serve.executor import RunExecutor, Runner, create_run
 from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
 from serve.forms import build_spec_from_form, form_state, spec_to_form_values
 from serve.library import LibraryError, create_filter, get_filter, list_filters
@@ -124,6 +124,18 @@ def _iso(value: datetime | None) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _page_param(raw: str | int | None) -> int:
+    if raw is None:
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("page", "page must be an integer >= 1") from None
+    if value < 1:
+        raise ValueError("page", "page must be an integer >= 1")
+    return value
 
 
 def _run_summary(row) -> dict:
@@ -441,7 +453,10 @@ async def validate_csrf(request: Request) -> bool:
             supplied = value if isinstance(value, str) else None
     if not supplied:
         return False
-    return hmac.compare_digest(str(cookie), str(supplied))
+    try:
+        return hmac.compare_digest(str(cookie).encode("utf-8"), str(supplied).encode("utf-8"))
+    except UnicodeError:
+        return False
 
 
 def _flat_form(form) -> dict[str, str]:
@@ -472,6 +487,7 @@ def register_pages(
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
     runner_factory: Callable[[], Runner] | None = None,
+    executor_factory: Callable[[], RunExecutor],
 ) -> None:
     templates = _templates
     if _STATIC_DIR.is_dir():
@@ -652,11 +668,15 @@ def register_pages(
             return Response(status_code=500, content="runner unavailable", media_type="text/plain")
         engine = engine_factory()
         run_id = create_run(engine, spec_to_dict(spec), api_version=API_VERSION)
-        execute_run(engine, run_id, runner=runner, runs_root=runs_root)
+        executor_factory().submit(run_id, runner=runner)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs", response_class=HTMLResponse)
-    def runs_page(request: Request, status: str = "", hash: str = "", page: int = 1):
+    def runs_page(request: Request, status: str = "", hash: str = "", page: str = "1"):
+        try:
+            page_number = _page_param(page)
+        except ValueError:
+            return _invalid_param("page", "page must be an integer >= 1")
         hash_prefix = hash.strip()
         filtered_status = status if status in HISTORY_STATUSES else ""
         filter_error = ""
@@ -664,7 +684,7 @@ def register_pages(
             filter_error = f"unknown status `{status}`"
         try:
             view = _history_page(
-                engine_factory(), status=filtered_status, hash_prefix=hash_prefix, page=page
+                engine_factory(), status=filtered_status, hash_prefix=hash_prefix, page=page_number
             )
             runs_error = False
         except Exception:
@@ -765,7 +785,7 @@ def register_pages(
         except Exception:
             return Response(status_code=500, content="runner unavailable", media_type="text/plain")
         new_id = create_run(engine, dict(row["filter_spec"]), api_version=row["api_version"])
-        execute_run(engine, new_id, runner=runner, runs_root=runs_root)
+        executor_factory().submit(new_id, runner=runner)
         return RedirectResponse(f"/runs/{new_id}", status_code=303)
 
     @app.get("/partials/runs/{run_id}/status", response_class=HTMLResponse)
@@ -786,9 +806,13 @@ def register_pages(
         run_id: int,
         sort: str = "stars",
         dir: str = "desc",
-        page: int = 1,
+        page: str = "1",
     ):
-        table = _table_view(engine_factory(), run_id, sort, dir, page)
+        try:
+            page_number = _page_param(page)
+        except ValueError:
+            return _invalid_param("page", "page must be an integer >= 1")
+        table = _table_view(engine_factory(), run_id, sort, dir, page_number)
         if table is None:
             return _run_not_found(run_id)
         return templates.TemplateResponse(

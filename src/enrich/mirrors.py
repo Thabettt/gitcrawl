@@ -55,6 +55,7 @@ def _fetch_json(
         client,
         "GET",
         url,
+        auth=False,
         sleep=sleep,
         now=now,
         jitter=jitter,
