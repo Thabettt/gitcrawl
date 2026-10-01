@@ -168,3 +168,16 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
 - `main` holds the frozen baseline (`717c9b3`); all work happens on `001-gitcrawl`.
 - `.gitignore` excludes `.venv`, `runs/`, `clones/`, `.superpowers/`, `.env*`.
 - `docs/legal-gates.md` (compliance checklist) and `docs/environment.md` (this setup) are tracked; **no secrets are tracked anywhere**.
+
+## Quality hardening Phase 0 — regression harness (2026-10-02)
+
+| Item | Result |
+|---|---|
+| Coverage baseline | 93.41% total (4965 statements, 327 missed), Windows/Python 3.12.10, 1093 tests with `TEST_DATABASE_URL` set; `pytest -q --cov=src --cov-report=term-missing` exit 0 |
+| Floor | `fail_under = 93` in `pyproject.toml`; `--cov-fail-under=94` probe fails with `Coverage failure: total of 93 is less than fail-under=94` |
+| Ratchet policy | Raise `fail_under` by 1 whenever a phase's measured total exceeds the floor by at least 2 points; never lower it; record each change here |
+| Lowest modules (measured) | `src/skeleton.py` 0% (135 statements, missing lines 1-189); `src/serve/runner.py` 89% (39 missed); `src/serve/__main__.py` 89% (1 missed, line 15); `src/serve/app.py` 92% (27 missed); `src/discover/org_enum.py` 92% (3 missed, lines 53-56); `src/serve/pages.py` 93% (36 missed); everything else 93-100% |
+| Untested at baseline | `src/skeleton.py` 0% (excluded from black/ruff; quarantined in Phase 1b); `static/app.js` has no pytest coverage (`tests/js/rownav.test.mjs` covers one helper via Node); real-Redis client paths run against `fakeredis` only. Spec §4.4's `cloner.free_disk_mb`/`cloner._default_git_runner` entry is stale: measured `src/enrich/cloner.py` is 99% with exactly 1 missed statement — line 231, the `clone_timeout`-specified `_default_git_runner` call |
+| CI | `.github/workflows/ci.yml`: ubuntu-latest `postgres:17` + `redis:7` services; windows-latest native PostgreSQL 17 + Memurai 4.1.8; `GITCRAWL_REQUIRE_TEST_DB=1`; both `Tests` steps now run `pytest -q -rs --cov=src --cov-report=term-missing` |
+| Golden harness | `tests/golden/` snapshots 23 GET-route cases; JSON byte-exact, HTML normalized (CSRF, relative time, disk warning); regenerate with `UPDATE_GOLDEN=1 pytest tests/golden -q` |
+| OpenAPI pin | `tests/golden/snapshots/openapi.sha256` pins canonical `app.openapi()`; a schema change fails CI |

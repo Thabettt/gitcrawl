@@ -63,7 +63,7 @@ jobs:
             exit 1
           fi
       - name: Tests
-        run: pytest -q -rs
+        run: pytest -q -rs --cov=src --cov-report=term-missing
 
   tests-windows:
     runs-on: windows-latest
@@ -115,4 +115,4 @@ jobs:
           fi
       - name: Tests
         shell: pwsh
-        run: pytest -q -rs
+        run: pytest -q -rs --cov=src --cov-report=term-missing
