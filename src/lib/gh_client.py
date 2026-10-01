@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 from limiter.buckets import BucketLimiter
-from limiter.classifier import Action, classify
+from limiter.classifier import Action, classify, classify_transport
 
 API_BASE = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -99,7 +99,7 @@ def _error_fields(response: httpx.Response) -> tuple[str | None, str]:
         if isinstance(raw_message, str):
             message = raw_message
     if not message:
-        message = response.text[:_BODY_FALLBACK_CHARS]
+        message = response.content[:_BODY_FALLBACK_CHARS].decode("utf-8", errors="replace")
     return error_code, message
 
 
@@ -139,35 +139,44 @@ def request_with_retry(
             denials = 0
         try:
             started = now()
-            if auth:
-                response = client.request(method, url, **request_kwargs)
-            else:
-                request = client.build_request(method, url, **request_kwargs)
-                request.headers.pop("Authorization", None)
-                response = client.send(request)
-            latency_ms = (now() - started) * 1000.0
-            if on_response is not None:
-                on_response(response, latency_ms)
-            if limiter is not None:
-                limiter.update_from_headers(resource, token_id, response.headers, now=now())
-            if _sso_partial_results(response.headers):
-                raise PartialResultsError(response)
-            if response.status_code not in _TRIAGE_STATUSES:
-                return response
-            error_code, message = _error_fields(response)
+            try:
+                if auth:
+                    response = client.request(method, url, **request_kwargs)
+                else:
+                    request = client.build_request(method, url, **request_kwargs)
+                    request.headers.pop("Authorization", None)
+                    response = client.send(request)
+            finally:
+                if limiter is not None:
+                    limiter.release(resource, token_id)
+        except httpx.TransportError:
+            attempt += 1
+            if attempt >= max_attempts:
+                raise
             extra = {} if jitter is None else {"jitter": jitter}
-            decision = classify(
-                response.status_code,
-                response.headers,
-                attempt=attempt,
-                error_code=error_code,
-                message=message,
-                now=now(),
-                **extra,
-            )
-        finally:
-            if limiter is not None:
-                limiter.release(resource, token_id)
+            decision = classify_transport(attempt - 1, **extra)
+            sleep(decision.sleep_seconds or 0.0)
+            continue
+        latency_ms = (now() - started) * 1000.0
+        if on_response is not None:
+            on_response(response, latency_ms)
+        if limiter is not None:
+            limiter.update_from_headers(resource, token_id, response.headers, now=now())
+        if _sso_partial_results(response.headers):
+            raise PartialResultsError(response)
+        if response.status_code not in _TRIAGE_STATUSES:
+            return response
+        error_code, message = _error_fields(response)
+        extra = {} if jitter is None else {"jitter": jitter}
+        decision = classify(
+            response.status_code,
+            response.headers,
+            attempt=attempt,
+            error_code=error_code,
+            message=message,
+            now=now(),
+            **extra,
+        )
         if decision.action in _RETRYABLE_ACTIONS:
             attempt += 1
             if attempt >= max_attempts:

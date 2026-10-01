@@ -357,6 +357,7 @@ def test_request_with_retry_releases_limiter_slot_when_send_raises():
             limiter=limiter,
             token_id="tok",
             now=lambda: 1000.0,
+            max_attempts=1,
         )
     response = request_with_retry(
         client,
@@ -368,6 +369,46 @@ def test_request_with_retry_releases_limiter_slot_when_send_raises():
     )
     assert response.status_code == 200
     assert attempts["count"] == 2
+
+
+def test_transport_errors_are_retried():
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    def handler(request):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/x",
+        sleep=sleeps.append,
+        now=lambda: 0.0,
+        jitter=lambda: 0.0,
+    )
+    assert response.status_code == 200
+    assert len(attempts) == 3
+    assert len(sleeps) == 2
+
+
+def test_transport_errors_fail_loud_after_max_attempts():
+    def handler(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.TransportError):
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/x",
+            sleep=lambda _: None,
+            now=lambda: 0.0,
+            jitter=lambda: 0.0,
+        )
 
 
 def test_persistent_retry_after_stops_at_max_attempts():

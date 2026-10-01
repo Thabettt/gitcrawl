@@ -262,3 +262,12 @@ def test_decision_is_frozen():
     assert decision == Decision(Action.FREE, None, None, "success")
     with pytest.raises(dataclasses.FrozenInstanceError):
         decision.action = Action.FIX
+
+
+def test_classify_transport_backs_off_then_fails_loud():
+    from limiter.classifier import Action, classify_transport
+
+    first = classify_transport(0, jitter=lambda: 0.0)
+    assert first.action is Action.BACKOFF
+    assert first.sleep_seconds == 60.0
+    assert classify_transport(5, jitter=lambda: 0.0).action is Action.FAIL_LOUD

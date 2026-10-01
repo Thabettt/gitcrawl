@@ -89,3 +89,11 @@ def classify(
             return Decision(Action.FAIL_LOUD, None, resource, "retries exhausted")
         return Decision(Action.BACKOFF, _backoff_seconds(attempt, jitter), resource, "server error")
     return Decision(Action.FIX, None, resource, "unexpected status")
+
+
+def classify_transport(
+    attempt: int, *, jitter: Callable[[], float] = lambda: random.random()
+) -> Decision:
+    if attempt >= 5:
+        return Decision(Action.FAIL_LOUD, None, None, "retries exhausted")
+    return Decision(Action.BACKOFF, _backoff_seconds(attempt, jitter), None, "transport error")
