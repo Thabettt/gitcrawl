@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 
@@ -267,3 +268,60 @@ def test_fetch_graphql_batch_returns_empty_map_without_requests_for_no_ids():
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     assert fetch_graphql_batch(client, token="tok", repo_ids=[], node_ids=[]) == {}
+
+
+def test_partial_batches_surface_an_incompleteness_signal():
+    from enrich.graphql_batch import _fetch
+
+    def handler(request):
+        query = json.loads(request.content)["query"]
+        ids = [int(match) for match in re.findall(r"c(\d+): node", query)]
+        if ids == [1, 2]:
+            return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+        if ids == [1]:
+            return httpx.Response(
+                200, json={"data": None, "errors": [{"message": "Could not resolve to a node"}]}
+            )
+        return httpx.Response(200, json=payload_for(ids))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    batch = _fetch(
+        client,
+        token="tok",
+        repo_ids=[1, 2],
+        node_ids=["NODE_1", "NODE_2"],
+        graphql_url=GRAPHQL_URL,
+        max_aliases=20,
+        limiter=None,
+        sleep=lambda _: None,
+        now=lambda: 1000.0,
+        jitter=None,
+        on_response=None,
+        depth=0,
+    )
+
+    assert set(batch.results) == {2}
+    assert batch.incomplete is True
+    assert any("Could not resolve" in error for error in batch.errors)
+
+
+def test_fetch_graphql_batch_logs_incomplete_partials(caplog):
+    def handler(request):
+        query = json.loads(request.content)["query"]
+        ids = [int(match) for match in re.findall(r"c(\d+): node", query)]
+        if ids == [1, 2]:
+            return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+        if ids == [1]:
+            return httpx.Response(
+                200, json={"data": None, "errors": [{"message": "Could not resolve to a node"}]}
+            )
+        return httpx.Response(200, json=payload_for(ids))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING, logger="enrich.graphql_batch"):
+        result = fetch_graphql_batch(
+            client, token="tok", repo_ids=[1, 2], node_ids=["NODE_1", "NODE_2"]
+        )
+
+    assert set(result) == {2}
+    assert any("incomplete" in record.getMessage() for record in caplog.records)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ import httpx
 from discover.search_shards import RequestFailed, _short_message
 from lib.gh_client import request_with_retry
 from limiter.buckets import BucketLimiter
+
+logger = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 
@@ -31,6 +34,13 @@ class RepoGraphQL:
     discussions_count: int | None = None
     sponsors_tiers: tuple[dict, ...] = ()
     rate_limit_cost: int | None = None
+
+
+@dataclass(frozen=True)
+class BatchFetch:
+    results: dict[int, RepoGraphQL]
+    incomplete: bool = False
+    errors: tuple[str, ...] = ()
 
 
 def build_batch_query(
@@ -193,8 +203,9 @@ def _fetch(
     jitter: Callable[[], float] | None,
     on_response: Callable[[httpx.Response, float], None] | None,
     depth: int,
-) -> dict[int, RepoGraphQL]:
+) -> BatchFetch:
     merged: dict[int, RepoGraphQL] = {}
+    errors: list[str] = []
     stack: list[tuple[list[int], list[str], int]] = [(repo_ids, node_ids, depth)]
     last_error: RequestFailed | None = None
     while stack:
@@ -215,6 +226,7 @@ def _fetch(
             )
         except RequestFailed as exc:
             last_error = exc
+            errors.append(f"{exc.status}: {exc.message}")
             if len(ids) > 1 and current_depth < _MAX_SPLIT_DEPTH:
                 middle = len(ids) // 2
                 stack.append((ids[middle:], nodes[middle:], current_depth + 1))
@@ -230,9 +242,10 @@ def _fetch(
             stack.append((ids[:middle], nodes[:middle], current_depth + 1))
             continue
         last_error = RequestFailed(200, messages[0])
+        errors.extend(messages)
     if not merged and last_error is not None:
         raise last_error
-    return merged
+    return BatchFetch(results=merged, incomplete=bool(errors), errors=tuple(errors))
 
 
 def fetch_graphql_batch(
@@ -253,7 +266,7 @@ def fetch_graphql_batch(
         return {}
     if node_ids is None:
         raise ValueError("node_ids are required")
-    return _fetch(
+    batch = _fetch(
         client,
         token=token,
         repo_ids=list(repo_ids),
@@ -267,3 +280,11 @@ def fetch_graphql_batch(
         on_response=on_response,
         depth=0,
     )
+    if batch.incomplete:
+        logger.warning(
+            "graphql batch incomplete: %d error(s), %d result(s); first: %s",
+            len(batch.errors),
+            len(batch.results),
+            batch.errors[0],
+        )
+    return batch.results
