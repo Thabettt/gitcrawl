@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from enrich.geo_resolver import (
+    KNOWN_ISO_CODES,
     GeoCache,
     GeoResult,
     normalize_location,
@@ -27,6 +28,14 @@ def clean(alembic_engine: Engine) -> Engine:
     with alembic_engine.begin() as connection:
         connection.execute(text("TRUNCATE TABLE geo_cache"))
     return alembic_engine
+
+
+def test_known_iso_codes_exports_all_official_alpha2_codes():
+    assert isinstance(KNOWN_ISO_CODES, frozenset)
+    assert len(KNOWN_ISO_CODES) == 249
+    for code in ("AD", "DE", "GB", "US", "ZW"):
+        assert code in KNOWN_ISO_CODES
+    assert "XX" not in KNOWN_ISO_CODES
 
 
 def test_flag_emoji_decodes_to_exact_iso():
