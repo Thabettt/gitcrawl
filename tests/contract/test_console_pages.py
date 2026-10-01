@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -578,10 +579,8 @@ def test_error_toasts_are_wired(client: TestClient):
     assert 'id="toast"' in client.get("/").text
 
 
-def test_app_css_uses_compositor_progress_and_row_containment():
-    from pathlib import Path
-
-    css = Path("src/serve/static/app.css").read_text(encoding="utf-8")
+def test_app_css_uses_compositor_progress_and_row_containment(repo_root: Path):
+    css = (repo_root / "src/serve/static/app.css").read_text(encoding="utf-8")
     assert "transform: scaleX(var(--progress, 0))" in css
     assert "content-visibility: auto" in css
 
