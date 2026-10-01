@@ -518,9 +518,9 @@ _TZ_BANDS: dict[float, frozenset[str]] = {
     3.0: frozenset({"RU", "SA", "TR", "KE", "ET", "QA"}),
     3.5: frozenset({"IR"}),
     4.5: frozenset({"AF"}),
-    5.5: frozenset({"IN"}),
+    5.5: frozenset({"IN", "LK"}),
     5.75: frozenset({"NP"}),
-    6.5: frozenset({"MM"}),
+    6.5: frozenset({"MM", "CC"}),
     8.0: frozenset({"CN", "SG", "MY", "PH", "TW", "HK", "AU"}),
     9.0: frozenset({"JP", "KR"}),
     9.5: frozenset({"AU"}),
@@ -667,11 +667,12 @@ def _tz_iso(tz_offset: float | None) -> str | None:
         return None
     try:
         offset = float(tz_offset)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if not math.isfinite(offset):
+    scaled = offset * 4
+    if not math.isfinite(offset) or not math.isfinite(scaled):
         return None
-    key = round(offset * 4) / 4
+    key = round(scaled) / 4
     codes = _TZ_BANDS.get(key)
     if codes is not None and len(codes) == 1:
         return next(iter(codes))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fractions import Fraction
+
 import pytest
 import sqlalchemy as sa
 from alembic import command
@@ -147,13 +149,15 @@ def test_weak_blog_unmapped_tld_is_unmatched():
 
 
 def test_weak_timezone_single_country_band():
-    assert resolve_location("Atlantis", tz_offset=5.5) == GeoResult("IN", "weak", "Atlantis")
-    assert resolve_location("Atlantis", tz_offset=5.75).country_iso == "NP"
+    assert resolve_location("Atlantis", tz_offset=5.75) == GeoResult("NP", "weak", "Atlantis")
+    assert resolve_location("Atlantis", tz_offset=3.5) == GeoResult("IR", "weak", "Atlantis")
 
 
 def test_weak_timezone_ambiguous_band_never_guesses():
     assert resolve_location("Atlantis", tz_offset=-8.0).confidence == "unmatched"
     assert resolve_location("Atlantis", tz_offset=9.0).confidence == "unmatched"
+    assert resolve_location("Atlantis", tz_offset=5.5).confidence == "unmatched"
+    assert resolve_location("Atlantis", tz_offset=6.5).confidence == "unmatched"
 
 
 def test_complete_timezone_bands_never_guess():
@@ -164,6 +168,12 @@ def test_complete_timezone_bands_never_guess():
 
 def test_non_finite_timezone_never_raises():
     for value in (float("inf"), float("-inf"), float("nan"), "inf", "-inf", "not-a-number"):
+        result = resolve_location("Atlantis", tz_offset=value)
+        assert result == GeoResult(None, "unmatched", "Atlantis")
+
+
+def test_huge_finite_timezone_never_raises():
+    for value in (1e308, 1e308 * 4, Fraction(10**400), Fraction(10**400, 3)):
         result = resolve_location("Atlantis", tz_offset=value)
         assert result == GeoResult(None, "unmatched", "Atlantis")
 
