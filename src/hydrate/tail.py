@@ -10,10 +10,13 @@ from sqlalchemy.engine import Engine
 
 from discover.search_shards import RequestFailed
 from hydrate.repo_client import RepoNotFound, hydrate_repo
+from lib.batching import chunked
 from lib.gh_client import PartialResultsError, ThrottledError
 from limiter.buckets import BucketLimiter
 from store.lifecycle import apply_hydration
 from store.models import Repo
+
+_NAME_BATCH = 5000
 
 
 @dataclass
@@ -25,14 +28,19 @@ class RefreshStats:
     failed: int = 0
 
 
-def _stored_etags(engine: Engine, names: list[str]) -> dict[str, str | None]:
+def _stored_etags(
+    engine: Engine, names: list[str], *, batch_size: int = _NAME_BATCH
+) -> dict[str, str | None]:
     if not names:
         return {}
+    merged: dict[str, str | None] = {}
     with engine.connect() as connection:
-        rows = connection.execute(
-            select(Repo.full_name, Repo.etag).where(Repo.full_name.in_(names))
-        ).all()
-    return {str(full_name).casefold(): etag for full_name, etag in rows}
+        for batch in chunked(names, batch_size):
+            rows = connection.execute(
+                select(Repo.full_name, Repo.etag).where(Repo.full_name.in_(batch))
+            ).all()
+            merged.update({str(full_name).casefold(): etag for full_name, etag in rows})
+    return merged
 
 
 def refresh_repos(

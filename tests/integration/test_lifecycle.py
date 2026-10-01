@@ -525,6 +525,17 @@ def test_refresh_repos_counts_sso_partial_failures_and_continues(clean: Engine, 
     assert repo_count(clean) == 2
 
 
+def test_stored_etags_batches(clean: Engine):
+    from hydrate.tail import _stored_etags
+
+    seed(clean, "octo/a", repo_id=1, etag="e1")
+    seed(clean, "octo/b", repo_id=2, etag="e2")
+    assert _stored_etags(clean, ["octo/a", "octo/b"], batch_size=1) == {
+        "octo/a": "e1",
+        "octo/b": "e2",
+    }
+
+
 def test_refresh_repos_counts_throttled_failures_and_continues(clean: Engine, monkeypatch):
     import hydrate.tail as tail_module
     from hydrate.repo_client import HydratedRepo

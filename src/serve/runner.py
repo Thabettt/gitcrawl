@@ -18,6 +18,7 @@ from enrich.geo_resolver import GeoResult, resolve_owner
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import refresh_repos
+from lib.batching import chunked
 from lib.gh_client import (
     API_BASE,
     PartialResultsError,
@@ -38,6 +39,7 @@ from store.models import Owner, Repo
 _INT_PARAMS = ("page", "per_page", "since")
 _R44_VIRTUALS = ("min_commits", "min_loc")
 _DOCKERFILE_PATH = "Dockerfile"
+_ID_BATCH = 5000
 
 
 @dataclass
@@ -124,42 +126,45 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
     return hook
 
 
-def _load_rows(engine: Engine, repo_ids: list[int]) -> dict[int, dict]:
+def _load_rows(
+    engine: Engine, repo_ids: list[int], *, batch_size: int = _ID_BATCH
+) -> dict[int, dict]:
     if not repo_ids:
         return {}
+    result: dict[int, dict] = {}
     with engine.connect() as connection:
-        rows = connection.execute(
-            select(
-                Repo.id,
-                Repo.full_name,
-                Repo.owner_id,
-                Repo.stargazers,
-                Repo.forks_count,
-                Repo.pushed_at,
-                Repo.archived,
-                Repo.language,
-                Repo.license_spdx,
-                Repo.topics,
-                Repo.default_branch,
-                Repo.deleted_at,
-                Owner.login.label("owner_login"),
-                Owner.location_raw.label("owner_location_raw"),
-                Owner.country_iso.label("owner_country_iso"),
-                Owner.geo_confidence.label("owner_geo_confidence"),
-            )
-            .join(Owner, Owner.id == Repo.owner_id)
-            .where(Repo.id.in_(repo_ids))
-        ).mappings()
-        result: dict[int, dict] = {}
-        for row in rows:
-            if row["deleted_at"] is not None:
-                continue
-            view = dict(row)
-            view["pushed_at"] = _iso(row["pushed_at"])
-            view["country_iso"] = row["owner_country_iso"]
-            view["geo_confidence"] = row["owner_geo_confidence"]
-            result[row["id"]] = view
-        return result
+        for batch in chunked(repo_ids, batch_size):
+            rows = connection.execute(
+                select(
+                    Repo.id,
+                    Repo.full_name,
+                    Repo.owner_id,
+                    Repo.stargazers,
+                    Repo.forks_count,
+                    Repo.pushed_at,
+                    Repo.archived,
+                    Repo.language,
+                    Repo.license_spdx,
+                    Repo.topics,
+                    Repo.default_branch,
+                    Repo.deleted_at,
+                    Owner.login.label("owner_login"),
+                    Owner.location_raw.label("owner_location_raw"),
+                    Owner.country_iso.label("owner_country_iso"),
+                    Owner.geo_confidence.label("owner_geo_confidence"),
+                )
+                .join(Owner, Owner.id == Repo.owner_id)
+                .where(Repo.id.in_(batch))
+            ).mappings()
+            for row in rows:
+                if row["deleted_at"] is not None:
+                    continue
+                view = dict(row)
+                view["pushed_at"] = _iso(row["pushed_at"])
+                view["country_iso"] = row["owner_country_iso"]
+                view["geo_confidence"] = row["owner_geo_confidence"]
+                result[row["id"]] = view
+    return result
 
 
 def _ordered_rows(engine: Engine, repo_ids: list[int]) -> list[dict]:

@@ -340,3 +340,14 @@ def test_clone_repos_zero_limit_is_a_noop(clean: Engine, tmp_path):
     )
     assert progress == CloneProgress(status="done", total=0, completed=0, failed=0)
     assert not (tmp_path / "clones").exists()
+
+
+def test_load_rows_batches(clean: Engine):
+    from serve.runner import _load_rows
+
+    seed_run(
+        clean,
+        [(1, "octo/one", 10, 1), (2, "octo/two", 10, 2), (3, "octo/three", 10, 3)],
+    )
+    rows = _load_rows(clean, [1, 2, 3], batch_size=2)
+    assert set(rows) == {1, 2, 3}
