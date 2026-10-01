@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
@@ -510,8 +510,9 @@ def create_app(
                 status_code=404,
                 content={"error": "run_not_ready", "filter_hash": filter_hash},
             )
+        regenerated = not bundle_file(runs_root, filter_hash, run_row["id"], format).is_file()
         try:
-            content, media_type = export_bundle(
+            chunks, media_type = export_bundle(
                 bound_engine, run_row["id"], format=format, runs_root=runs_root
             )
         except KeyError:
@@ -521,9 +522,9 @@ def create_app(
             )
         filename = f"gitcrawl-{filter_hash}-{run_row['id']}.{format}"
         headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        if not bundle_file(runs_root, filter_hash, run_row["id"], format).is_file():
+        if regenerated:
             headers["X-Gitcrawl-Regenerated"] = "true"
-        return Response(content=content, media_type=media_type, headers=headers)
+        return StreamingResponse(chunks, media_type=media_type, headers=headers)
 
     def is_form_request(request: Request) -> bool:
         content_type = request.headers.get("content-type", "")

@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import threading
+from collections.abc import Iterator
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -109,8 +110,17 @@ def _snapshot(row: RowMapping) -> dict:
     }
 
 
-def _regenerate_json(engine: Engine, run_row: RowMapping, run_id: int) -> bytes:
-    bundle = {
+def _file_chunks(path: Path, chunk_size: int = 65536) -> Iterator[bytes]:
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(chunk_size)
+            if not block:
+                return
+            yield block
+
+
+def _json_chunks(engine: Engine, run_row: RowMapping, run_id: int) -> Iterator[bytes]:
+    header = {
         "filter": run_row["filter_spec"],
         "filter_hash": run_row["filter_hash"],
         "run_id": run_id,
@@ -120,46 +130,58 @@ def _regenerate_json(engine: Engine, run_row: RowMapping, run_id: int) -> bytes:
         "fetched": run_row["fetched"],
         "incomplete": run_row["status"] == "partial",
         "regenerated": True,
-        "items": [_snapshot(row) for row in _item_rows(engine, run_id)],
-        "field_stats": {},
     }
-    return json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8")
-
-
-def _regenerate_csv(engine: Engine, run_id: int) -> bytes:
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(_CSV_HEADER)
+    yield b"{"
+    for key, value in header.items():
+        yield (
+            json.dumps(key).encode()
+            + b": "
+            + json.dumps(value, ensure_ascii=False).encode()
+            + b","
+        )
+    yield b'"items": ['
+    first = True
     for row in _item_rows(engine, run_id):
-        item = _snapshot(row)
-        writer.writerow(
+        chunk = json.dumps(_snapshot(row), ensure_ascii=False).encode()
+        yield chunk if first else b"," + chunk
+        first = False
+    yield b'], "field_stats": {}}'
+
+
+def _csv_chunks(engine: Engine, run_id: int) -> Iterator[bytes]:
+    header_buffer = io.StringIO()
+    csv.writer(header_buffer).writerow(_CSV_HEADER)
+    yield header_buffer.getvalue().encode("utf-8")
+    for row in _item_rows(engine, run_id):
+        buffer = io.StringIO()
+        csv.writer(buffer).writerow(
             [
-                _csv_cell(item["repo_id"]),
-                _csv_cell(item["full_name"]),
-                _csv_cell(item["stargazers"]),
-                _csv_cell(item["pushed_at"]),
-                _csv_cell(item["archived"]),
-                _csv_cell(item["language"]),
-                _csv_cell(item["license_spdx"]),
-                _csv_cell(item["country_iso"]),
-                _csv_cell(item["geo_confidence"]),
+                _csv_cell(row["repo_id"]),
+                _csv_cell(row["full_name"]),
+                _csv_cell(row["stargazers"]),
+                _csv_cell(_iso(row["pushed_at"])),
+                _csv_cell(row["archived"]),
+                _csv_cell(row["language"]),
+                _csv_cell(row["license_spdx"]),
+                _csv_cell(row["country_iso"]),
+                _csv_cell(row["geo_confidence"]),
             ]
         )
-    return buffer.getvalue().encode("utf-8")
+        yield buffer.getvalue().encode("utf-8")
 
 
 def export_bundle(
     engine: Engine, run_id: int, *, format: str, runs_root: str = "runs"
-) -> tuple[bytes, str]:
+) -> tuple[Iterator[bytes], str]:
     if format not in _MEDIA_TYPES:
         raise ValueError("format", "format must be one of: json, csv")
     run_row = _row_for_run(engine, run_id)
     path = bundle_file(runs_root, run_row["filter_hash"], run_id, format)
     if path.is_file():
-        return path.read_bytes(), _MEDIA_TYPES[format]
+        return _file_chunks(path), _MEDIA_TYPES[format]
     if format == "json":
-        return _regenerate_json(engine, run_row, run_id), _MEDIA_TYPES[format]
-    return _regenerate_csv(engine, run_id), _MEDIA_TYPES[format]
+        return _json_chunks(engine, run_row, run_id), _MEDIA_TYPES[format]
+    return _csv_chunks(engine, run_id), _MEDIA_TYPES[format]
 
 
 class CloneRegistry:

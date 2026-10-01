@@ -378,6 +378,81 @@ def test_export_regeneration_orders_null_stargazers_last(clean: Engine, tmp_path
     assert [item["stargazers"] for item in document["items"]] == [5, None]
 
 
+def test_export_bundle_streams_the_persisted_bundle(clean: Engine, tmp_path):
+    payload = RunPayload(total_count=1, fetched=1, items=[payload_item()])
+    client = make_client(clean, payload, tmp_path)
+    filter_hash, run_id = seed_run(client, clean)
+    directory = tmp_path / filter_hash / str(run_id)
+
+    json_chunks, json_media_type = export_bundle(
+        clean, run_id, format="json", runs_root=str(tmp_path)
+    )
+    csv_chunks, csv_media_type = export_bundle(
+        clean, run_id, format="csv", runs_root=str(tmp_path)
+    )
+
+    assert json_media_type == "application/json"
+    assert csv_media_type == "text/csv"
+    assert b"".join(json_chunks) == (directory / "bundle.json").read_bytes()
+    assert b"".join(csv_chunks) == (directory / "corpus.csv").read_bytes()
+
+
+def test_export_bundle_streams_regenerated_content(clean: Engine, tmp_path):
+    payload = RunPayload(total_count=1, fetched=1, items=[payload_item()])
+    client = make_client(clean, payload, tmp_path)
+    filter_hash, run_id = seed_run(client, clean)
+    directory = tmp_path / filter_hash / str(run_id)
+    (directory / "bundle.json").unlink()
+    (directory / "corpus.csv").unlink()
+
+    json_chunks, json_media_type = export_bundle(
+        clean, run_id, format="json", runs_root=str(tmp_path)
+    )
+    csv_chunks, csv_media_type = export_bundle(
+        clean, run_id, format="csv", runs_root=str(tmp_path)
+    )
+
+    assert json_media_type == "application/json"
+    assert csv_media_type == "text/csv"
+    document = json.loads(b"".join(json_chunks).decode("utf-8"))
+    assert document["filter"] == stored_filter_spec(clean, run_id)
+    assert document["filter_hash"] == filter_hash
+    assert document["run_id"] == run_id
+    assert document["api_version"]
+    assert document["total_count"] == 1
+    assert document["fetched"] == 1
+    assert document["incomplete"] is False
+    assert document["regenerated"] is True
+    assert document["ran_at"].endswith("Z")
+    assert document["field_stats"] == {}
+    assert document["items"] == [expected_snapshot()]
+    rows = list(csv.reader(io.StringIO(b"".join(csv_chunks).decode("utf-8"))))
+    assert rows == [
+        [
+            "id",
+            "full_name",
+            "stargazers",
+            "pushed_at",
+            "archived",
+            "language",
+            "license_spdx",
+            "country_iso",
+            "geo_confidence",
+        ],
+        [
+            "1296269",
+            "octo/hello",
+            "80",
+            "2011-01-26T19:06:43Z",
+            "false",
+            "Ruby",
+            "MIT",
+            "DE",
+            "name",
+        ],
+    ]
+
+
 def test_export_bundle_rejects_unknown_format_without_touching_the_database(
     clean: Engine, tmp_path
 ):

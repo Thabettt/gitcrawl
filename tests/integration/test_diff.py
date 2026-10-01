@@ -214,6 +214,40 @@ def test_diff_unknown_runs_raise_key_error(clean: Engine, tmp_path):
         diff_runs(clean, 424242, run_a)
 
 
+def test_diff_handles_null_repo_ids(clean: Engine):
+    base_id = create_run(clean, FILTER, api_version="v1")
+    viewed_id = create_run(clean, FILTER, api_version="v1")
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO run_items (run_id, repo_id, full_name, stargazers)"
+                " VALUES (:run_id, NULL, 'ghost/one', 1)"
+            ),
+            {"run_id": base_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO run_items (run_id, repo_id, full_name, stargazers)"
+                " VALUES (:run_id, NULL, 'ghost/two', 2)"
+            ),
+            {"run_id": viewed_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO run_items (run_id, repo_id, full_name, stargazers)"
+                " VALUES (:run_id, NULL, 'ghost/one', 1)"
+            ),
+            {"run_id": viewed_id},
+        )
+    result = diff_runs(clean, base_id, viewed_id)
+    assert result.summary == {
+        "added": 1,
+        "removed": 0,
+        "changed_repos": 0,
+        "changed_fields": 0,
+    }
+
+
 def test_same_hash_candidates_are_capped(clean: Engine, tmp_path):
     from serve.pages import _same_hash_runs
 
