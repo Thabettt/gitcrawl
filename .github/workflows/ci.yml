@@ -116,3 +116,17 @@ jobs:
       - name: Tests
         shell: pwsh
         run: pytest -q -rs --cov=src --cov-report=term-missing
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install audit tooling
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Audit dependencies (advisory until first green run)
+        continue-on-error: true
+        run: pip-audit -r requirements.txt --progress-spinner off
