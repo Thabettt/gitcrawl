@@ -3,7 +3,7 @@
 <a class="sort-link{% if sort == key %} active{% endif %}" data-sort="{{ key }}" data-dir="{{ next_dir }}"
    href="/partials/runs/{{ run_id }}/table?sort={{ key }}&dir={{ next_dir }}&page=1"
    hx-get="/partials/runs/{{ run_id }}/table?sort={{ key }}&dir={{ next_dir }}&page=1"
-   hx-target="#run-table" hx-indicator="#run-table" hx-push-url="false">{{ label }}</a>
+   hx-target="#run-table" hx-indicator="#table-loading" hx-push-url="false">{{ label }}</a>
 {% endmacro %}
 <div class="table-wrap">
   <table id="run-items" class="data-table">
@@ -42,12 +42,12 @@
   {% if page > 1 %}
   <a id="page-prev" class="button" href="/partials/runs/{{ run_id }}/table?sort={{ sort }}&dir={{ dir }}&page={{ page - 1 }}"
      hx-get="/partials/runs/{{ run_id }}/table?sort={{ sort }}&dir={{ dir }}&page={{ page - 1 }}"
-     hx-target="#run-table" hx-indicator="#run-table" hx-push-url="false">Previous</a>
+     hx-target="#run-table" hx-indicator="#table-loading" hx-push-url="false">Previous</a>
   {% endif %}
   <span id="page-status" class="muted" data-page="{{ page }}" data-pages="{{ pages }}">Page {{ page }} of {{ pages }} · {{ total }} rows</span>
   {% if page < pages %}
   <a id="page-next" class="button" href="/partials/runs/{{ run_id }}/table?sort={{ sort }}&dir={{ dir }}&page={{ page + 1 }}"
      hx-get="/partials/runs/{{ run_id }}/table?sort={{ sort }}&dir={{ dir }}&page={{ page + 1 }}"
-     hx-target="#run-table" hx-indicator="#run-table" hx-push-url="false">Next</a>
+     hx-target="#run-table" hx-indicator="#table-loading" hx-push-url="false">Next</a>
   {% endif %}
 </nav>

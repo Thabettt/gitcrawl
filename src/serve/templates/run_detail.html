@@ -44,7 +44,8 @@
   </div>
   {% endif %}
 </section>
-<div id="run-table"><span id="table-loading" class="htmx-indicator muted" role="status">Loading results…</span>{% include "partials/table.html" %}</div>
+<span id="table-loading" class="htmx-indicator muted" role="status">Loading results…</span>
+<div id="run-table">{% include "partials/table.html" %}</div>
 {% include "partials/clone_modal.html" %}
 <section class="panel" id="clone-progress-panel">
   <div class="panel-head">

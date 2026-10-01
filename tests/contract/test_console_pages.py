@@ -260,6 +260,22 @@ def test_library_delete_form_redirects_and_requires_csrf(client: TestClient):
     assert 'id="library-empty"' in client.get("/filters", headers=HTML).text
 
 
+def test_library_delete_form_has_no_inline_handler(client: TestClient):
+    name = 'Rust "quoted" <b>bold</b>'
+    created = client.post("/filters", json={"name": name, "spec": FILTER_A}).json()
+
+    html = client.get("/filters", headers=HTML).text
+
+    assert created["id"]
+    assert "onsubmit" not in html
+    assert "data-delete-filter" in html
+    assert "data-name=" in html
+
+    script = client.get("/static/app.js").text
+    assert "data-delete-filter" in script
+    assert '"submit"' in script or "'submit'" in script
+
+
 def test_find_page_loads_saved_filter_into_the_form(client: TestClient):
     spec = {
         **FILTER_A,
@@ -431,6 +447,31 @@ def test_diff_page_renders_null_changed_values(client: TestClient, clean, tmp_pa
     assert "—" in changed
 
 
+def test_diff_page_empty_against_falls_back_to_default_baseline(
+    client: TestClient, clean, tmp_path
+):
+    baseline = seed_run(clean, tmp_path, spec=FILTER_A, items=[run_item(1, stargazers=10)])
+    viewed = seed_run(clean, tmp_path, spec=FILTER_A, items=[run_item(1, stargazers=20)])
+
+    response = client.get(f"/runs/{viewed}/diff", params={"against": ""})
+
+    assert response.status_code == 200
+    assert f'id="diff-header" data-run-id="{viewed}" data-against="{baseline}"' in response.text
+    assert 'id="diff-not-found"' not in response.text
+
+
+def test_diff_page_empty_against_without_earlier_run_shows_no_baseline(
+    client: TestClient, clean, tmp_path
+):
+    only = seed_run(clean, tmp_path, spec=FILTER_A, items=[run_item(1)])
+
+    response = client.get(f"/runs/{only}/diff", params={"against": ""})
+
+    assert response.status_code == 200
+    assert 'id="diff-no-baseline"' in response.text
+    assert 'id="diff-not-found"' not in response.text
+
+
 def test_diff_page_unknown_is_404(client: TestClient, clean, tmp_path):
     baseline = seed_run(clean, tmp_path)
 
@@ -464,7 +505,8 @@ def test_run_table_has_a_loading_indicator(client: TestClient, clean, tmp_path):
     html = client.get(f"/runs/{run_id}").text
 
     assert 'id="table-loading"' in html
-    assert 'hx-indicator="#run-table"' in html
+    assert html.index('id="table-loading"') < html.index('id="run-table"')
+    assert 'hx-indicator="#table-loading"' in html
 
 
 def test_form_controls_have_labels_or_aria_labels(client: TestClient):

@@ -43,7 +43,7 @@
               <input class="inline-input" type="text" id="rename-{{ item.id }}" name="name" value="{{ item.name }}" aria-label="New name for {{ item.name }}">
               <button class="button" type="submit" aria-label="Rename {{ item.name }}">Rename</button>
             </form>
-            <form class="inline-form" action="/filters/{{ item.id }}/delete" method="post" onsubmit="return window.confirm('Delete {{ item.name }}?')">
+            <form class="inline-form" action="/filters/{{ item.id }}/delete" method="post" data-delete-filter data-name="{{ item.name }}">
               <input type="hidden" name="csrf" value="{{ csrf_token }}">
               <button class="button danger" type="submit" aria-label="Delete {{ item.name }}">Delete</button>
             </form>

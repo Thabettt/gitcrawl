@@ -695,7 +695,7 @@ def register_pages(
             return templates.TemplateResponse(request, "diff.html", {"run": None}, status_code=404)
         candidates = _same_hash_runs(engine, viewed)
         baseline_id: int | None
-        if against is None:
+        if against is None or not against.strip():
             baseline_id = _previous_same_hash_run(engine, viewed)
         else:
             try:

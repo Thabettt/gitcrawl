@@ -319,6 +319,17 @@
     }
   });
 
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (!form || !form.hasAttribute || !form.hasAttribute("data-delete-filter")) {
+      return;
+    }
+    var name = form.getAttribute("data-name") || "";
+    if (!window.confirm("Delete " + name + "?")) {
+      event.preventDefault();
+    }
+  });
+
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!target || !target.closest) {
