@@ -20,7 +20,6 @@ from store.models import Runs
 
 CSRF_COOKIE = "gc_csrf"
 CSRF_HEADER = "x-csrf-token"
-CSRF_FIELD = "csrf_token"
 HEALTH_TIMEOUT_SECONDS = 0.25
 RECENT_RUNS_LIMIT = 20
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -116,7 +115,7 @@ def _recent_runs(engine: Engine, limit: int = RECENT_RUNS_LIMIT) -> list[dict]:
 
 def validate_csrf(request: Request) -> bool:
     cookie = request.cookies.get(CSRF_COOKIE)
-    supplied = request.headers.get(CSRF_HEADER) or request.query_params.get(CSRF_FIELD)
+    supplied = request.headers.get(CSRF_HEADER)
     if not cookie or not supplied:
         return False
     return hmac.compare_digest(str(cookie), str(supplied))
@@ -179,11 +178,18 @@ def register_pages(
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
+        try:
+            runs = _recent_runs(engine_factory())
+            runs_error = False
+        except Exception:
+            runs = []
+            runs_error = True
         return templates.TemplateResponse(
             request,
             "dashboard.html",
             {
-                "runs": _recent_runs(engine_factory()),
+                "runs": runs,
+                "runs_error": runs_error,
                 "health": health_snapshot(),
                 "runs_root": runs_root,
                 "csrf_token": request.state.csrf_token,

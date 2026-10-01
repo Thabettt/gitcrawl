@@ -143,6 +143,8 @@ def test_export_json_is_byte_identical_to_the_on_disk_bundle(clean: Engine, tmp_
     assert response.status_code == 200
     assert response.content == disk
     assert response.headers["content-type"] == "application/json"
+    assert "x-gitcrawl-regenerated" not in response.headers
+    assert "regenerated" not in json.loads(disk.decode("utf-8"))
     assert (
         response.headers["content-disposition"]
         == f'attachment; filename="gitcrawl-{filter_hash}-{run_id}.json"'
@@ -160,6 +162,7 @@ def test_export_csv_is_byte_identical_to_the_on_disk_corpus(clean: Engine, tmp_p
     assert response.status_code == 200
     assert response.content == disk
     assert response.headers["content-type"].startswith("text/csv")
+    assert "x-gitcrawl-regenerated" not in response.headers
     assert (
         response.headers["content-disposition"]
         == f'attachment; filename="gitcrawl-{filter_hash}-{run_id}.csv"'
@@ -219,6 +222,8 @@ def test_export_regenerates_json_and_csv_when_bundle_files_are_absent(clean: Eng
 
     assert json_response.status_code == 200
     assert csv_response.status_code == 200
+    assert json_response.headers["x-gitcrawl-regenerated"] == "true"
+    assert csv_response.headers["x-gitcrawl-regenerated"] == "true"
     document = json.loads(json_response.content.decode("utf-8"))
     assert document["filter"] == stored_filter_spec(clean, run_id)
     assert document["filter_hash"] == filter_hash
@@ -227,7 +232,8 @@ def test_export_regenerates_json_and_csv_when_bundle_files_are_absent(clean: Eng
     assert document["total_count"] == 1
     assert document["fetched"] == 1
     assert document["incomplete"] is False
-    assert document["ran_at"]
+    assert document["regenerated"] is True
+    assert document["ran_at"].endswith("Z")
     assert document["items"] == [expected_snapshot()]
     rows = list(csv.reader(io.StringIO(csv_response.content.decode("utf-8"))))
     assert rows == [
@@ -254,6 +260,38 @@ def test_export_regenerates_json_and_csv_when_bundle_files_are_absent(clean: Eng
             "name",
         ],
     ]
+
+
+def test_export_regeneration_orders_rows_by_stargazers_desc_then_repo_id(clean: Engine, tmp_path):
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility, "
+                "stargazers) VALUES (2, 'R_2', 'octo/two', 1, 'two', 'public', 5), "
+                "(3, 'R_3', 'octo/three', 1, 'three', 'public', 5)"
+            )
+        )
+    items = [
+        payload_item(repo_id=2, full_name="octo/two", stargazers=5),
+        payload_item(),
+        payload_item(repo_id=3, full_name="octo/three", stargazers=5),
+    ]
+    payload = RunPayload(total_count=3, fetched=3, items=items)
+    client = make_client(clean, payload, tmp_path)
+    filter_hash, run_id = seed_run(client, clean)
+    directory = tmp_path / filter_hash / str(run_id)
+    (directory / "bundle.json").unlink()
+    (directory / "corpus.csv").unlink()
+
+    json_response = client.get(f"/vsearch/runs/{filter_hash}/export")
+    csv_response = client.get(f"/vsearch/runs/{filter_hash}/export", params={"format": "csv"})
+
+    assert json_response.status_code == 200
+    assert csv_response.status_code == 200
+    document = json.loads(json_response.content.decode("utf-8"))
+    assert [item["repo_id"] for item in document["items"]] == [1296269, 2, 3]
+    rows = list(csv.reader(io.StringIO(csv_response.content.decode("utf-8"))))
+    assert [row[0] for row in rows[1:]] == ["1296269", "2", "3"]
 
 
 def test_export_bundle_rejects_unknown_format_without_touching_the_database(

@@ -367,6 +367,13 @@ textarea {
   margin: 0.2rem 0;
 }
 
+.error-state {
+  border-color: var(--gc-down-text);
+  border-style: solid;
+  background: var(--gc-down-bg);
+  color: var(--gc-down-text);
+}
+
 .muted {
   color: var(--gc-muted);
 }

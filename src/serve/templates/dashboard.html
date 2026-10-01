@@ -60,7 +60,13 @@
       </tbody>
     </table>
   </div>
-  {% if not runs %}
+  {% if runs_error %}
+  <div id="runs-error" class="empty-state error-state" role="alert">
+    <p>Recent runs unavailable</p>
+    <p class="muted">The database did not answer; health cards above show the current status.</p>
+  </div>
+  {% endif %}
+  {% if not runs and not runs_error %}
   <div id="empty-state" class="empty-state">
     <p>No runs yet</p>
     <p class="muted">Start with a quick find above or open <a href="/find">Find</a> for the full filter form.</p>

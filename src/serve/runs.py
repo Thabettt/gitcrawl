@@ -21,6 +21,10 @@ def run_bundle_dir(runs_root: str, filter_hash: str, run_id: int) -> Path:
     return Path(runs_root) / filter_hash / str(run_id)
 
 
+def bundle_file(runs_root: str, filter_hash: str, run_id: int, format: str) -> Path:
+    return run_bundle_dir(runs_root, filter_hash, run_id) / _BUNDLE_FILES[format]
+
+
 def _iso(value: object) -> str | None:
     if value is None:
         return None
@@ -72,7 +76,7 @@ def _item_rows(engine: Engine, run_id: int) -> list[RowMapping]:
                     RunItem.virtuals,
                 )
                 .where(RunItem.run_id == run_id)
-                .order_by(RunItem.repo_id)
+                .order_by(RunItem.stargazers.desc(), RunItem.repo_id)
             ).mappings()
         )
 
@@ -102,6 +106,7 @@ def _regenerate_json(engine: Engine, run_row: RowMapping, run_id: int) -> bytes:
         "total_count": run_row["total_count"],
         "fetched": run_row["fetched"],
         "incomplete": run_row["status"] == "partial",
+        "regenerated": True,
         "items": [_snapshot(row) for row in _item_rows(engine, run_id)],
     }
     return json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8")
@@ -135,7 +140,7 @@ def export_bundle(
     if format not in _MEDIA_TYPES:
         raise ValueError("format", "format must be one of: json, csv")
     run_row = _row_for_run(engine, run_id)
-    path = run_bundle_dir(runs_root, run_row["filter_hash"], run_id) / _BUNDLE_FILES[format]
+    path = bundle_file(runs_root, run_row["filter_hash"], run_id, format)
     if path.is_file():
         return path.read_bytes(), _MEDIA_TYPES[format]
     if format == "json":

@@ -25,7 +25,7 @@ from serve.filter_spec import (
 )
 from serve.pages import register_pages
 from serve.runner import apply_sort, build_deps, make_runner
-from serve.runs import export_bundle, latest_run_for_hash
+from serve.runs import bundle_file, export_bundle, latest_run_for_hash
 from serve.virtual_params import VIRTUAL_FILTERS
 from store.models import Owner, Repo, RunItem, Runs
 
@@ -474,11 +474,10 @@ def create_app(
                 content={"error": "run_not_found", "filter_hash": filter_hash},
             )
         filename = f"gitcrawl-{filter_hash}-{run_row['id']}.{format}"
-        return Response(
-            content=content,
-            media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        if not bundle_file(runs_root, filter_hash, run_row["id"], format).is_file():
+            headers["X-Gitcrawl-Regenerated"] = "true"
+        return Response(content=content, media_type=media_type, headers=headers)
 
     register_pages(
         application,

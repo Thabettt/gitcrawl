@@ -125,7 +125,9 @@ def seed_run(engine: Engine, tmp_path) -> tuple[int, str]:
     return run_id, str(filter_hash)
 
 
-def make_request(*, cookie: str | None = None, header: str | None = None) -> Request:
+def make_request(
+    *, cookie: str | None = None, header: str | None = None, query: str = ""
+) -> Request:
     headers = []
     if cookie is not None:
         headers.append((b"cookie", f"{CSRF_COOKIE}={cookie}".encode()))
@@ -136,7 +138,7 @@ def make_request(*, cookie: str | None = None, header: str | None = None) -> Req
             "type": "http",
             "method": "POST",
             "path": "/",
-            "query_string": b"",
+            "query_string": query.encode(),
             "headers": headers,
         }
     )
@@ -170,6 +172,20 @@ def test_dashboard_lists_recent_runs_with_status_and_counts(clean: Engine, tmp_p
     assert ">done<" in html
     assert 'id="empty-state"' not in html
     assert 'data-state="ok"' in html
+
+
+def test_dashboard_renders_error_state_when_database_is_down(clean: Engine, tmp_path, monkeypatch):
+    client = healthy_client(BrokenEngine(), tmp_path, monkeypatch)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'id="runs-error"' in html
+    assert 'id="empty-state"' not in html
+    assert 'id="recent-runs"' in html
+    assert 'id="health-db"' in html
+    assert 'data-state="down"' in html
 
 
 def test_health_reports_booleans_for_healthy_clients(clean: Engine, tmp_path, monkeypatch):
@@ -227,6 +243,15 @@ def test_validate_csrf_honors_match_and_mismatch(clean: Engine, tmp_path, monkey
     assert validate_csrf(make_request(cookie=token)) is False
     assert validate_csrf(make_request(header=token)) is False
     assert validate_csrf(make_request()) is False
+
+
+def test_validate_csrf_rejects_query_string_tokens(clean: Engine, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    client.get("/")
+    token = client.cookies.get(CSRF_COOKIE)
+
+    assert validate_csrf(make_request(cookie=token, query=f"csrf_token={token}")) is False
+    assert validate_csrf(make_request(cookie=token, query="csrf_token=wrong")) is False
 
 
 @pytest.mark.parametrize(
