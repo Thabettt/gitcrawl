@@ -4,7 +4,6 @@ import csv
 import hashlib
 import json
 import threading
-import time
 from datetime import UTC, datetime
 
 import pytest
@@ -467,18 +466,20 @@ def test_run_executor_submit_call_runs_a_callable_on_the_worker(db: Engine, tmp_
 
 def test_interactive_calls_jump_ahead_of_bulk_runs(db: Engine, tmp_path):
     order: list[str] = []
+    started = threading.Event()
     release = threading.Event()
 
     def slow(run_id: int, spec: dict) -> RunPayload:
         order.append(f"bulk-{run_id}")
-        release.wait(timeout=2)
+        started.set()
+        release.wait(timeout=10)
         return RunPayload(1, [_item()])
 
     first = create_run(db, FILTER, api_version="v1")
     second = create_run(db, FILTER, api_version="v1")
     executor = RunExecutor(db, runner=slow, runs_root=str(tmp_path))
     executor.submit(first)
-    time.sleep(0.05)
+    assert started.wait(10) is True
     bulk = executor.submit(second)
     interactive = executor.submit_call(lambda: order.append("interactive") or "done")
     release.set()
@@ -503,11 +504,15 @@ def test_run_executor_prunes_completed_futures(db: Engine, tmp_path):
 def test_run_executor_fifo_and_single_worker(db: Engine, tmp_path):
     events: list[tuple[str, int]] = []
     lock = threading.Lock()
+    first_started = threading.Event()
+    release_first = threading.Event()
 
     def runner(run_id: int, spec: dict) -> RunPayload:
         with lock:
             events.append(("start", run_id))
-        time.sleep(0.05)
+        if run_id == first:
+            first_started.set()
+            assert release_first.wait(10)
         with lock:
             events.append(("end", run_id))
         return RunPayload(1, [_item()])
@@ -516,7 +521,11 @@ def test_run_executor_fifo_and_single_worker(db: Engine, tmp_path):
     second = create_run(db, FILTER, api_version="v1")
     executor = RunExecutor(db, runner=runner, runs_root=str(tmp_path))
     executor.submit(first)
+    assert first_started.wait(10) is True
     executor.submit(second)
+    with lock:
+        assert events == [("start", first)]
+    release_first.set()
     assert executor.wait(10) is True
     assert events == [("start", first), ("end", first), ("start", second), ("end", second)]
     assert run_status(db, first)["status"] == "done"
@@ -618,9 +627,6 @@ def test_run_executor_enqueue_keeps_idle_cleared_for_outstanding_job(
     release_first.set()
     assert task_done_finished.wait(10) is True
     try:
-        deadline = time.monotonic() + 0.2
-        while time.monotonic() < deadline and not executor._idle.is_set():
-            time.sleep(0.005)
         assert executor._idle.is_set() is False
     finally:
         allow_put.set()
@@ -634,11 +640,23 @@ def test_run_executor_enqueue_keeps_idle_cleared_for_outstanding_job(
 def test_run_executor_concurrent_submits_keep_single_worker(db: Engine, tmp_path, monkeypatch):
     events: list[tuple[str, int]] = []
     lock = threading.Lock()
+    first_started = threading.Event()
+    release_first = threading.Event()
+    extra_start = threading.Event()
+    first: int | None = None
 
     def runner(run_id: int, spec: dict) -> RunPayload:
+        nonlocal first
         with lock:
+            starts = sum(1 for kind, _ in events if kind == "start")
             events.append(("start", run_id))
-        time.sleep(0.05)
+            if starts == 0:
+                first = run_id
+            else:
+                extra_start.set()
+        if run_id == first:
+            first_started.set()
+            assert release_first.wait(10)
         with lock:
             events.append(("end", run_id))
         return RunPayload(1, [_item()])
@@ -662,6 +680,9 @@ def test_run_executor_concurrent_submits_keep_single_worker(db: Engine, tmp_path
         thread.start()
     for thread in submitters:
         thread.join(10)
+    assert first_started.wait(10) is True
+    assert extra_start.wait(0.5) is False
+    release_first.set()
     assert executor.wait(30) is True
 
     order = [run_id for _, run_id in events]

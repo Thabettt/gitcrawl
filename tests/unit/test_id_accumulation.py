@@ -1,8 +1,22 @@
 from __future__ import annotations
 
-import time
-
 from discover.pipeline import _collect_ids
+
+
+class AppendOnlyList(list):
+    def __init__(self) -> None:
+        super().__init__()
+        self.appends = 0
+
+    def append(self, value: object) -> None:
+        self.appends += 1
+        super().append(value)
+
+    def extend(self, values: object) -> None:
+        raise AssertionError("extend would recopy the accumulated ids")
+
+    def __iadd__(self, values: object) -> None:
+        raise AssertionError("in-place concatenation would recopy the accumulated ids")
 
 
 def test_collect_ids_appends_in_order_and_deduplicates():
@@ -13,13 +27,11 @@ def test_collect_ids_appends_in_order_and_deduplicates():
     assert seen == {3, 1}
 
 
-def test_collect_ids_stays_linear_at_100k_items():
+def test_collect_ids_appends_once_per_new_id():
     seen: set[int] = set()
-    collected: list[int] = []
+    collected = AppendOnlyList()
     items = [{"id": value} for value in range(100_000)]
-    started = time.perf_counter()
     _collect_ids(seen, collected, items)
-    elapsed = time.perf_counter() - started
     assert len(collected) == 100_000
-    # tuple concatenation at this size copies ~40 GB and takes seconds-to-minutes.
-    assert elapsed < 1.0
+    assert collected.appends == 100_000
+    assert seen == set(range(100_000))

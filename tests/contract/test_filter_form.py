@@ -524,14 +524,12 @@ def test_find_redirects_before_the_run_finishes(clean: Engine, tmp_path):
     client = make_client(clean, tmp_path, runner=blocking)
     token = csrf_token(client)
 
-    began = time.monotonic()
     response = client.post(
         "/find", data={"csrf": token, "action": "find", "keywords": "language:rust"}
     )
-    elapsed = time.monotonic() - began
 
     assert response.status_code == 303
-    assert elapsed < 2.0
+    assert release.is_set() is False
     assert started.wait(10)
     run_id = int(response.headers["location"].rsplit("/", 1)[1])
     with clean.connect() as connection:

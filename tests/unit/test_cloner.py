@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pytest
 from alembic import command
@@ -396,25 +397,14 @@ def test_clone_repos_zero_limit_is_a_noop(clean: Engine, tmp_path):
 
 
 def test_clone_workers_run_in_parallel(clean: Engine, tmp_path):
-    import threading
-    import time as time_module
-
     specs = [(repo_id, f"octo/r{repo_id}", 1, repo_id) for repo_id in range(1, 5)]
     run_id, _ = seed_run(clean, specs)
-    active = 0
-    peak = 0
-    lock = threading.Lock()
+    barrier = threading.Barrier(4)
 
     def fake_runner(argv, cwd):
-        nonlocal active, peak
-        with lock:
-            active += 1
-            peak = max(peak, active)
-        time_module.sleep(0.05)
-        with lock:
-            active -= 1
+        barrier.wait(timeout=5)
 
-    clone_repos(
+    stats = clone_repos(
         clean,
         run_id,
         limit=4,
@@ -423,7 +413,8 @@ def test_clone_workers_run_in_parallel(clean: Engine, tmp_path):
         git_runner=fake_runner,
         workers=4,
     )
-    assert peak >= 2
+    assert stats.completed == 4
+    assert stats.failed == 0
 
 
 def test_clone_errors_are_capped(clean: Engine, tmp_path):
