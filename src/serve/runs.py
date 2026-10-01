@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -184,17 +185,77 @@ def export_bundle(
 
 
 class CloneRegistry:
-    def __init__(self) -> None:
-        self._entries: dict[int, CloneProgress] = {}
+    def __init__(
+        self,
+        *,
+        max_entries: int = 100,
+        ttl_seconds: float = 3600.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be >= 1")
+        self._entries: OrderedDict[int, CloneProgress] = OrderedDict()
+        self._touched: dict[int, float] = {}
         self._lock = threading.Lock()
+        self._max_entries = max_entries
+        self._ttl = ttl_seconds
+        self._clock = clock
+
+    def _evict_locked(self, now: float) -> None:
+        for run_id in list(self._entries):
+            progress = self._entries[run_id]
+            if progress.status == "running":
+                continue
+            if now - self._touched.get(run_id, now) >= self._ttl:
+                del self._entries[run_id]
+                self._touched.pop(run_id, None)
+        while len(self._entries) > self._max_entries:
+            evicted = False
+            for run_id in list(self._entries):
+                if self._entries[run_id].status != "running":
+                    del self._entries[run_id]
+                    self._touched.pop(run_id, None)
+                    evicted = True
+                    break
+            if not evicted:
+                break
 
     def get(self, run_id: int) -> CloneProgress | None:
         with self._lock:
-            return self._entries.get(run_id)
+            now = self._clock()
+            self._evict_locked(now)
+            progress = self._entries.get(run_id)
+            if progress is None:
+                return None
+            self._entries.move_to_end(run_id)
+            self._touched[run_id] = now
+            return progress
 
     def set(self, run_id: int, progress: CloneProgress) -> None:
         with self._lock:
+            now = self._clock()
             self._entries[run_id] = progress
+            self._entries.move_to_end(run_id)
+            self._touched[run_id] = now
+            self._evict_locked(now)
+
+    def claim(
+        self, run_id: int, factory: Callable[[], CloneProgress]
+    ) -> tuple[CloneProgress, bool]:
+        with self._lock:
+            now = self._clock()
+            self._evict_locked(now)
+            existing = self._entries.get(run_id)
+            if existing is not None and existing.status == "running":
+                self._entries.move_to_end(run_id)
+                self._touched[run_id] = now
+                return existing, False
+            progress = factory()
+            self._entries[run_id] = progress
+            self._entries.move_to_end(run_id)
+            self._touched[run_id] = now
+            self._evict_locked(now)
+            return progress, True
 
 
 _EMIT_INTERVAL_SECONDS = 0.25
@@ -331,18 +392,20 @@ def start_clone(
     git_runner: GitRunner | None = None,
 ) -> CloneProgress:
     row = _row_for_run(engine, run_id)
-    existing = registry.get(run_id)
-    if existing is not None and existing.status == "running":
-        return existing
     bundle_dir = run_bundle_dir(runs_root, row["filter_hash"], run_id)
-    progress = _PersistedProgress(
-        bundle_dir / PROGRESS_NAME,
-        status="running",
-        total=0,
-        completed=0,
-        failed=0,
-    )
-    registry.set(run_id, progress)
+
+    def create_progress() -> CloneProgress:
+        return _PersistedProgress(
+            bundle_dir / PROGRESS_NAME,
+            status="running",
+            total=0,
+            completed=0,
+            failed=0,
+        )
+
+    progress, claimed = registry.claim(run_id, create_progress)
+    if not claimed:
+        return progress
     progress.total = min(limit, _count_run_items(engine, run_id)) if limit > 0 else 0
     if limit <= 0:
         progress.status = "done"
