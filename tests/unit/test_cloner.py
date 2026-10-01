@@ -192,6 +192,62 @@ def test_estimate_zero_limit_is_empty(clean: Engine):
     assert estimate == CloneEstimate(repos=0, estimated_mb=0.0, warnings=())
 
 
+def test_full_run_clone_estimate_uses_one_aggregate(clean: Engine, tmp_path):
+    from sqlalchemy import event
+
+    from serve.runs import clone_estimate_for_run
+
+    run_id, _ = seed_run(clean, [(1, "octo/one", 1024, 1), (2, "octo/two", 2048, 2)])
+    statements: list[str] = []
+
+    def listener(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(clean, "before_cursor_execute", listener)
+    try:
+        estimate = clone_estimate_for_run(
+            clean, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=str(tmp_path)
+        )
+    finally:
+        event.remove(clean, "before_cursor_execute", listener)
+    assert estimate.repos == 2
+    assert estimate.estimated_mb == pytest.approx(3.0)
+    selects = [s for s in statements if "FROM run_items" in s]
+    assert len(selects) == 1  # one aggregate, no per-item row fetch
+
+
+def test_full_run_clone_estimate_matches_the_full_scan_path(clean: Engine, tmp_path):
+    from serve.runs import clone_estimate_for_run
+
+    run_id, _ = seed_run(clean, [(1, "octo/one", 1024, 10), (2, "octo/two", None, 5)])
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO run_items (run_id, repo_id, full_name, stargazers) "
+                "VALUES (:run, NULL, 'octo/detached', 1)"
+            ),
+            {"run": run_id},
+        )
+
+    aggregate = clone_estimate_for_run(
+        clean, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=str(tmp_path)
+    )
+    full_scan = estimate_clone(clean, run_id, limit=3, mode=CloneMode.SHALLOW)
+
+    assert aggregate.repos == full_scan.repos == 3
+    assert aggregate.estimated_mb == pytest.approx(full_scan.estimated_mb)
+    assert aggregate.warnings == full_scan.warnings
+
+
+def test_full_run_clone_estimate_missing_run_raises_keyerror(clean: Engine, tmp_path):
+    from serve.runs import clone_estimate_for_run
+
+    with pytest.raises(KeyError):
+        clone_estimate_for_run(
+            clean, 424242, limit=None, mode=CloneMode.SHALLOW, dest_root=str(tmp_path)
+        )
+
+
 @pytest.mark.parametrize("mode", list(MODE_FLAGS))
 def test_clone_repos_runs_the_mode_specific_argv(clean: Engine, tmp_path, mode: CloneMode):
     run_id, filter_hash = seed_run(clean, [(1, "octo/hello", 1024, 10)])

@@ -20,10 +20,11 @@ from enrich.cloner import (
     GitRunner,
     clone_repos,
     estimate_clone,
+    estimate_clone_from_totals,
     free_disk_mb,
 )
 from serve.executor import _CSV_HEADER, _csv_cell
-from store.models import RunItem, Runs
+from store.models import Repo, RunItem, Runs
 
 _MEDIA_TYPES = {"json": "application/json", "csv": "text/csv"}
 _BUNDLE_FILES = {"json": "bundle.json", "csv": "corpus.csv"}
@@ -193,6 +194,17 @@ def _count_run_items(engine: Engine, run_id: int) -> int:
     return int(count or 0)
 
 
+def _run_totals(engine: Engine, run_id: int) -> tuple[int, int]:
+    with engine.connect() as connection:
+        count, size_kb = connection.execute(
+            select(func.count(), func.coalesce(func.sum(Repo.size_kb), 0))
+            .select_from(RunItem)
+            .outerjoin(Repo, Repo.id == RunItem.repo_id)
+            .where(RunItem.run_id == run_id)
+        ).one()
+    return int(count or 0), int(size_kb or 0)
+
+
 def clone_estimate_for_run(
     engine: Engine,
     run_id: int,
@@ -203,7 +215,15 @@ def clone_estimate_for_run(
     low_disk_threshold_mb: float = 2048.0,
 ) -> CloneEstimate:
     if limit is None:
-        limit = _count_run_items(engine, run_id)
+        repos, size_kb = _run_totals(engine, run_id)
+        _row_for_run(engine, run_id)  # preserve KeyError semantics
+        return estimate_clone_from_totals(
+            repos,
+            size_kb,
+            mode=mode,
+            disk_free_mb=free_disk_mb(dest_root),
+            low_disk_threshold_mb=low_disk_threshold_mb,
+        )
     if limit < 0:
         raise ValueError("limit", "limit must be >= 0")
     return estimate_clone(
@@ -227,10 +247,10 @@ def read_clone_progress(
     registry: CloneRegistry,
     runs_root: str = "runs",
 ) -> CloneProgress:
-    row = _row_for_run(engine, run_id)
     tracked = registry.get(run_id)
     if tracked is not None:
         return tracked
+    row = _row_for_run(engine, run_id)
     path = run_bundle_dir(runs_root, row["filter_hash"], run_id) / PROGRESS_NAME
     if path.is_file():
         try:

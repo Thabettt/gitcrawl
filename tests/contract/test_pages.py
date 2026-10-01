@@ -242,6 +242,24 @@ def test_health_reports_booleans_for_healthy_clients(clean: Engine, tmp_path, mo
     assert "super-secret-token-value" not in response.text
 
 
+def test_dashboard_memoizes_health_checks_between_requests(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "super-secret-token-value")
+    monkeypatch.delenv("GITHUB_TOKENS", raising=False)
+    pings: list[int] = []
+
+    def ping() -> bool:
+        pings.append(1)
+        return True
+
+    client = make_client(clean, redis_ping=ping, runs_root=tmp_path)
+
+    first = client.get("/")
+    second = client.get("/")
+
+    assert first.status_code == second.status_code == 200
+    assert len(pings) == 1
+
+
 def test_health_reports_booleans_for_unhealthy_clients(clean: Engine, tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKENS", raising=False)

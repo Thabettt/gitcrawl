@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -39,6 +40,7 @@ CSRF_HEADER = "x-csrf-token"
 CSRF_FIELD = "csrf"
 FORM_CONTENT_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
 HEALTH_TIMEOUT_SECONDS = 0.25
+HEALTH_CACHE_SECONDS = 5.0
 RECENT_RUNS_LIMIT = 20
 TABLE_PAGE_SIZE = 50
 RUN_SORT_COLUMNS = {
@@ -54,6 +56,7 @@ SAVE_ERROR_STATUS = {"invalid_name": 400, "invalid_spec": 400, "duplicate_name":
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 _templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+_redis_client = None
 
 
 def _bounded(check: Callable[[], object], timeout: float = HEALTH_TIMEOUT_SECONDS) -> bool:
@@ -72,20 +75,22 @@ def _bounded(check: Callable[[], object], timeout: float = HEALTH_TIMEOUT_SECOND
 
 
 def _default_redis_ping() -> bool:
+    global _redis_client
     url = os.environ.get("REDIS_URL")
     if not url:
         return False
-    import redis
+    if _redis_client is None:
+        import redis
 
-    client = redis.Redis.from_url(
-        url,
-        socket_connect_timeout=HEALTH_TIMEOUT_SECONDS,
-        socket_timeout=HEALTH_TIMEOUT_SECONDS,
-    )
+        _redis_client = redis.Redis.from_url(
+            url,
+            socket_connect_timeout=HEALTH_TIMEOUT_SECONDS,
+            socket_timeout=HEALTH_TIMEOUT_SECONDS,
+        )
     try:
-        return bool(client.ping())
-    finally:
-        client.close()
+        return bool(_redis_client.ping())
+    except Exception:
+        return False
 
 
 def _relative_time(value: datetime | None) -> str:
@@ -376,8 +381,17 @@ def _run_detail_summary(row, item_count: int) -> dict:
     }
 
 
-def _table_view(engine: Engine, run_id: int, sort: str, direction: str, page: int) -> dict | None:
-    if _run_detail_row(engine, run_id) is None:
+def _table_view(
+    engine: Engine,
+    run_id: int,
+    sort: str,
+    direction: str,
+    page: int,
+    *,
+    run_row=None,
+    total: int | None = None,
+) -> dict | None:
+    if run_row is None and _run_detail_row(engine, run_id) is None:
         return None
     if sort not in RUN_SORT_COLUMNS:
         sort = "stars"
@@ -386,12 +400,14 @@ def _table_view(engine: Engine, run_id: int, sort: str, direction: str, page: in
     column = RUN_SORT_COLUMNS[sort]
     order = column.asc() if direction == "asc" else column.desc()
     with engine.connect() as connection:
-        total = int(
-            connection.scalar(
-                select(func.count()).select_from(RunItem).where(RunItem.run_id == run_id)
+        if total is None:
+            total = int(
+                connection.scalar(
+                    select(func.count()).select_from(RunItem).where(RunItem.run_id == run_id)
+                )
+                or 0
             )
-            or 0
-        )
+        total = int(total)
         pages = max(1, (total + TABLE_PAGE_SIZE - 1) // TABLE_PAGE_SIZE)
         current = min(max(page, 1), pages)
         rows = (
@@ -510,12 +526,29 @@ def register_pages(
             return bool(load_tokens())
         return bool(token_present())
 
+    health_cache: dict[str, float | dict[str, bool] | None] = {"at": 0.0, "value": None}
+    health_lock = threading.Lock()
+
     def health_snapshot() -> dict[str, bool]:
-        return {
+        now = time.monotonic()
+        with health_lock:
+            cached = health_cache["value"]
+            cached_at = health_cache["at"]
+            if (
+                isinstance(cached, dict)
+                and isinstance(cached_at, float)
+                and now - cached_at < HEALTH_CACHE_SECONDS
+            ):
+                return dict(cached)
+        value = {
             "database": _bounded(database_ok),
             "redis": redis_ok(),
             "github_token_present": token_ok(),
         }
+        with health_lock:
+            health_cache["at"] = time.monotonic()
+            health_cache["value"] = dict(value)
+        return value
 
     @app.middleware("http")
     async def csrf_cookie(request: Request, call_next):
@@ -751,7 +784,10 @@ def register_pages(
             return templates.TemplateResponse(
                 request, "run_detail.html", {"run": None}, status_code=404
             )
-        table = _table_view(engine, run_id, "stars", "desc", 1)
+        item_count = _item_count(engine, run_id)
+        table = _table_view(
+            engine, run_id, "stars", "desc", 1, run_row=row, total=item_count
+        )
         estimate = clone_estimate_for_run(
             engine, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=clone_root
         )
@@ -762,7 +798,7 @@ def register_pages(
             request,
             "run_detail.html",
             {
-                "run": _run_detail_summary(row, _item_count(engine, run_id)),
+                "run": _run_detail_summary(row, item_count),
                 "run_id": run_id,
                 "csrf_token": request.state.csrf_token,
                 "estimate": estimate,

@@ -113,6 +113,25 @@ def _top_items(engine: Engine, run_id: int, limit: int) -> list[RowMapping]:
         )
 
 
+def estimate_clone_from_totals(
+    repos: int,
+    size_kb: int,
+    *,
+    mode: CloneMode,
+    disk_free_mb: float | None = None,
+    low_disk_threshold_mb: float = LOW_DISK_THRESHOLD_MB,
+) -> CloneEstimate:
+    mode = CloneMode(mode)
+    estimated_mb = size_kb * MODE_FACTORS[mode] / 1024
+    warnings: list[str] = []
+    if disk_free_mb is not None and estimated_mb > disk_free_mb - low_disk_threshold_mb:
+        warnings.append(
+            f"low disk: estimated {estimated_mb:.1f} MB with {disk_free_mb:.1f} MB free "
+            f"(reserve {low_disk_threshold_mb:.0f} MB)"
+        )
+    return CloneEstimate(repos=repos, estimated_mb=estimated_mb, warnings=tuple(warnings))
+
+
 def estimate_clone(
     engine: Engine,
     run_id: int,
@@ -126,14 +145,13 @@ def estimate_clone(
     _run_row(engine, run_id)
     items = _top_items(engine, run_id, limit)
     size_kb = sum(int(row["size_kb"] or 0) for row in items)
-    estimated_mb = size_kb * MODE_FACTORS[mode] / 1024
-    warnings: list[str] = []
-    if disk_free_mb is not None and estimated_mb > disk_free_mb - low_disk_threshold_mb:
-        warnings.append(
-            f"low disk: estimated {estimated_mb:.1f} MB with {disk_free_mb:.1f} MB free "
-            f"(reserve {low_disk_threshold_mb:.0f} MB)"
-        )
-    return CloneEstimate(repos=len(items), estimated_mb=estimated_mb, warnings=tuple(warnings))
+    return estimate_clone_from_totals(
+        len(items),
+        size_kb,
+        mode=mode,
+        disk_free_mb=disk_free_mb,
+        low_disk_threshold_mb=low_disk_threshold_mb,
+    )
 
 
 def _clone_argv(full_name: str, destination: Path, mode: CloneMode) -> list[str]:
