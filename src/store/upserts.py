@@ -218,13 +218,16 @@ def _upsert_owners(
             Owner.login.in_([login for login, _ in owners.values()])
         )
     ).all()
+    taken: set[str] = set()
     for holder_id, holder_login in holders:
         entry = desired.get(holder_login.casefold())
         if entry is not None and entry[0] != holder_id:
-            connection.execute(
-                update(Owner).where(Owner.id == holder_id).values(login=f"{entry[1]}~{holder_id}")
-            )
+            replacement = f"{entry[1]}~{holder_id}"
+            connection.execute(update(Owner).where(Owner.id == holder_id).values(login=replacement))
             stats.conflicts += 1
+            taken.add(replacement.casefold())
+        else:
+            taken.add(str(holder_login).casefold())
     existing = {
         row["id"]: dict(row)
         for row in connection.execute(
@@ -233,12 +236,19 @@ def _upsert_owners(
     }
     rows_to_insert = []
     rows_to_update = []
-    for owner_id, (login, owner_type) in owners.items():
+    for owner_id in sorted(owners):
+        login, owner_type = owners[owner_id]
         current = existing.get(owner_id)
         if current is None:
-            rows_to_insert.append({"id": owner_id, "login": login, "type": owner_type})
-        elif current["login"] != login or current["type"] != owner_type:
-            rows_to_update.append({"id": owner_id, "login": login, "type": owner_type})
+            candidate = login
+            if candidate.casefold() in taken:
+                candidate = f"{login}~{owner_id}"
+            taken.add(candidate.casefold())
+            rows_to_insert.append({"id": owner_id, "login": candidate, "type": owner_type})
+        else:
+            taken.add(str(current["login"]).casefold())
+            if current["login"] != login or current["type"] != owner_type:
+                rows_to_update.append({"id": owner_id, "login": login, "type": owner_type})
     if rows_to_insert:
         statement = pg_insert(Owner).values(rows_to_insert)
         connection.execute(
@@ -423,47 +433,51 @@ def _bootstrap_chunk(
     normalized: list[dict],
     owners: dict[int, tuple[str, str]],
     stats: UpsertStats,
+    table_name: str,
 ) -> int:
-    table_name = f"repos_staging_{uuid4().hex}"
     indexed_at = datetime.now(UTC)
     with engine.begin() as connection:
-        try:
-            with connection.begin_nested():
-                _upsert_owners(connection, owners, stats)
-                _rename_stale_full_names(connection, normalized, stats)
-                connection.execute(
-                    text(f"CREATE UNLOGGED TABLE IF NOT EXISTS {table_name} (LIKE repos)")
-                )
-                driver = connection.connection.driver_connection
-                with driver.cursor() as cursor:
-                    with cursor.copy(_copy_sql(table_name)) as copy:
-                        for row in normalized:
-                            copy.write_row(_copy_row(row, indexed_at))
-                staged = int(connection.scalar(text(f"SELECT count(*) FROM {table_name}")) or 0)
-                inserted, renamed = _merge_staging(connection, table_name)
-                stats.inserted += inserted
-                stats.history_rows += inserted + renamed
-        finally:
-            connection.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+        with connection.begin_nested():
+            _upsert_owners(connection, owners, stats)
+            _rename_stale_full_names(connection, normalized, stats)
+            connection.execute(text(f"TRUNCATE {table_name}"))
+            driver = connection.connection.driver_connection
+            with driver.cursor() as cursor:
+                with cursor.copy(_copy_sql(table_name)) as copy:
+                    for row in normalized:
+                        copy.write_row(_copy_row(row, indexed_at))
+            staged = int(connection.scalar(text(f"SELECT count(*) FROM {table_name}")) or 0)
+            inserted, renamed = _merge_staging(connection, table_name)
+            stats.inserted += inserted
+            stats.history_rows += inserted + renamed
     return staged
 
 
-def bootstrap_copy(engine: Engine, items: Iterable[dict]) -> UpsertStats:
+def bootstrap_copy(
+    engine: Engine, items: Iterable[dict], *, copy_batch: int = _COPY_BATCH
+) -> UpsertStats:
     stats = UpsertStats()
     total = 0
     staged_total = 0
-    for chunk in _chunks(items, _COPY_BATCH):
-        total += len(chunk)
-        normalized: list[dict] = []
-        owners: dict[int, tuple[str, str]] = {}
-        for item in chunk:
-            row = normalize_repo(item)
-            if row is None:
+    table_name = f"repos_staging_{uuid4().hex}"
+    with engine.begin() as connection:
+        connection.execute(text(f"CREATE UNLOGGED TABLE IF NOT EXISTS {table_name} (LIKE repos)"))
+    try:
+        for chunk in _chunks(items, copy_batch):
+            total += len(chunk)
+            normalized: list[dict] = []
+            owners: dict[int, tuple[str, str]] = {}
+            for item in chunk:
+                row = normalize_repo(item)
+                if row is None:
+                    continue
+                normalized.append(row)
+                owners[row["owner_id"]] = (row["owner_login"], row["owner_type"])
+            if not normalized:
                 continue
-            normalized.append(row)
-            owners[row["owner_id"]] = (row["owner_login"], row["owner_type"])
-        if not normalized:
-            continue
-        staged_total += _bootstrap_chunk(engine, normalized, owners, stats)
+            staged_total += _bootstrap_chunk(engine, normalized, owners, stats, table_name)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
     stats.skipped = total - staged_total
     return stats

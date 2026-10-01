@@ -344,6 +344,24 @@ def test_owner_login_held_by_another_id_is_stale_renamed(clean: Engine):
     assert repos[2]["owner_id"] == 200
 
 
+def test_same_batch_owner_login_collision_is_tokenized(clean: Engine):
+    upsert_repos(
+        clean,
+        [
+            repo_item(1, owner_id=101, owner_login="dup", owner_type="User"),
+            repo_item(2, owner_id=102, owner_login="DUP", owner_type="Organization"),
+        ],
+        batch_size=10,
+    )
+    with clean.connect() as connection:
+        logins = [
+            str(row[0]) for row in connection.execute(text("SELECT login FROM owners ORDER BY id"))
+        ]
+    assert len(logins) == 2
+    assert logins[0].casefold() == "dup"
+    assert logins[1].casefold().startswith("dup~")
+
+
 def test_changed_repo_is_updated(clean: Engine):
     upsert_repos(clean, [repo_item(1)])
     before = xmin_of(clean, 1)
@@ -518,8 +536,22 @@ def test_bootstrap_copy_writes_first_insert_history_rows(clean: Engine):
     ]
 
 
-def test_bootstrap_copy_accounts_stats_without_full_repo_scans(clean: Engine, monkeypatch):
-    monkeypatch.setattr(upserts, "_COPY_BATCH", 2)
+def test_bootstrap_creates_staging_table_once(clean: Engine):
+    creates: list[str] = []
+
+    def listener(conn, cursor, statement, parameters, context, executemany):
+        if "CREATE UNLOGGED TABLE" in statement:
+            creates.append(statement)
+
+    sa.event.listen(clean, "before_cursor_execute", listener)
+    try:
+        bootstrap_copy(clean, [repo_item(repo_id) for repo_id in range(1, 6)], copy_batch=2)
+    finally:
+        sa.event.remove(clean, "before_cursor_execute", listener)
+    assert len(creates) == 1
+
+
+def test_bootstrap_copy_accounts_stats_without_full_repo_scans(clean: Engine):
     statements = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
@@ -527,7 +559,7 @@ def test_bootstrap_copy_accounts_stats_without_full_repo_scans(clean: Engine, mo
 
     sa.event.listen(clean, "before_cursor_execute", capture)
     try:
-        stats = bootstrap_copy(clean, [repo_item(i) for i in range(1, 6)])
+        stats = bootstrap_copy(clean, [repo_item(i) for i in range(1, 6)], copy_batch=2)
     finally:
         sa.event.remove(clean, "before_cursor_execute", capture)
     assert stats.inserted == 5
