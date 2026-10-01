@@ -1,0 +1,46 @@
+{% macro estimate_block(estimate) %}
+<div id="clone-estimate" class="clone-estimate" data-repos="{{ estimate.repos }}" data-estimated-mb="{{ '%.1f'|format(estimate.estimated_mb) }}">
+  <p>Repos: <strong id="clone-estimate-repos">{{ estimate.repos }}</strong> · estimated <strong id="clone-estimate-mb">{{ '%.1f'|format(estimate.estimated_mb) }}</strong> MB</p>
+  {% if estimate.warnings %}
+  <ul id="clone-warnings" class="warnings">
+    {% for warning in estimate.warnings %}
+    <li data-warning="{{ warning }}">{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endmacro %}
+{% if estimate_only %}
+{{ estimate_block(estimate) }}
+{% else %}
+<div id="clone-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="clone-modal-title" data-run-id="{{ run.id }}">
+  <div class="modal-panel">
+    <div class="panel-head">
+      <h2 id="clone-modal-title">Clone top repos</h2>
+      <button id="clone-close" class="button ghost" type="button" data-close="clone-modal">Close</button>
+    </div>
+    <form id="clone-controls"
+          hx-get="/runs/{{ run.id }}/clone-estimate"
+          hx-trigger="change"
+          hx-target="#clone-estimate"
+          hx-swap="outerHTML">
+      <div class="clone-limit-row">
+        <label for="clone-limit">Repos to clone</label>
+        <input id="clone-limit" name="limit" type="range" min="0" max="{{ run.item_count }}" value="{{ run.item_count }}" step="1">
+        <input id="clone-limit-input" type="number" min="0" max="{{ run.item_count }}" value="{{ run.item_count }}" step="1" inputmode="numeric">
+      </div>
+      <fieldset class="clone-modes">
+        <legend>Mode</legend>
+        <label><input type="radio" name="mode" value="shallow" checked> shallow</label>
+        <label><input type="radio" name="mode" value="file_only"> file only</label>
+        <label><input type="radio" name="mode" value="windowed"> windowed</label>
+      </fieldset>
+    </form>
+    {{ estimate_block(estimate) }}
+    <div class="form-actions">
+      <button id="clone-start" class="button primary" type="button" data-run-id="{{ run.id }}">Start clone</button>
+      <button id="clone-cancel" class="button" type="button" data-close="clone-modal">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}

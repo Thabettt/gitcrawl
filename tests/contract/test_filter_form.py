@@ -578,7 +578,8 @@ def test_run_page_renders_banner_rows_and_links(clean: Engine, tmp_path):
 
     assert response.status_code == 200
     html = response.text
-    assert 'id="run-banner"' in html
+    assert 'id="run-header"' in html
+    assert 'id="run-status-pill"' in html
     assert "done" in html
     assert 'id="run-items"' in html
     assert "octo/hello" in html

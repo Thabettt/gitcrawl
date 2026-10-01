@@ -213,7 +213,7 @@ def test_dashboard_run_links_resolve_to_the_run_page(clean: Engine, tmp_path, mo
 
     assert f'href="/runs/{run_id}"' in dashboard.text
     assert run_page.status_code == 200
-    assert 'id="run-banner"' in run_page.text
+    assert 'id="run-header"' in run_page.text
 
 
 def test_dashboard_renders_error_state_when_database_is_down(clean: Engine, tmp_path, monkeypatch):

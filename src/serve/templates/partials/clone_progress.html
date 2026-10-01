@@ -1,0 +1,18 @@
+{% set idle = progress.status == "done" and progress.total == 0 and progress.completed == 0 and progress.failed == 0 %}
+<div id="clone-progress" data-status="{{ progress.status }}"{% if progress.status == "running" %} hx-get="/partials/runs/{{ run_id }}/clone-progress" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  {% if idle %}
+  <p id="clone-progress-idle" class="muted">No clone in progress.</p>
+  {% else %}
+  <div class="progress" role="progressbar" aria-valuenow="{{ progress.completed }}" aria-valuemin="0" aria-valuemax="{{ progress.total }}">
+    <div id="clone-progress-bar" class="progress-bar" style="width: {{ (100 * progress.completed / progress.total)|round(1) if progress.total else 0 }}%"></div>
+  </div>
+  <p id="clone-progress-counts">completed {{ progress.completed }} / {{ progress.total }} · failed {{ progress.failed }}{% if progress.current %} · current <span id="clone-progress-current" class="mono">{{ progress.current }}</span>{% endif %}</p>
+  {% if progress.errors %}
+  <ul id="clone-progress-errors" class="warnings">
+    {% for error in progress.errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
+</div>

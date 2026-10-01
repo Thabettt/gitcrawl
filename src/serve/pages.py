@@ -14,10 +14,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import Engine
 
-from enrich.cloner import parse_mode
+from enrich.cloner import CloneMode, parse_mode
 from lib.gh_client import API_VERSION, load_tokens
 from serve.executor import Runner, create_run, execute_run
 from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
@@ -37,6 +37,14 @@ CSRF_FIELD = "csrf"
 FORM_CONTENT_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
 HEALTH_TIMEOUT_SECONDS = 0.25
 RECENT_RUNS_LIMIT = 20
+TABLE_PAGE_SIZE = 50
+RUN_SORT_COLUMNS = {
+    "stars": RunItem.stargazers,
+    "pushed": RunItem.pushed_at,
+    "name": RunItem.full_name,
+}
+NON_TERMINAL_STATUSES = ("queued", "running")
+R44_VIRTUALS = ("min_commits", "min_loc")
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -134,6 +142,141 @@ def _recent_runs(engine: Engine, limit: int = RECENT_RUNS_LIMIT) -> list[dict]:
             .all()
         )
     return [_run_summary(row) for row in rows]
+
+
+def _run_detail_row(engine: Engine, run_id: int):
+    with engine.connect() as connection:
+        return connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+
+
+def _item_count(engine: Engine, run_id: int) -> int:
+    with engine.connect() as connection:
+        count = connection.scalar(
+            select(func.count()).select_from(RunItem).where(RunItem.run_id == run_id)
+        )
+    return int(count or 0)
+
+
+def _virtual_filters(filter_spec: object) -> dict:
+    if isinstance(filter_spec, dict):
+        virtual = filter_spec.get("virtual")
+        if isinstance(virtual, dict):
+            return virtual
+    return {}
+
+
+def _run_flags(row, virtual: dict) -> list[dict]:
+    flags: list[dict] = []
+    if row["error"]:
+        flags.append({"kind": "error", "label": f"failed: {row['error']}"})
+    if row["status"] == "partial" or row["incomplete_shards"]:
+        shards = row["incomplete_shards"] or 1
+        flags.append(
+            {
+                "kind": "incomplete",
+                "label": f"incomplete: {shards} discovery shard(s) incomplete; results are partial",
+            }
+        )
+    total = row["total_count"]
+    if isinstance(total, int) and row["fetched"] < total:
+        flags.append(
+            {"kind": "truncation", "label": f"truncated: fetched {row['fetched']} of ~{total}"}
+        )
+    for name in R44_VIRTUALS:
+        if name in virtual:
+            flags.append(
+                {
+                    "kind": "r44",
+                    "label": f"`{name}` is recorded but unenforceable in this run; "
+                    "results are incomplete",
+                }
+            )
+    return flags
+
+
+def _run_detail_summary(row, item_count: int) -> dict:
+    return {
+        "id": row["id"],
+        "filter_hash": row["filter_hash"],
+        "hash_short": row["filter_hash"][:8],
+        "status": row["status"],
+        "total_count": row["total_count"],
+        "fetched": row["fetched"],
+        "inserted": row["inserted"],
+        "updated": row["updated"],
+        "unchanged": row["unchanged"],
+        "skipped": row["skipped"],
+        "incomplete_shards": row["incomplete_shards"],
+        "error": row["error"],
+        "created_at": _iso(row["created_at"]),
+        "started_at": _iso(row["started_at"]),
+        "finished_at": _iso(row["finished_at"]),
+        "duration": _duration(row["started_at"], row["finished_at"]),
+        "item_count": item_count,
+        "polling": row["status"] in NON_TERMINAL_STATUSES,
+        "flags": _run_flags(row, _virtual_filters(row["filter_spec"])),
+    }
+
+
+def _table_view(engine: Engine, run_id: int, sort: str, direction: str, page: int) -> dict | None:
+    if _run_detail_row(engine, run_id) is None:
+        return None
+    if sort not in RUN_SORT_COLUMNS:
+        sort = "stars"
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+    column = RUN_SORT_COLUMNS[sort]
+    order = column.asc() if direction == "asc" else column.desc()
+    with engine.connect() as connection:
+        total = int(
+            connection.scalar(
+                select(func.count()).select_from(RunItem).where(RunItem.run_id == run_id)
+            )
+            or 0
+        )
+        pages = max(1, (total + TABLE_PAGE_SIZE - 1) // TABLE_PAGE_SIZE)
+        current = min(max(page, 1), pages)
+        rows = (
+            connection.execute(
+                select(
+                    RunItem.repo_id,
+                    RunItem.full_name,
+                    RunItem.stargazers,
+                    RunItem.pushed_at,
+                    RunItem.archived,
+                    RunItem.language,
+                    RunItem.license_spdx,
+                    RunItem.country_iso,
+                    RunItem.geo_confidence,
+                    RunItem.virtuals,
+                )
+                .where(RunItem.run_id == run_id)
+                .order_by(order.nullslast(), RunItem.repo_id)
+                .offset((current - 1) * TABLE_PAGE_SIZE)
+                .limit(TABLE_PAGE_SIZE)
+            )
+            .mappings()
+            .all()
+        )
+    items = []
+    for row in rows:
+        virtuals = dict(row["virtuals"] or {})
+        items.append(
+            {
+                **dict(row),
+                "pushed_at": _iso(row["pushed_at"]),
+                "incomplete": bool(virtuals.get("incomplete"))
+                or any(name in virtuals for name in R44_VIRTUALS),
+            }
+        )
+    return {
+        "rows": items,
+        "sort": sort,
+        "dir": direction,
+        "page": current,
+        "pages": pages,
+        "total": total,
+    }
 
 
 async def validate_csrf(request: Request) -> bool:
@@ -337,51 +480,33 @@ def register_pages(
         execute_run(engine, run_id, runner=runner, runs_root=runs_root)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
+    progress_registry = CloneRegistry()
+
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_page(request: Request, run_id: int):
         engine = engine_factory()
-        with engine.connect() as connection:
-            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
-            if row is None:
-                return templates.TemplateResponse(
-                    request,
-                    "run_min.html",
-                    {"run": None, "rows": [], "csrf_token": request.state.csrf_token},
-                    status_code=404,
-                )
-            rows = (
-                connection.execute(
-                    select(
-                        RunItem.repo_id,
-                        RunItem.full_name,
-                        RunItem.stargazers,
-                        RunItem.pushed_at,
-                        RunItem.archived,
-                        RunItem.language,
-                        RunItem.license_spdx,
-                        RunItem.country_iso,
-                        RunItem.geo_confidence,
-                    )
-                    .where(RunItem.run_id == run_id)
-                    .order_by(RunItem.stargazers.desc(), RunItem.repo_id)
-                    .limit(100)
-                )
-                .mappings()
-                .all()
+        row = _run_detail_row(engine, run_id)
+        if row is None:
+            return templates.TemplateResponse(
+                request, "run_detail.html", {"run": None}, status_code=404
             )
-        summary = {
-            **dict(row),
-            "hash_short": row["filter_hash"][:8],
-            "duration": _duration(row["started_at"], row["finished_at"]),
-            "ran_at": _relative_time(row["finished_at"] or row["started_at"] or row["created_at"]),
-        }
+        table = _table_view(engine, run_id, "stars", "desc", 1)
+        estimate = clone_estimate_for_run(
+            engine, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=clone_root
+        )
+        progress = read_clone_progress(
+            engine, run_id, registry=progress_registry, runs_root=runs_root
+        )
         return templates.TemplateResponse(
             request,
-            "run_min.html",
+            "run_detail.html",
             {
-                "run": summary,
-                "rows": [{**dict(item), "pushed_at": _iso(item["pushed_at"])} for item in rows],
+                "run": _run_detail_summary(row, _item_count(engine, run_id)),
+                "run_id": run_id,
                 "csrf_token": request.state.csrf_token,
+                "estimate": estimate,
+                "progress": progress,
+                **(table or {}),
             },
         )
 
@@ -402,7 +527,32 @@ def register_pages(
         execute_run(engine, new_id, runner=runner, runs_root=runs_root)
         return RedirectResponse(f"/runs/{new_id}", status_code=303)
 
-    progress_registry = CloneRegistry()
+    @app.get("/partials/runs/{run_id}/status", response_class=HTMLResponse)
+    def run_status_partial(request: Request, run_id: int):
+        engine = engine_factory()
+        row = _run_detail_row(engine, run_id)
+        if row is None:
+            return _run_not_found(run_id)
+        return templates.TemplateResponse(
+            request,
+            "partials/status.html",
+            {"run": _run_detail_summary(row, _item_count(engine, run_id))},
+        )
+
+    @app.get("/partials/runs/{run_id}/table", response_class=HTMLResponse)
+    def run_table_partial(
+        request: Request,
+        run_id: int,
+        sort: str = "stars",
+        dir: str = "desc",
+        page: int = 1,
+    ):
+        table = _table_view(engine_factory(), run_id, sort, dir, page)
+        if table is None:
+            return _run_not_found(run_id)
+        return templates.TemplateResponse(
+            request, "partials/table.html", {"run_id": run_id, **table}
+        )
 
     @app.get("/runs/{run_id}/clone-estimate")
     def clone_estimate_route(request: Request, run_id: int):
@@ -428,6 +578,12 @@ def register_pages(
             return _run_not_found(run_id)
         except ValueError:
             return _invalid_param("limit", "limit must be an integer >= 0")
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request,
+                "partials/clone_modal.html",
+                {"estimate": estimate, "estimate_only": True},
+            )
         return {
             "repos": estimate.repos,
             "estimated_mb": estimate.estimated_mb,
@@ -470,11 +626,17 @@ def register_pages(
         return payload
 
     @app.get("/partials/runs/{run_id}/clone-progress")
-    def clone_progress_route(run_id: int):
+    def clone_progress_route(request: Request, run_id: int):
         try:
             progress = read_clone_progress(
                 engine_factory(), run_id, registry=progress_registry, runs_root=runs_root
             )
         except KeyError:
             return _run_not_found(run_id)
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request,
+                "partials/clone_progress.html",
+                {"run_id": run_id, "progress": progress},
+            )
         return progress_payload(progress)
