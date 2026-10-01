@@ -568,3 +568,47 @@ def test_audit_buffer_defers_record_audit_until_run_end(clean: Engine, monkeypat
 
     assert stats.fetched == 1
     assert scalar(clean, "SELECT count(*) FROM audit_log") == 1
+
+
+def test_request_failed_shard_is_rolled_back_and_queued_for_retry(clean: Engine, redis):
+    def handler(request: httpx.Request):
+        if params_of(request).get("per_page") == ["1"]:
+            return count_response(500)
+        return httpx.Response(500, json={"message": "boom"})
+
+    deps = make_deps(clean, scripted_client(handler, []), redis)
+    stats = run_search_discovery(
+        deps,
+        "language:python",
+        sleep=lambda _: None,
+        now=lambda: 1000.0,
+        jitter=lambda: 0.0,
+    )
+
+    assert stats.fetched == 0
+    assert shard_state(clean, 1) == ("pending", False)
+    claimed = ShardQueue(redis, lanes=4).claim("probe", count=10)
+    assert [(item.shard_id, item.attempts) for item in claimed] == [(1, 1)]
+    assert ShardQueue(redis, lanes=4).pel_size() == 1
+
+
+def test_poison_shard_reaches_the_dlq_after_max_attempts(clean: Engine, redis):
+    def handler(request: httpx.Request):
+        if params_of(request).get("per_page") == ["1"]:
+            return count_response(500)
+        return httpx.Response(500, json={"message": "boom"})
+
+    deps = make_deps(clean, scripted_client(handler, []), redis)
+    for _ in range(3):
+        run_search_discovery(
+            deps,
+            "language:python",
+            sleep=lambda _: None,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+
+    assert redis.xlen("gitcrawl:shards:dlq") == 1
+    entry = redis.xrange("gitcrawl:shards:dlq")[0]
+    assert entry[1][b"shard_id"] == b"1"
+    assert shard_state(clean, 1) == ("pending", False)

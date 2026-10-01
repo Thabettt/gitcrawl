@@ -24,7 +24,7 @@ from discover.since_scan import iter_since_pages, save_checkpoint
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
 from scheduler.shard_planner import ShardPlanner, ShardSpec
-from scheduler.state_machine import ShardQueue, ShardRow, ShardState, ShardStore
+from scheduler.state_machine import QueuedShard, ShardQueue, ShardRow, ShardState, ShardStore
 from serve import audit
 from store.upserts import UpsertStats, dedupe_items, upsert_repos
 
@@ -243,7 +243,7 @@ def run_search_discovery(
             create_shard(spec)
         return True
 
-    def process(shard_id: int) -> None:
+    def process(shard_id: int, queued: QueuedShard | None = None) -> bool:
         row = store.get(shard_id)
         if row.query is None:
             raise ValueError(f"shard {shard_id} has no query")
@@ -283,8 +283,14 @@ def run_search_discovery(
             if spawn_narrower(row):
                 stats.cap_splits += 1
                 store.set_state(shard_id, ShardState.DONE, fetched=fetched, total_count=last_total)
-                return
+                return False
             incomplete = True
+        except RequestFailed:
+            store.set_state(shard_id, ShardState.PENDING)
+            if queued is None or queue is None:
+                raise
+            queue.retry_or_dlq(queued.stream_id, shard_id, attempts=queued.attempts + 1)
+            return True
         if incomplete:
             stats.incomplete_shards += 1
             store.set_state(
@@ -296,6 +302,7 @@ def run_search_discovery(
             )
         else:
             store.set_state(shard_id, ShardState.DONE, fetched=fetched, total_count=last_total)
+        return False
 
     consumer = f"gitcrawl-{os.getpid()}"
     if queue is None:
@@ -306,9 +313,14 @@ def run_search_discovery(
             claimed = queue.claim(consumer, count=1)
             if not claimed:
                 break
+            retried = False
             for queued in claimed:
-                process(queued.shard_id)
+                retried = process(queued.shard_id, queued)
+                if retried:
+                    break
                 queue.ack(queued.stream_id, queued.shard_id)
+            if retried:
+                break
 
     stats.repo_ids = tuple(collected_ids)
     _flush_audit(deps)
