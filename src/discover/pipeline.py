@@ -183,6 +183,7 @@ def run_search_discovery(
     per_page: int = 100,
     max_pages: int = 10,
     max_shards: int = 100,
+    total_count: int | None = None,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.time,
     jitter: Callable[[], float] | None = None,
@@ -219,7 +220,7 @@ def run_search_discovery(
             pending.append(shard_id)
         return shard_id
 
-    for spec in ShardPlanner(count_fn).plan(query):
+    for spec in ShardPlanner(count_fn, root_count=total_count).iter_plan(query):
         if create_shard(spec) is None:
             stats.plan_capped = True
             break

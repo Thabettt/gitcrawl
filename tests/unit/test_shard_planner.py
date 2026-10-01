@@ -83,6 +83,25 @@ def test_plan_is_deterministic():
     ).plan("q", now=NOW)
 
 
+def test_root_count_override_skips_root_probe():
+    count_fn, calls = uniform_count(per_day=500)
+
+    planner = ShardPlanner(count_fn, min_date=MIN_DATE, root_count=5000)
+    specs = planner.plan("q", now=NOW)
+    assert sum(spec.total_count for spec in specs) == 5000
+    assert "q" not in calls
+
+
+def test_iter_plan_probes_lazily():
+    count_fn, calls = uniform_count(per_day=5000)
+    iterator = ShardPlanner(count_fn, min_date=MIN_DATE).iter_plan("q", now=NOW)
+    first = next(iterator)
+    assert first.range_start.date() == MIN_DATE
+    # A full plan for this window probes 19 times (10 leaves); the first leaf
+    # must require only the root plus its ancestor halves.
+    assert len(calls) < 19
+
+
 def test_scan_target_forces_split_below_max_fetchable():
     count_fn, _ = uniform_count(per_day=50)
     planner = ShardPlanner(count_fn, scan_target=300, min_date=MIN_DATE)

@@ -509,6 +509,7 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
         query,
         max_shards=cfg.max_shards,
         max_pages=spec.max_pages,
+        total_count=total_count,
     )
     if stats.incomplete_shards > 0:
         warnings.append(

@@ -173,12 +173,12 @@ def test_run_filter_and_pipeline_share_count_total(clean: Engine, monkeypatch):
     deps = make_deps(clean, client)
 
     payload = run_filter(deps, spec_for(q="topic:ai"), config=RunnerConfig(max_shards=1))
-    assert calls == ["topic:ai", "topic:ai"]
+    assert calls == ["topic:ai"]
     assert payload.total_count == 0
     assert payload.items == []
 
     stats = run_search_discovery(deps, "language:rust")
-    assert calls == ["topic:ai", "topic:ai", "language:rust"]
+    assert calls == ["topic:ai", "language:rust"]
     assert stats.shards == 0
 
 
@@ -694,7 +694,7 @@ def test_make_runner_parses_filter_spec_dicts(clean: Engine):
 
     assert payload.total_count == 0
     assert payload.items == []
-    assert len(requests) == 2
+    assert len(requests) == 1
     assert all(is_count(request) for request in requests)
 
 
