@@ -49,6 +49,11 @@ class Repo(Base):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index("repos_owner_idx", "owner_id", postgresql_where=text("deleted_at IS NULL")),
+        Index(
+            "repos_deleted_idx",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)

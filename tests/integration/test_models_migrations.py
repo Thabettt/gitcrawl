@@ -130,6 +130,7 @@ EXPECTED_INDEXES = {
     "repos_updated_idx": "repos",
     "repos_stars_idx": "repos",
     "repos_owner_idx": "repos",
+    "repos_deleted_idx": "repos",
     "fnh_repo_idx": "full_name_history",
     "shards_state_idx": "shards",
     "audit_ts_idx": "audit_log",
@@ -295,6 +296,7 @@ def test_indexes_exist_with_partial_predicates(migrated: Engine):
         assert "WHERE (deleted_at IS NULL)" in defs[name]
     assert "stargazers DESC" in defs["repos_stars_idx"]
     assert "WHERE (deleted_at IS NULL)" in defs["repos_stars_idx"]
+    assert "(deleted_at) WHERE (deleted_at IS NOT NULL)" in defs["repos_deleted_idx"]
     assert defs["fnh_repo_idx"].endswith("(repo_id, seen_at)")
     assert defs["shards_state_idx"].endswith("(state, tier)")
     assert defs["audit_ts_idx"].endswith("(ts)")
@@ -322,6 +324,7 @@ def test_model_metadata_indexes_match_contract():
         "repos_updated_idx",
         "repos_stars_idx",
         "repos_owner_idx",
+        "repos_deleted_idx",
     }
     assert {index.name for index in Base.metadata.tables["full_name_history"].indexes} == {
         "fnh_repo_idx"
@@ -332,7 +335,7 @@ def test_model_metadata_indexes_match_contract():
         str(index.dialect_options["postgresql"]["where"])
         for index in Base.metadata.tables["repos"].indexes
     }
-    assert predicates == {"deleted_at IS NULL"}
+    assert predicates == {"deleted_at IS NULL", "deleted_at IS NOT NULL"}
 
 
 def test_guard_refuses_non_test_database():

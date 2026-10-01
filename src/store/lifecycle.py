@@ -114,8 +114,17 @@ def purge_tombstones(
     *,
     retention_days: int = 30,
     now: datetime | Callable[[], datetime] | None = None,
+    batch_size: int = 1000,
 ) -> int:
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
     cutoff = _resolve_now(now) - timedelta(days=retention_days)
-    with engine.begin() as connection:
-        result = connection.execute(delete(Repo).where(Repo.deleted_at < cutoff))
-    return result.rowcount
+    total = 0
+    while True:
+        with engine.begin() as connection:
+            ids = select(Repo.id).where(Repo.deleted_at < cutoff).limit(batch_size)
+            result = connection.execute(delete(Repo).where(Repo.id.in_(ids)))
+            removed = int(result.rowcount or 0)
+        total += removed
+        if removed < batch_size:
+            return total

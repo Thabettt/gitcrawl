@@ -506,6 +506,26 @@ def test_purge_tombstones_keeps_rows_at_exactly_the_retention_boundary(clean: En
     assert repo_ids(clean) == [1]
 
 
+def test_purge_tombstones_batches(clean: Engine):
+    from store.lifecycle import purge_tombstones, tombstone
+
+    seed(clean, "octo/a", repo_id=1)
+    seed(clean, "octo/b", repo_id=2)
+    seed(clean, "octo/c", repo_id=3)
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    for _, name in ((1, "octo/a"), (2, "octo/b"), (3, "octo/c")):
+        tombstone(clean, name, now=when)
+    removed = purge_tombstones(clean, retention_days=0, now=when + timedelta(days=1), batch_size=1)
+    assert removed == 3
+
+
+def test_purge_tombstones_rejects_non_positive_batch_size(clean: Engine):
+    from store.lifecycle import purge_tombstones
+
+    with pytest.raises(ValueError):
+        purge_tombstones(clean, batch_size=0)
+
+
 def test_refresh_repos_mixed_fixture_set(clean: Engine):
     from hydrate.tail import RefreshStats, refresh_repos
 
