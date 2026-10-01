@@ -4,7 +4,6 @@ import asyncio
 import difflib
 import os
 import re
-import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -39,12 +38,12 @@ from serve.pages import (
     render_library,
     validate_csrf,
 )
+from serve.payload_cache import CACHE_TTL_SECONDS, RunPayloadCache
 from serve.runner import apply_sort, build_deps, make_runner
 from serve.runs import bundle_file, export_bundle, latest_run_for_hash
 from serve.virtual_params import VIRTUAL_FILTERS
 from store.models import Owner, Repo, RunItem, Runs
 
-CACHE_TTL_SECONDS = 120.0
 DEFAULT_PER_PAGE = 20
 PER_PAGE_RANGE = (1, 100)
 READY_STATUSES = frozenset({"done", "partial"})
@@ -271,22 +270,6 @@ def _replay_body(engine: Engine, run_row: dict, run_id: int) -> dict:
     }
 
 
-def _cached_payload(
-    cache: dict[str, tuple[float, RunPayload]],
-    lock: threading.Lock,
-    key: str,
-    clock: Callable[[], float],
-) -> RunPayload | None:
-    with lock:
-        entry = cache.get(key)
-    if entry is None:
-        return None
-    stored_at, payload = entry
-    if clock() - stored_at >= CACHE_TTL_SECONDS:
-        return None
-    return payload
-
-
 def create_app(
     *,
     engine: Engine | None = None,
@@ -298,8 +281,7 @@ def create_app(
     token_present: Callable[[], bool] | None = None,
 ) -> FastAPI:
     state: dict[str, object] = {"engine": engine, "runner": None, "executor": None}
-    cache: dict[str, tuple[float, RunPayload]] = {}
-    lock = threading.Lock()
+    payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
     application = FastAPI(title="gitcrawl", version="0.0.1")
 
     def engine_for() -> Engine:
@@ -389,26 +371,25 @@ def create_app(
                 },
             )
         key = spec_hash(spec)
-        payload = _cached_payload(cache, lock, key, clock)
-        if payload is None:
+        try:
             runner = runner_for()
-            try:
-                payload = executor_for().submit_call(lambda: runner(0, spec_to_dict(spec))).result()
-            except (RequestFailed, PartialResultsError):
-                return JSONResponse(
-                    status_code=502,
-                    content={"error": "upstream_unavailable", "retry_after_ms": 0},
-                )
-            except ThrottledError as exc:
-                return JSONResponse(
-                    status_code=502,
-                    content={
-                        "error": "upstream_unavailable",
-                        "retry_after_ms": int(exc.retry_after * 1000),
-                    },
-                )
-            with lock:
-                cache[key] = (clock(), payload)
+            payload = payload_cache.run_once(
+                key,
+                lambda: executor_for().submit_call(lambda: runner(0, spec_to_dict(spec))).result(),
+            )
+        except (RequestFailed, PartialResultsError):
+            return JSONResponse(
+                status_code=502,
+                content={"error": "upstream_unavailable", "retry_after_ms": 0},
+            )
+        except ThrottledError as exc:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": "upstream_unavailable",
+                    "retry_after_ms": int(exc.retry_after * 1000),
+                },
+            )
         rendered = apply_sort(_render_items(engine_for(), payload.items), spec.sort, spec.order)
         start = (page_number - 1) * per_page
         return {
