@@ -4,9 +4,11 @@ import asyncio
 import difflib
 import os
 import re
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -271,6 +273,31 @@ def _replay_body(engine: Engine, run_row: dict, run_id: int) -> dict:
     }
 
 
+class _LazyLoaders:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._gates: dict[str, threading.Lock] = {}
+        self._values: dict[str, object] = {}
+
+    def seed(self, key: str, value: object) -> None:
+        with self._lock:
+            self._values[key] = value
+
+    def get(self, key: str, factory: Callable[[], object]) -> object:
+        with self._lock:
+            if key in self._values:
+                return self._values[key]
+            gate = self._gates.setdefault(key, threading.Lock())
+        with gate:
+            with self._lock:
+                if key in self._values:
+                    return self._values[key]
+            value = factory()
+            with self._lock:
+                self._values[key] = value
+            return value
+
+
 def create_app(
     *,
     engine: Engine | None = None,
@@ -281,36 +308,35 @@ def create_app(
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
 ) -> FastAPI:
-    state: dict[str, object] = {"engine": engine, "runner": None, "executor": None}
+    loaders = _LazyLoaders()
     payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
     application = FastAPI(title="gitcrawl", version="0.0.1")
 
+    def build_engine() -> Engine:
+        url = os.environ.get("DATABASE_URL")
+        if not url:
+            raise RuntimeError("DATABASE_URL is not configured")
+        return create_engine(url)
+
+    if engine is not None:
+        loaders.seed("engine", engine)
+
     def engine_for() -> Engine:
-        bound = state["engine"]
-        if bound is None:
-            url = os.environ.get("DATABASE_URL")
-            if not url:
-                raise RuntimeError("DATABASE_URL is not configured")
-            bound = create_engine(url)
-            state["engine"] = bound
-        return bound
+        return cast(Engine, loaders.get("engine", build_engine))
 
     def runner_for() -> Runner:
-        bound = state["runner"]
-        if bound is None:
+        def build() -> Runner:
             if runner_factory is None:
-                bound = make_runner(build_deps(engine_for()))
-            else:
-                bound = runner_factory(engine_for())
-            state["runner"] = bound
-        return bound
+                return make_runner(build_deps(engine_for()))
+            return runner_factory(engine_for())
+
+        return cast(Runner, loaders.get("runner", build))
 
     def executor_for() -> RunExecutor:
-        bound = state["executor"]
-        if not isinstance(bound, RunExecutor):
-            bound = RunExecutor(engine_for(), runs_root=runs_root)
-            state["executor"] = bound
-        return bound
+        def build() -> RunExecutor:
+            return RunExecutor(engine_for(), runs_root=runs_root)
+
+        return cast(RunExecutor, loaders.get("executor", build))
 
     @application.get("/vsearch/repos")
     def list_repos(request: Request):
