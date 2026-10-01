@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from discover.search_shards import RequestFailed
-from lib.gh_client import API_VERSION, ThrottledError
+from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve.app import create_app
 from serve.executor import RunPayload, RunPayloadItem
 from serve.filter_spec import parse_filter_spec, spec_hash
@@ -111,14 +111,31 @@ def expected_item() -> dict:
     }
 
 
-def make_client(engine: Engine, runner, *, clock=lambda: 0.0, runs_root="runs") -> TestClient:
+def make_client(
+    engine: Engine, runner=None, *, factory=None, clock=lambda: 0.0, runs_root="runs"
+) -> TestClient:
+    if factory is None:
+
+        def factory(_engine):
+            return runner
+
     application = create_app(
         engine=engine,
-        runner_factory=lambda _engine: runner,
+        runner_factory=factory,
         runs_root=str(runs_root),
         clock=clock,
     )
-    return TestClient(application)
+    return TestClient(application, raise_server_exceptions=False)
+
+
+def sso_partial_error() -> PartialResultsError:
+    request = httpx.Request("GET", "https://api.github.com/users/alice")
+    response = httpx.Response(
+        200,
+        headers={"x-github-sso": "required; partial-results"},
+        request=request,
+    )
+    return PartialResultsError(response)
 
 
 def counting_runner(payload: RunPayload, calls: list):
@@ -234,9 +251,9 @@ def test_get_slices_pages_from_the_same_cached_payload(clean: Engine, tmp_path):
     assert first.status_code == second.status_code == third.status_code == 200
     assert first.json()["total_count"] == 3
     assert first.json()["incomplete"] is True
-    assert [item["id"] for item in first.json()["items"]] == [1, 2]
-    assert [item["id"] for item in second.json()["items"]] == [1, 2]
-    assert [item["id"] for item in third.json()["items"]] == [3]
+    assert [item["id"] for item in first.json()["items"]] == [3, 2]
+    assert [item["id"] for item in second.json()["items"]] == [3, 2]
+    assert [item["id"] for item in third.json()["items"]] == [1]
     assert len(calls) == 1
 
     now[0] += 121.0
@@ -250,6 +267,7 @@ def test_get_slices_pages_from_the_same_cached_payload(clean: Engine, tmp_path):
     [
         (RequestFailed(500, "upstream body that must never leak"), 0),
         (ThrottledError(12.5), 12500),
+        (sso_partial_error(), 0),
     ],
 )
 def test_get_maps_upstream_failures_to_a_sanitized_502(
@@ -316,6 +334,7 @@ def test_post_run_persists_and_returns_the_run_payload(clean: Engine, tmp_path):
     [
         (RequestFailed(500, "upstream body that must never leak"), 0),
         (ThrottledError(2.0), 2000),
+        (sso_partial_error(), 0),
     ],
 )
 def test_post_maps_upstream_failures_to_a_sanitized_502(
@@ -333,6 +352,35 @@ def test_post_maps_upstream_failures_to_a_sanitized_502(
         "retry_after_ms": retry_after_ms,
     }
     assert "upstream body" not in response.text
+
+
+def test_post_non_upstream_run_failure_is_500_and_never_200(clean: Engine, tmp_path):
+    def runner(run_id: int, filter_spec: dict) -> RunPayload:
+        raise RuntimeError("boom")
+
+    client = make_client(clean, runner, runs_root=tmp_path)
+    response = client.post("/vsearch/run", json={"gitcrawl_filter": 1, "q": "language:rust"})
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "run_failed"}
+    assert "boom" not in response.text
+    with clean.connect() as connection:
+        row = connection.execute(text("SELECT status, error FROM runs")).one()
+    assert row[0] == "failed"
+    assert "boom" in row[1]
+
+
+def test_post_runner_factory_failure_is_500_without_orphan_run(clean: Engine, tmp_path):
+    def factory(_engine):
+        raise ValueError("no GitHub token configured")
+
+    client = make_client(clean, factory=factory, runs_root=tmp_path)
+    response = client.post("/vsearch/run", json={"gitcrawl_filter": 1, "q": "language:rust"})
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "internal_error"}
+    with clean.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM runs")) == 0
 
 
 def test_post_invalid_spec_is_400_with_errors_and_hints(clean: Engine, tmp_path):
@@ -368,6 +416,57 @@ def test_replay_returns_the_latest_run_and_404_when_unknown(clean: Engine, tmp_p
     missing = client.get("/vsearch/runs/" + "0" * 64)
     assert missing.status_code == 404
     assert missing.json()["error"] == "run_not_found"
+
+
+def test_sort_order_is_shared_by_get_post_and_replay(clean: Engine, tmp_path):
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO owners (id, login, type) VALUES "
+                "(2, 'octo2', 'User'), (3, 'octo3', 'User')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility, "
+                "stargazers, forks_count, pushed_at) VALUES "
+                "(2, 'R_2', 'octo2/a', 2, 'a', 'public', 5, 50, '2020-01-01T00:00:00Z'), "
+                "(3, 'R_3', 'octo3/b', 3, 'b', 'public', 1, 1, '2021-01-01T00:00:00Z')"
+            )
+        )
+    calls: list = []
+    items = [
+        payload_item(),
+        payload_item(
+            repo_id=3, full_name="octo3/b", stargazers=1, pushed_at="2021-01-01T00:00:00Z"
+        ),
+        payload_item(
+            repo_id=2, full_name="octo2/a", stargazers=5, pushed_at="2020-01-01T00:00:00Z"
+        ),
+    ]
+    client = make_client(
+        clean,
+        counting_runner(RunPayload(total_count=3, fetched=3, items=items), calls),
+        runs_root=tmp_path,
+    )
+
+    desc = client.get("/vsearch/repos", params={"q": "language:rust", "sort": "forks"})
+    asc = client.get(
+        "/vsearch/repos", params={"q": "language:rust", "sort": "forks", "order": "asc"}
+    )
+
+    assert [item["id"] for item in desc.json()["items"]] == [2, 1296269, 3]
+    assert [item["id"] for item in asc.json()["items"]] == [3, 1296269, 2]
+
+    document = {"gitcrawl_filter": 1, "q": "language:rust", "sort": "forks", "order": "desc"}
+    created = client.post("/vsearch/run", json=document)
+    assert created.status_code == 200
+    post_ids = [item["id"] for item in created.json()["items"]]
+    assert post_ids == [2, 1296269, 3]
+
+    replayed = client.get(f"/vsearch/runs/{created.json()['filter_hash']}")
+    assert replayed.status_code == 200
+    assert [item["id"] for item in replayed.json()["items"]] == post_ids
 
 
 def test_get_never_forwards_unknown_params_upstream(clean: Engine, tmp_path):

@@ -23,7 +23,7 @@ from serve.filter_spec import (
     spec_hash,
     spec_to_dict,
 )
-from serve.runner import build_deps, make_runner
+from serve.runner import apply_sort, build_deps, make_runner
 from serve.virtual_params import VIRTUAL_FILTERS
 from store.models import Owner, Repo, RunItem, Runs
 
@@ -199,9 +199,7 @@ def _run_items(engine: Engine, run_id: int) -> list[RunPayloadItem]:
                 RunItem.country_iso,
                 RunItem.geo_confidence,
                 RunItem.virtuals,
-            )
-            .where(RunItem.run_id == run_id)
-            .order_by(RunItem.stargazers.desc().nullslast(), RunItem.repo_id)
+            ).where(RunItem.run_id == run_id)
         ).mappings()
         return [
             RunPayloadItem(
@@ -222,6 +220,10 @@ def _run_items(engine: Engine, run_id: int) -> list[RunPayloadItem]:
 
 def _replay_body(engine: Engine, run_row: dict, run_id: int) -> dict:
     items = _render_items(engine, _run_items(engine, run_id))
+    filter_spec = run_row["filter_spec"]
+    sort = filter_spec.get("sort") if isinstance(filter_spec, dict) else None
+    order = filter_spec.get("order") if isinstance(filter_spec, dict) else None
+    items = apply_sort(items, sort, order)
     return {
         "filter_hash": run_row["filter_hash"],
         "ran_at": _iso(run_row["finished_at"] or run_row["created_at"]),
@@ -335,7 +337,7 @@ def create_app(
         if payload is None:
             try:
                 payload = runner_for()(0, spec_to_dict(spec))
-            except RequestFailed:
+            except (RequestFailed, PartialResultsError):
                 return JSONResponse(
                     status_code=502,
                     content={"error": "upstream_unavailable", "retry_after_ms": 0},
@@ -350,7 +352,7 @@ def create_app(
                 )
             with lock:
                 cache[key] = (clock(), payload)
-        rendered = _render_items(engine_for(), payload.items)
+        rendered = apply_sort(_render_items(engine_for(), payload.items), spec.sort, spec.order)
         start = (page_number - 1) * per_page
         return {
             "total_count": len(rendered),
@@ -392,9 +394,12 @@ def create_app(
                 },
             )
         bound_engine = engine_for()
+        try:
+            runner = runner_for()
+        except Exception:
+            return JSONResponse(status_code=500, content={"error": "internal_error"})
         run_id = create_run(bound_engine, spec_to_dict(spec), api_version=API_VERSION)
         captured: list[BaseException] = []
-        runner = runner_for()
 
         def capturing(rid: int, filter_spec: dict) -> RunPayload:
             try:
@@ -419,8 +424,11 @@ def create_app(
                     status_code=502,
                     content={"error": "upstream_unavailable", "retry_after_ms": 0},
                 )
+            return JSONResponse(status_code=500, content={"error": "run_failed"})
         with bound_engine.connect() as connection:
             run_row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one()
+        if run_row["status"] == "failed":
+            return JSONResponse(status_code=500, content={"error": "run_failed"})
         return _replay_body(bound_engine, run_row, run_id)
 
     @application.get("/vsearch/runs/{filter_hash}")

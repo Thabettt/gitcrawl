@@ -78,13 +78,15 @@ def count_response(total: int) -> httpx.Response:
     )
 
 
-def page_response(items, *, next_url: str | None = None) -> httpx.Response:
+def page_response(
+    items, *, incomplete: bool = False, next_url: str | None = None
+) -> httpx.Response:
     headers = dict(SEARCH_HEADERS)
     if next_url is not None:
         headers["Link"] = f'<{next_url}>; rel="next"'
     return httpx.Response(
         200,
-        json={"total_count": len(items), "items": items, "incomplete_results": False},
+        json={"total_count": len(items), "items": items, "incomplete_results": incomplete},
         headers=headers,
     )
 
@@ -198,9 +200,35 @@ def test_run_filter_honors_shard_candidate_and_hydrate_caps(clean: Engine):
 
     assert [item.repo_id for item in payload.items] == [2, 3]
     assert payload.fetched == 3
+    assert payload.incomplete is True
+    assert any("max_candidates=2" in warning for warning in payload.warnings)
+    assert any("max_hydrate=1" in warning for warning in payload.warnings)
     assert len([request for request in requests if is_search_page(request)]) == 1
     hydration = [path_of(request) for request in requests if path_of(request).startswith("/repos/")]
     assert hydration == ["/repos/owner2/repo2"]
+
+
+def test_run_filter_marks_incomplete_when_a_discovery_shard_is_incomplete(clean: Engine):
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(1)
+            return page_response([repo_item(1)], incomplete=True)
+        if path == "/repos/owner1/repo1":
+            return httpx.Response(200, json=repo_item(1))
+        return httpx.Response(404)
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="topic:ai"),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert [item.repo_id for item in payload.items] == [1]
+    assert payload.incomplete is True
+    assert any("shard" in warning and "incomplete" in warning for warning in payload.warnings)
 
 
 def test_run_filter_applies_db_filters_and_builds_payload(clean: Engine):
@@ -243,6 +271,63 @@ def test_run_filter_applies_db_filters_and_builds_payload(clean: Engine):
     assert item.country_iso is None
     assert item.geo_confidence is None
     assert item.virtuals == {"min_stars": 5, "team_topic": "rust"}
+
+
+def _sort_fixture_handler():
+    page = [
+        repo_item(1, stars=10, forks_count=5, pushed_at="2026-03-01T00:00:00Z"),
+        repo_item(2, stars=30, forks_count=1, pushed_at="2026-01-01T00:00:00Z"),
+        repo_item(3, stars=20, forks_count=9, pushed_at="2026-02-01T00:00:00Z"),
+    ]
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(3)
+            return page_response(page)
+        if path.startswith("/repos/"):
+            repo_id = int(path.rsplit("repo", 1)[1])
+            return httpx.Response(200, json=page[repo_id - 1])
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("sort", "order", "expected"),
+    [
+        ("stars", "desc", [2, 3, 1]),
+        ("stars", "asc", [1, 3, 2]),
+        ("forks", "desc", [3, 1, 2]),
+        ("forks", "asc", [2, 1, 3]),
+        ("updated", "desc", [1, 3, 2]),
+        ("updated", "asc", [2, 3, 1]),
+    ],
+)
+def test_run_filter_sorts_survivors_locally(clean: Engine, sort, order, expected):
+    client, _ = scripted(_sort_fixture_handler())
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", sort=sort, order=order),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert [item.repo_id for item in payload.items] == expected
+    assert payload.incomplete is False
+
+
+def test_run_filter_keeps_survivor_order_for_help_wanted_issues(clean: Engine):
+    client, _ = scripted(_sort_fixture_handler())
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", sort="help-wanted-issues", order="desc"),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert [item.repo_id for item in payload.items] == [2, 3, 1]
+    assert payload.incomplete is True
+    assert any("help-wanted-issues" in warning for warning in payload.warnings)
 
 
 def test_run_filter_records_r44_warnings_and_marks_incomplete(clean: Engine):
@@ -335,6 +420,8 @@ def test_run_filter_owner_country_filters_and_bounds_owner_fetches(clean: Engine
     assert [item.repo_id for item in payload.items] == [1]
     assert payload.items[0].country_iso == "DE"
     assert payload.items[0].geo_confidence == "name"
+    assert payload.incomplete is True
+    assert any("owner country could not be resolved" in warning for warning in payload.warnings)
     fetched_owners = [
         path_of(request).rsplit("/", 1)[1]
         for request in requests
@@ -384,6 +471,10 @@ def test_run_filter_has_dockerfile_true_enforces_presence_and_budget(clean: Engi
 
     assert [item.repo_id for item in payload.items] == [1]
     assert payload.items[0].virtuals["has_dockerfile"] is True
+    assert payload.incomplete is True
+    assert any(
+        "Dockerfile presence could not be checked" in warning for warning in payload.warnings
+    )
     tree_requests = [path_of(request) for request in requests if "/git/trees/" in path_of(request)]
     assert tree_requests == ["/repos/owner1/repo1/git/trees/main"]
 
@@ -477,7 +568,44 @@ def test_run_filter_tolerates_tree_fetch_failure(clean: Engine):
     )
 
     assert payload.items == []
-    assert payload.incomplete is False
+    assert payload.incomplete is True
+    assert any(
+        "Dockerfile presence could not be checked" in warning for warning in payload.warnings
+    )
+
+
+def test_run_filter_tolerates_owner_fetch_sso_partial_results(clean: Engine):
+    page = [repo_item(1, login="alice", stars=30), repo_item(2, login="bob", stars=20)]
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(2)
+            return page_response(page)
+        if path.startswith("/repos/"):
+            login = path.split("/")[2]
+            repo_id = int(path.rsplit("repo", 1)[1])
+            return httpx.Response(200, json=repo_item(repo_id, login=login))
+        if path == "/users/alice":
+            return httpx.Response(
+                200,
+                json={"login": "alice", "location": "Berlin, Germany"},
+                headers={"x-github-sso": "required; partial-results"},
+            )
+        if path == "/users/bob":
+            return httpx.Response(200, json={"login": "bob", "location": "Germany"})
+        return httpx.Response(404)
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"owner_country": "DE"}),
+        config=RunnerConfig(max_shards=1, max_enrich=5),
+    )
+
+    assert [item.repo_id for item in payload.items] == [2]
+    assert payload.incomplete is True
 
 
 def test_build_deps_requires_a_token(clean: Engine, monkeypatch):

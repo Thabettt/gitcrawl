@@ -132,6 +132,7 @@ def _load_rows(engine: Engine, repo_ids: list[int]) -> dict[int, dict]:
                 Repo.full_name,
                 Repo.owner_id,
                 Repo.stargazers,
+                Repo.forks_count,
                 Repo.pushed_at,
                 Repo.archived,
                 Repo.language,
@@ -225,14 +226,17 @@ def _fetch_owner_location(
     login: str,
     hook: Callable[[httpx.Response, float], None],
 ) -> tuple[bool, str | None]:
-    response = request_with_retry(
-        deps.client,
-        "GET",
-        f"{API_BASE}/users/{login}",
-        limiter=deps.limiter,
-        token_id=deps.token_id,
-        on_response=hook,
-    )
+    try:
+        response = request_with_retry(
+            deps.client,
+            "GET",
+            f"{API_BASE}/users/{login}",
+            limiter=deps.limiter,
+            token_id=deps.token_id,
+            on_response=hook,
+        )
+    except PartialResultsError:
+        return False, None
     if response.status_code != 200:
         return False, None
     try:
@@ -274,11 +278,11 @@ def _apply_geo(
     virtual: dict,
     budget: int,
     hook: Callable[[httpx.Response, float], None],
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int, int]:
     country = virtual.get("owner_country")
     threshold = virtual.get("min_geo_confidence")
     if country is None and threshold is None:
-        return rows, 0
+        return rows, 0, 0
     owner_ids: list[int] = []
     for row in rows:
         if row["owner_id"] not in owner_ids:
@@ -311,22 +315,28 @@ def _apply_geo(
     if isinstance(threshold, str) and threshold in GEO_CONFIDENCE_ORDER:
         threshold_index = GEO_CONFIDENCE_ORDER.index(threshold)
     kept: list[dict] = []
+    skipped = 0
     for row in rows:
         owner = owners.get(row["owner_id"])
         if owner is None:
+            skipped += 1
+            continue
+        if country is not None and owner["country_iso"] is None:
+            skipped += 1
             continue
         if country is not None and owner["country_iso"] != country:
             continue
         if threshold_index is not None:
             confidence = owner["geo_confidence"]
             if confidence not in GEO_CONFIDENCE_ORDER:
+                skipped += 1
                 continue
             if GEO_CONFIDENCE_ORDER.index(confidence) > threshold_index:
                 continue
         row["country_iso"] = owner["country_iso"]
         row["geo_confidence"] = owner["geo_confidence"]
         kept.append(row)
-    return kept, used
+    return kept, used, skipped
 
 
 def _apply_dockerfile(
@@ -335,13 +345,15 @@ def _apply_dockerfile(
     wanted: object,
     budget: int,
     hook: Callable[[httpx.Response, float], None],
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     if not isinstance(wanted, bool):
-        return rows
+        return rows, 0
     kept: list[dict] = []
+    skipped = 0
     remaining = budget
     for row in rows:
         if remaining <= 0:
+            skipped += 1
             continue
         try:
             presence = fetch_tree(
@@ -353,13 +365,14 @@ def _apply_dockerfile(
                 on_response=hook,
             )
         except (RequestFailed, ThrottledError, PartialResultsError):
+            skipped += 1
             continue
         remaining -= 1
         has_dockerfile = presence.has(_DOCKERFILE_PATH)
         row["has_dockerfile"] = has_dockerfile
         if has_dockerfile == wanted:
             kept.append(row)
-    return kept
+    return kept, skipped
 
 
 def _payload_item(row: dict, virtual: dict) -> RunPayloadItem:
@@ -388,9 +401,32 @@ def _r44_warnings(virtual: dict) -> list[str]:
     ]
 
 
+def _as_number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _sort_key(item: dict, sort: str | None) -> tuple:
+    if sort == "forks":
+        primary: object = _as_number(item.get("forks_count"))
+    elif sort == "updated":
+        primary = item.get("pushed_at") or ""
+    else:
+        primary = _as_number(item.get("stargazers"))
+    return (primary, item.get("pushed_at") or "", _as_number(item.get("id")))
+
+
+def apply_sort(items: list[dict], sort: str | None, order: str | None) -> list[dict]:
+    if not items or sort == "help-wanted-issues":
+        return items
+    return sorted(items, key=lambda item: _sort_key(item, sort), reverse=order != "asc")
+
+
 def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
     cfg = config or RunnerConfig()
-    warnings = _r44_warnings(dict(spec.virtual))
+    virtual = dict(spec.virtual)
+    warnings = _r44_warnings(virtual)
     query = spec_to_query(spec)
     total_count = pipeline.count_total(deps, query)
     stats = pipeline.run_search_discovery(
@@ -399,20 +435,53 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
         max_shards=cfg.max_shards,
         max_pages=spec.max_pages,
     )
+    if stats.incomplete_shards > 0:
+        warnings.append(
+            f"{stats.incomplete_shards} discovery shard(s) incomplete; results are partial"
+        )
     hook = _audit_hook(deps)
-    candidates = _ordered_rows(deps.engine, list(stats.repo_ids))[: cfg.max_candidates]
+    ordered = _ordered_rows(deps.engine, list(stats.repo_ids))
+    dropped_candidates = max(0, len(ordered) - cfg.max_candidates)
+    if dropped_candidates > 0:
+        warnings.append(
+            f"{dropped_candidates} candidate(s) dropped by max_candidates="
+            f"{cfg.max_candidates}; results are incomplete"
+        )
+    candidates = ordered[: cfg.max_candidates]
+    dropped_hydration = max(0, len(candidates) - cfg.max_hydrate)
+    if dropped_hydration > 0:
+        warnings.append(
+            f"{dropped_hydration} repo(s) not hydrated due to max_hydrate="
+            f"{cfg.max_hydrate}; results are incomplete"
+        )
     _hydrate(deps, candidates, cfg.max_hydrate, hook)
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
-    rows = _apply_db_filters(rows, dict(spec.virtual))
-    rows, used = _apply_geo(deps, rows, dict(spec.virtual), cfg.max_enrich, hook)
-    rows = _apply_dockerfile(
-        deps, rows, spec.virtual.get("has_dockerfile"), cfg.max_enrich - used, hook
+    rows = _apply_db_filters(rows, virtual)
+    rows, used, geo_skipped = _apply_geo(deps, rows, virtual, cfg.max_enrich, hook)
+    if geo_skipped > 0:
+        warnings.append(
+            f"{geo_skipped} repo(s) skipped because owner country could not be resolved; "
+            "results are incomplete"
+        )
+    rows, dockerfile_skipped = _apply_dockerfile(
+        deps, rows, virtual.get("has_dockerfile"), cfg.max_enrich - used, hook
     )
-    items = [_payload_item(row, dict(spec.virtual)) for row in rows]
+    if dockerfile_skipped > 0:
+        warnings.append(
+            f"{dockerfile_skipped} repo(s) skipped because Dockerfile presence could not be "
+            "checked; results are incomplete"
+        )
+    if spec.sort == "help-wanted-issues":
+        warnings.append(
+            "sort=help-wanted-issues has no local data; survivor order kept and results are "
+            "incomplete"
+        )
+    rows = apply_sort(rows, spec.sort, spec.order)
+    items = [_payload_item(row, virtual) for row in rows]
     return RunPayload(
         total_count=total_count,
         fetched=stats.fetched,
-        incomplete=bool(warnings),
+        incomplete=bool(warnings) or stats.incomplete_shards > 0,
         warnings=warnings,
         items=items,
     )

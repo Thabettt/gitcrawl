@@ -465,6 +465,37 @@ def test_refresh_repos_mixed_fixture_set(clean: Engine):
     assert repo_row(clean, 4)["deleted_at"] is not None
 
 
+def test_refresh_repos_counts_sso_partial_failures_and_continues(clean: Engine, monkeypatch):
+    import hydrate.tail as tail_module
+    from hydrate.repo_client import HydratedRepo
+    from hydrate.tail import RefreshStats, refresh_repos
+    from lib.gh_client import PartialResultsError
+
+    seed(clean, "octo/a", repo_id=1)
+    seed(clean, "octo/b", repo_id=2)
+    calls: list[str] = []
+
+    def fake_hydrate(client, full_name, **kwargs) -> HydratedRepo:
+        calls.append(full_name)
+        if full_name == "octo/a":
+            request = httpx.Request("GET", "https://api.github.com/repos/octo/a")
+            response = httpx.Response(
+                200,
+                headers={"x-github-sso": "required; partial-results"},
+                request=request,
+            )
+            raise PartialResultsError(response)
+        return HydratedRepo(
+            id=2, node_id="R_2", full_name="octo/b", payload=None, etag=None, not_modified=True
+        )
+
+    monkeypatch.setattr(tail_module, "hydrate_repo", fake_hydrate)
+    stats = refresh_repos(clean, object(), ["octo/a", "octo/b"])
+    assert stats == RefreshStats(failed=1, not_modified=1)
+    assert calls == ["octo/a", "octo/b"]
+    assert repo_count(clean) == 2
+
+
 def test_refresh_repos_counts_throttled_failures_and_continues(clean: Engine, monkeypatch):
     import hydrate.tail as tail_module
     from hydrate.repo_client import HydratedRepo

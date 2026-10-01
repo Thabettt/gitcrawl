@@ -10,7 +10,7 @@ from sqlalchemy.engine import Engine
 
 from discover.search_shards import RequestFailed
 from hydrate.repo_client import RepoNotFound, hydrate_repo
-from lib.gh_client import ThrottledError
+from lib.gh_client import PartialResultsError, ThrottledError
 from limiter.buckets import BucketLimiter
 from store.lifecycle import apply_hydration
 from store.models import Repo
@@ -67,7 +67,7 @@ def refresh_repos(
             apply_hydration(engine, full_name, None, not_found=True)
             stats.tombstoned += 1
             continue
-        except (RequestFailed, ThrottledError):
+        except (RequestFailed, ThrottledError, PartialResultsError):
             stats.failed += 1
             continue
         if hydrated.not_modified:
