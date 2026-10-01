@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import fakeredis
@@ -13,6 +15,8 @@ from discover import pipeline
 from discover.pipeline import Deps, run_search_discovery
 from lib.gh_client import token_fingerprint
 from limiter.buckets import BucketLimiter
+from serve import runner as runner_module
+from serve.executor import create_run, execute_run, run_status
 from serve.filter_spec import parse_filter_spec
 from serve.runner import RunnerConfig, build_deps, make_runner, run_filter
 
@@ -641,3 +645,95 @@ def test_make_runner_parses_filter_spec_dicts(clean: Engine):
     assert payload.items == []
     assert len(requests) == 2
     assert all(is_count(request) for request in requests)
+
+
+def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, monkeypatch):
+    page = [repo_item(1, login="alice", stars=30), repo_item(2, login="bob", stars=20)]
+    trees = {
+        "/repos/alice/repo1/git/trees/main": {"tree": [{"path": "Dockerfile", "type": "blob"}]},
+    }
+    events: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(2)
+            return page_response(page)
+        if path in trees:
+            events.append(("tree", path))
+            return httpx.Response(200, json={**trees[path], "truncated": False})
+        if path.startswith("/repos/"):
+            login = path.split("/")[2]
+            repo_id = int(path.rsplit("repo", 1)[1])
+            return httpx.Response(200, json=repo_item(repo_id, login=login))
+        if path.startswith("/users/"):
+            login = path.rsplit("/", 1)[1]
+            events.append(("user", login))
+            location = "Germany" if login == "alice" else "Berlin"
+            return httpx.Response(200, json={"login": login, "location": location})
+        return httpx.Response(404)
+
+    real_plan = runner_module.plan_enrichment
+    plans: list[tuple[tuple[str, ...], str]] = []
+
+    def spy(requested, *, depth="page"):
+        plans.append((tuple(requested), depth))
+        return real_plan(requested, depth=depth)
+
+    monkeypatch.setattr(runner_module, "plan_enrichment", spy)
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(
+            q="language:python",
+            virtual={"has_dockerfile": True, "owner_country": "DE", "min_geo_confidence": "name"},
+        ),
+        config=RunnerConfig(max_shards=1, max_enrich=5),
+    )
+
+    assert plans == [(("has_dockerfile", "owner_country", "min_geo_confidence"), "page")]
+    assert events == [
+        ("user", "alice"),
+        ("user", "bob"),
+        ("tree", "/repos/alice/repo1/git/trees/main"),
+    ]
+    assert [item.repo_id for item in payload.items] == [1]
+    assert payload.field_stats == {
+        "per_field_sources": {"owner_country": 1, "min_geo_confidence": 1, "has_dockerfile": 1},
+        "calls_spent": {"owner_country": 2, "min_geo_confidence": 0, "has_dockerfile": 1},
+        "requeues": 0,
+    }
+
+
+def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
+    page = [repo_item(1, stars=11, topics=("rust",)), repo_item(2, stars=3, topics=("rust",))]
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(2)
+            return page_response(page)
+        if path == "/repos/owner1/repo1":
+            return httpx.Response(200, json=repo_item(1, stars=11, topics=("rust",)))
+        return httpx.Response(404)
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"min_stars": 5, "team_topic": "rust"}),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert payload.field_stats == {
+        "per_field_sources": {"min_stars": 1, "team_topic": 1},
+        "calls_spent": {"min_stars": 0, "team_topic": 0},
+        "requeues": 0,
+    }
+
+    run_id = create_run(clean, {"gitcrawl_filter": 1, "q": "language:python"}, api_version="v1")
+    execute_run(clean, run_id, runner=lambda rid, spec: payload, runs_root=str(tmp_path))
+    status = run_status(clean, run_id)
+    bundle = json.loads((Path(status["bundle_dir"]) / "bundle.json").read_text(encoding="utf-8"))
+    assert bundle["field_stats"] == payload.field_stats

@@ -39,6 +39,7 @@ class RunPayload:
     incomplete: bool = False
     fetched: int | None = None
     warnings: list[str] = field(default_factory=list)
+    field_stats: dict = field(default_factory=dict)
 
 
 Runner = Callable[[int, dict], RunPayload]
@@ -175,6 +176,7 @@ def _write_bundle(run: dict, payload: RunPayload, runs_root: str) -> str:
         "fetched": payload.fetched,
         "incomplete": payload.incomplete,
         "items": [_bundle_item(item) for item in payload.items],
+        "field_stats": payload.field_stats,
     }
     (directory / "bundle.json").write_text(
         json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8"

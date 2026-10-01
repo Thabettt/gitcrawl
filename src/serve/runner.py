@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlparse
 
@@ -13,7 +13,9 @@ from sqlalchemy.engine import Engine
 from discover import pipeline
 from discover.pipeline import Deps
 from discover.search_shards import RequestFailed
+from enrich.cost_planner import plan_enrichment
 from enrich.geo_resolver import GeoResult, resolve_owner
+from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import refresh_repos
 from lib.gh_client import (
@@ -345,11 +347,12 @@ def _apply_dockerfile(
     wanted: object,
     budget: int,
     hook: Callable[[httpx.Response, float], None],
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int, int]:
     if not isinstance(wanted, bool):
-        return rows, 0
+        return rows, 0, 0
     kept: list[dict] = []
     skipped = 0
+    used = 0
     remaining = budget
     for row in rows:
         if remaining <= 0:
@@ -368,11 +371,70 @@ def _apply_dockerfile(
             skipped += 1
             continue
         remaining -= 1
+        used += 1
         has_dockerfile = presence.has(_DOCKERFILE_PATH)
         row["has_dockerfile"] = has_dockerfile
         if has_dockerfile == wanted:
             kept.append(row)
-    return kept, skipped
+    return kept, skipped, used
+
+
+def _record_handler(rows_by_id: dict[int, dict], field: str, virtual: dict):
+    value = virtual[field]
+
+    def handler(ids):
+        kept = _apply_db_filters([rows_by_id[repo_id] for repo_id in ids], {field: value})
+        return [row["id"] for row in kept], 0
+
+    return handler
+
+
+def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped):
+    def handler(ids):
+        rows = [rows_by_id[repo_id] for repo_id in ids]
+        kept, used, geo_skipped = _apply_geo(deps, rows, virtual, budget["remaining"], hook)
+        budget["remaining"] = max(0, budget["remaining"] - used)
+        skipped["geo"] += geo_skipped
+        return [row["id"] for row in kept], used
+
+    return handler
+
+
+def _dockerfile_handler(deps, rows_by_id, wanted, budget, hook, skipped):
+    def handler(ids):
+        rows = [rows_by_id[repo_id] for repo_id in ids]
+        kept, dockerfile_skipped, used = _apply_dockerfile(
+            deps, rows, wanted, budget["remaining"], hook
+        )
+        budget["remaining"] = max(0, budget["remaining"] - used)
+        skipped["dockerfile"] += dockerfile_skipped
+        return [row["id"] for row in kept], used
+
+    return handler
+
+
+def _enrich_handlers(
+    deps: Deps,
+    rows: list[dict],
+    virtual: dict,
+    budget: dict,
+    hook: Callable[[httpx.Response, float], None],
+    skipped: dict,
+) -> dict:
+    rows_by_id = {row["id"]: row for row in rows}
+    handlers: dict = {}
+    for step in plan_enrichment(list(virtual), depth="page").steps:
+        if step.field in ("min_stars", "team_topic"):
+            handlers[step.field] = _record_handler(rows_by_id, step.field, virtual)
+        elif step.field in ("owner_country", "min_geo_confidence"):
+            handlers[step.field] = _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped)
+        elif step.field == "has_dockerfile":
+            handlers[step.field] = _dockerfile_handler(
+                deps, rows_by_id, virtual.get("has_dockerfile"), budget, hook, skipped
+            )
+        else:
+            raise ValueError(f"no enrich handler for field `{step.field}`")
+    return handlers
 
 
 def _payload_item(row: dict, virtual: dict) -> RunPayloadItem:
@@ -456,19 +518,20 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
         )
     _hydrate(deps, candidates, cfg.max_hydrate, hook)
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
-    rows = _apply_db_filters(rows, virtual)
-    rows, used, geo_skipped = _apply_geo(deps, rows, virtual, cfg.max_enrich, hook)
-    if geo_skipped > 0:
+    budget = {"remaining": cfg.max_enrich}
+    skipped = {"geo": 0, "dockerfile": 0}
+    handlers = _enrich_handlers(deps, rows, virtual, budget, hook, skipped)
+    survivors, segment_stats = execute_segments([row["id"] for row in rows], handlers, segments=1)
+    surviving = set(survivors)
+    rows = [row for row in rows if row["id"] in surviving]
+    if skipped["geo"] > 0:
         warnings.append(
-            f"{geo_skipped} repo(s) skipped because owner country could not be resolved; "
+            f"{skipped['geo']} repo(s) skipped because owner country could not be resolved; "
             "results are incomplete"
         )
-    rows, dockerfile_skipped = _apply_dockerfile(
-        deps, rows, virtual.get("has_dockerfile"), cfg.max_enrich - used, hook
-    )
-    if dockerfile_skipped > 0:
+    if skipped["dockerfile"] > 0:
         warnings.append(
-            f"{dockerfile_skipped} repo(s) skipped because Dockerfile presence could not be "
+            f"{skipped['dockerfile']} repo(s) skipped because Dockerfile presence could not be "
             "checked; results are incomplete"
         )
     if spec.sort == "help-wanted-issues":
@@ -484,6 +547,7 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
         incomplete=bool(warnings) or stats.incomplete_shards > 0,
         warnings=warnings,
         items=items,
+        field_stats=asdict(segment_stats),
     )
 
 

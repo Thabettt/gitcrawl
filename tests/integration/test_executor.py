@@ -246,7 +246,9 @@ def test_execute_run_done_snapshots_rows_and_writes_bundle(db: Engine, tmp_path)
         "fetched",
         "incomplete",
         "items",
+        "field_stats",
     }
+    assert bundle["field_stats"] == {}
     assert bundle["filter"] == FILTER
     assert bundle["filter_hash"] == FILTER_HASH
     assert bundle["run_id"] == run_id
@@ -290,6 +292,21 @@ def test_execute_run_done_snapshots_rows_and_writes_bundle(db: Engine, tmp_path)
         ["2", "octo/world", "", "", "", "", "", "", ""],
         ["3", "octo/extra", "", "", "", "", "", "", ""],
     ]
+
+
+def test_execute_run_persists_field_stats_in_the_bundle(db: Engine, tmp_path):
+    run_id = create_run(db, FILTER, api_version="v1")
+    field_stats = {
+        "per_field_sources": {"owner_country": 2, "has_dockerfile": 1},
+        "calls_spent": {"owner_country": 2, "has_dockerfile": 1},
+        "requeues": 1,
+    }
+    payload = RunPayload(total_count=1, fetched=1, items=[_item()], field_stats=field_stats)
+
+    execute_run(db, run_id, runner=lambda rid, spec: payload, runs_root=str(tmp_path))
+
+    bundle = json.loads((tmp_path / FILTER_HASH / str(run_id) / "bundle.json").read_text())
+    assert bundle["field_stats"] == field_stats
 
 
 def test_execute_run_incomplete_marks_partial(db: Engine, tmp_path):

@@ -28,6 +28,14 @@ def test_run_payload_defaults():
     payload = RunPayload(total_count=None, items=[])
     assert payload.incomplete is False
     assert payload.fetched is None
+    assert payload.field_stats == {}
+
+
+def test_run_payload_field_stats_defaults_are_independent():
+    first = RunPayload(total_count=None, items=[])
+    second = RunPayload(total_count=None, items=[])
+    first.field_stats["requeues"] = 1
+    assert second.field_stats == {}
 
 
 def test_filter_hash_is_canonical_across_key_order():
