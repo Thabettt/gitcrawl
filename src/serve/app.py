@@ -23,6 +23,13 @@ from serve.filter_spec import (
     spec_hash,
     spec_to_dict,
 )
+from serve.library import (
+    LibraryError,
+    create_filter,
+    delete_filter,
+    list_filters,
+    rename_filter,
+)
 from serve.pages import register_pages
 from serve.runner import apply_sort, build_deps, make_runner
 from serve.runs import bundle_file, export_bundle, latest_run_for_hash
@@ -119,6 +126,25 @@ def _spec_error_hint(exc: FilterSpecError, param: str) -> str:
     if exc.hints:
         return exc.hints[0]
     return exc.errors[0] if exc.errors else "invalid filter"
+
+
+_LIBRARY_STATUS = {
+    "invalid_name": 400,
+    "invalid_spec": 400,
+    "duplicate_name": 409,
+    "not_found": 404,
+}
+
+
+def _library_error_response(exc: LibraryError) -> JSONResponse:
+    return JSONResponse(
+        status_code=_LIBRARY_STATUS.get(exc.code, 400),
+        content={"error": exc.code, "message": exc.message, "hints": list(exc.hints)},
+    )
+
+
+def _library_view_payload(view) -> dict:
+    return {"id": view.id, "name": view.name, "filter_hash": view.filter_hash}
 
 
 def _detail_map(engine: Engine, repo_ids: list[int]) -> dict[int, dict]:
@@ -479,6 +505,70 @@ def create_app(
         if not bundle_file(runs_root, filter_hash, run_row["id"], format).is_file():
             headers["X-Gitcrawl-Regenerated"] = "true"
         return Response(content=content, media_type=media_type, headers=headers)
+
+    @application.get("/filters")
+    def list_filters_route():
+        views = list_filters(engine_for())
+        return {
+            "filters": [
+                {
+                    "id": view.id,
+                    "name": view.name,
+                    "filter_hash": view.filter_hash,
+                    "created_at": _iso(view.created_at),
+                    "updated_at": _iso(view.updated_at),
+                }
+                for view in views
+            ]
+        }
+
+    @application.post("/filters")
+    async def create_filter_route(request: Request):
+        try:
+            document = await request.json()
+        except Exception:
+            document = None
+        if not isinstance(document, dict):
+            return _library_error_response(
+                LibraryError(
+                    "invalid_spec",
+                    "body must be a JSON object",
+                    ("pass a JSON object with `name` and `spec`",),
+                )
+            )
+        try:
+            view = create_filter(engine_for(), document.get("name"), document.get("spec"))
+        except LibraryError as exc:
+            return _library_error_response(exc)
+        return JSONResponse(status_code=201, content=_library_view_payload(view))
+
+    @application.post("/filters/{filter_id}/rename")
+    async def rename_filter_route(request: Request, filter_id: int):
+        try:
+            document = await request.json()
+        except Exception:
+            document = None
+        if not isinstance(document, dict):
+            return _library_error_response(
+                LibraryError(
+                    "invalid_name",
+                    "body must be a JSON object",
+                    ("pass a JSON object with `name`",),
+                )
+            )
+        try:
+            view = rename_filter(engine_for(), filter_id, document.get("name"))
+        except LibraryError as exc:
+            return _library_error_response(exc)
+        return _library_view_payload(view)
+
+    @application.post("/filters/{filter_id}/delete")
+    def delete_filter_route(filter_id: int):
+        try:
+            delete_filter(engine_for(), filter_id)
+        except LibraryError as exc:
+            return _library_error_response(exc)
+        return Response(status_code=204)
 
     register_pages(
         application,
