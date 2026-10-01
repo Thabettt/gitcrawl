@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
+from urllib.parse import urlencode
 
 import fakeredis
 import pytest
@@ -126,13 +128,31 @@ def seed_run(engine: Engine, tmp_path) -> tuple[int, str]:
 
 
 def make_request(
-    *, cookie: str | None = None, header: str | None = None, query: str = ""
+    *,
+    cookie: str | None = None,
+    header: str | None = None,
+    query: str = "",
+    form: dict[str, str] | None = None,
 ) -> Request:
     headers = []
     if cookie is not None:
         headers.append((b"cookie", f"{CSRF_COOKIE}={cookie}".encode()))
     if header is not None:
         headers.append((b"x-csrf-token", header.encode()))
+    body = b""
+    if form is not None:
+        body = urlencode(form).encode()
+        headers.append((b"content-type", b"application/x-www-form-urlencoded"))
+        headers.append((b"content-length", str(len(body)).encode()))
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
     return Request(
         {
             "type": "http",
@@ -140,7 +160,8 @@ def make_request(
             "path": "/",
             "query_string": query.encode(),
             "headers": headers,
-        }
+        },
+        receive,
     )
 
 
@@ -233,16 +254,29 @@ def test_csrf_cookie_is_issued_and_rendered_into_the_meta_tag(clean: Engine, tmp
     assert client.cookies.get(CSRF_COOKIE) == token
 
 
-def test_validate_csrf_honors_match_and_mismatch(clean: Engine, tmp_path, monkeypatch):
+def test_validate_csrf_honors_header_match_and_mismatch(clean: Engine, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
     client.get("/")
     token = client.cookies.get(CSRF_COOKIE)
 
-    assert validate_csrf(make_request(cookie=token, header=token)) is True
-    assert validate_csrf(make_request(cookie=token, header="wrong-token")) is False
-    assert validate_csrf(make_request(cookie=token)) is False
-    assert validate_csrf(make_request(header=token)) is False
-    assert validate_csrf(make_request()) is False
+    assert asyncio.run(validate_csrf(make_request(cookie=token, header=token))) is True
+    assert asyncio.run(validate_csrf(make_request(cookie=token, header="wrong-token"))) is False
+    assert asyncio.run(validate_csrf(make_request(cookie=token))) is False
+    assert asyncio.run(validate_csrf(make_request(header=token))) is False
+    assert asyncio.run(validate_csrf(make_request())) is False
+
+
+def test_validate_csrf_accepts_hidden_form_field_without_javascript(
+    clean: Engine, tmp_path, monkeypatch
+):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    client.get("/")
+    token = client.cookies.get(CSRF_COOKIE)
+
+    assert asyncio.run(validate_csrf(make_request(cookie=token, form={"csrf": token}))) is True
+    assert asyncio.run(validate_csrf(make_request(cookie=token, form={"csrf": "wrong"}))) is False
+    assert asyncio.run(validate_csrf(make_request(cookie=token, form={}))) is False
+    assert asyncio.run(validate_csrf(make_request(form={"csrf": token}))) is False
 
 
 def test_validate_csrf_rejects_query_string_tokens(clean: Engine, tmp_path, monkeypatch):
@@ -250,8 +284,8 @@ def test_validate_csrf_rejects_query_string_tokens(clean: Engine, tmp_path, monk
     client.get("/")
     token = client.cookies.get(CSRF_COOKIE)
 
-    assert validate_csrf(make_request(cookie=token, query=f"csrf_token={token}")) is False
-    assert validate_csrf(make_request(cookie=token, query="csrf_token=wrong")) is False
+    assert asyncio.run(validate_csrf(make_request(cookie=token, query=f"csrf={token}"))) is False
+    assert asyncio.run(validate_csrf(make_request(cookie=token, query="csrf=wrong"))) is False
 
 
 @pytest.mark.parametrize(

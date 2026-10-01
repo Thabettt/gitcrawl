@@ -20,6 +20,8 @@ from store.models import Runs
 
 CSRF_COOKIE = "gc_csrf"
 CSRF_HEADER = "x-csrf-token"
+CSRF_FIELD = "csrf"
+FORM_CONTENT_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
 HEALTH_TIMEOUT_SECONDS = 0.25
 RECENT_RUNS_LIMIT = 20
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -113,10 +115,21 @@ def _recent_runs(engine: Engine, limit: int = RECENT_RUNS_LIMIT) -> list[dict]:
     return [_run_summary(row) for row in rows]
 
 
-def validate_csrf(request: Request) -> bool:
+async def validate_csrf(request: Request) -> bool:
     cookie = request.cookies.get(CSRF_COOKIE)
+    if not cookie:
+        return False
     supplied = request.headers.get(CSRF_HEADER)
-    if not cookie or not supplied:
+    if not supplied:
+        content_type = request.headers.get("content-type", "")
+        if any(media_type in content_type for media_type in FORM_CONTENT_TYPES):
+            try:
+                form = await request.form()
+            except Exception:
+                return False
+            value = form.get(CSRF_FIELD)
+            supplied = value if isinstance(value, str) else None
+    if not supplied:
         return False
     return hmac.compare_digest(str(cookie), str(supplied))
 
