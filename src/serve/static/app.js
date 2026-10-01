@@ -1,6 +1,7 @@
 (function () {
   "use strict";
 
+  var applib = window.gitcrawlApp;
   var root = document.documentElement;
 
   function preferredTheme() {
@@ -36,18 +37,7 @@
     window.clearTimeout(showToast.timer);
     showToast.timer = window.setTimeout(function () {
       toast.hidden = true;
-    }, 6000);
-  }
-
-  function isEditable(target) {
-    if (!target) {
-      return false;
-    }
-    if (target.isContentEditable) {
-      return true;
-    }
-    var tag = target.tagName ? target.tagName.toLowerCase() : "";
-    return tag === "input" || tag === "textarea" || tag === "select" || tag === "option";
+    }, applib.TOAST_DURATION_MS);
   }
 
   function openModal(id) {
@@ -86,20 +76,18 @@
     return false;
   }
 
-  var rowCache = null;
+  var rowCache = applib.createRowCache();
 
   function invalidateRowCache() {
-    rowCache = null;
+    rowCache.invalidate();
   }
 
   function selectableRows() {
-    if (rowCache) {
-      return rowCache;
-    }
-    rowCache = Array.prototype.slice.call(document.querySelectorAll("tbody tr")).filter(function (row) {
-      return !row.hidden && row.querySelector("a[href]");
+    return rowCache.get(function () {
+      return Array.prototype.slice.call(document.querySelectorAll("tbody tr")).filter(function (row) {
+        return !row.hidden && row.querySelector("a[href]");
+      });
     });
-    return rowCache;
   }
 
   function selectRow(delta) {
@@ -158,7 +146,7 @@
       closeOpenModal();
       return;
     }
-    if (isEditable(event.target)) {
+    if (applib.isEditableTarget(event.target)) {
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) {
@@ -258,8 +246,10 @@
     return checked ? checked.value : "shallow";
   }
 
+  var startGuard = applib.createStartGuard();
+
   function startClone(button) {
-    if (button.disabled) {
+    if (button.disabled || !startGuard.begin()) {
       return;
     }
     button.disabled = true;
@@ -269,10 +259,7 @@
     var number = document.getElementById("clone-limit-input");
     var slider = document.getElementById("clone-limit");
     var raw = number ? number.value : slider ? slider.value : "0";
-    var limit = window.parseInt(raw, 10);
-    if (window.isNaN(limit) || limit < 0) {
-      limit = 0;
-    }
+    var limit = applib.parseCloneLimit(raw);
     var meta = document.querySelector('meta[name="csrf-token"]');
     var headers = { "content-type": "application/json" };
     if (meta) {
@@ -288,7 +275,7 @@
         if (!response.ok) {
           throw new Error("clone request failed");
         }
-        showToast("Clone started");
+        showToast(applib.cloneStartedMessage());
         if (window.htmx && window.htmx.ajax) {
           window.htmx.ajax("GET", "/partials/runs/" + runId + "/clone-progress", {
             target: "#clone-progress",
@@ -297,10 +284,11 @@
         }
       })
       .catch(function () {
-        showToast("Clone request failed");
+        showToast(applib.cloneErrorMessage());
       })
       .finally(function () {
         button.disabled = false;
+        startGuard.end();
       });
   }
 
@@ -316,7 +304,7 @@
     if (document.body) {
       document.body.addEventListener("htmx:responseError", function (event) {
         var status = event.detail && event.detail.xhr ? event.detail.xhr.status : "";
-        showToast(status ? "Request failed (" + status + ")" : "Request failed");
+        showToast(applib.requestErrorMessage(status));
       });
       document.body.addEventListener("htmx:sendError", function () {
         showToast("Network error");

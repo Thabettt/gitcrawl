@@ -598,5 +598,27 @@ def test_shortcuts_modal_and_theme_toggle_markup(client: TestClient):
     assert "data-theme" in html
 
     script = client.get("/static/app.js").text
-    for marker in ("shortcuts-modal", "row-selected", "quick-find-q", "keydown", "textarea"):
+    for marker in (
+        "shortcuts-modal",
+        "row-selected",
+        "quick-find-q",
+        "keydown",
+        "applib.isEditableTarget",
+    ):
         assert marker in script
+
+
+def test_applib_loads_before_app_js(client: TestClient):
+    html = client.get("/").text
+
+    assert 'src="/static/rownav.js"' in html
+    assert 'src="/static/applib.js"' in html
+    assert html.index("/static/applib.js") < html.index("/static/app.js")
+
+
+def test_app_js_invalidates_the_row_cache_after_htmx_swaps(client: TestClient):
+    script = client.get("/static/app.js").text
+
+    assert "window.gitcrawlApp" in script
+    assert "applib.createRowCache" in script
+    assert '"htmx:afterSwap", invalidateRowCache' in script
