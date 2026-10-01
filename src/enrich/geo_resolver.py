@@ -576,6 +576,8 @@ def _build_gazetteer(raw: str) -> dict[str, str]:
 _COUNTRY_ALIASES = _build_aliases(_COUNTRY_ALIASES_RAW)
 _GAZETTEER = _build_gazetteer(_GAZETTEER_RAW)
 
+KNOWN_ISO_CODES: frozenset[str] = frozenset(_COUNTRY_ALIASES.values())
+
 
 def normalize_location(raw: str) -> str:
     if not isinstance(raw, str):
