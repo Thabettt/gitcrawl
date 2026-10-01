@@ -110,12 +110,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text("TRUNCATE TABLE owners, repos, full_name_history RESTART IDENTITY CASCADE")
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db()
 
 
 def dump_repos(engine: Engine) -> list[dict]:
@@ -530,7 +526,7 @@ def test_bootstrap_copy_skips_dirty_normalized_rows(clean: Engine):
     assert [repo["id"] for repo in dump_repos(clean)] == [1]
 
 
-def test_bootstrap_copy_rebootstrap_after_rename_matches_upsert_semantics(clean: Engine):
+def test_bootstrap_copy_rebootstrap_after_rename_matches_upsert_semantics(clean: Engine, clean_db):
     initial = [repo_item(1, full_name="octo/old")]
     second = [repo_item(2, full_name="octo/old"), repo_item(1, full_name="octo/new")]
     bootstrap_copy(clean, initial)
@@ -540,10 +536,7 @@ def test_bootstrap_copy_rebootstrap_after_rename_matches_upsert_semantics(clean:
         for repo in dump_repos(clean)
     ]
     bootstrap_history = sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean))
-    with clean.begin() as connection:
-        connection.execute(
-            text("TRUNCATE TABLE owners, repos, full_name_history RESTART IDENTITY CASCADE")
-        )
+    clean_db()
     bootstrap_copy(clean, initial)
     upsert_stats = upsert_repos(clean, second)
     upsert_repos_dump = [
@@ -623,7 +616,7 @@ def test_bootstrap_copy_accounts_stats_without_full_repo_scans(clean: Engine):
     )
 
 
-def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine):
+def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine, clean_db):
     items = [
         repo_item(1),
         repo_item(
@@ -647,10 +640,7 @@ def test_bootstrap_copy_matches_upsert_repos_for_the_same_input(clean: Engine):
         for owner in dump_owners(clean)
     ]
     bootstrap_history = sorted((row["repo_id"], row["full_name"]) for row in dump_history(clean))
-    with clean.begin() as connection:
-        connection.execute(
-            text("TRUNCATE TABLE owners, repos, full_name_history RESTART IDENTITY CASCADE")
-        )
+    clean_db()
     upsert_stats = upsert_repos(clean, items)
     assert upsert_stats.inserted == 3
     upsert_repos_dump = [

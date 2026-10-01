@@ -64,24 +64,36 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def db(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE TABLE run_items, runs, saved_filters, audit_log, shards, owners, "
-                "repos, full_name_history RESTART IDENTITY CASCADE"
-            )
-        )
-        connection.execute(text("INSERT INTO owners (id, login, type) VALUES (1, 'octo', 'User')"))
-        connection.execute(
-            text(
-                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility) VALUES "
-                "(1, 'n1', 'octo/hello', 1, 'hello', 'public'), "
-                "(2, 'n2', 'octo/world', 1, 'world', 'public'), "
-                "(3, 'n3', 'octo/extra', 1, 'extra', 'public')"
-            )
-        )
-    return alembic_engine
+def db(clean_db):
+    return clean_db(
+        owners=[{"id": 1, "login": "octo", "type": "User"}],
+        repos=[
+            {
+                "id": 1,
+                "node_id": "n1",
+                "full_name": "octo/hello",
+                "owner_id": 1,
+                "name": "hello",
+                "visibility": "public",
+            },
+            {
+                "id": 2,
+                "node_id": "n2",
+                "full_name": "octo/world",
+                "owner_id": 1,
+                "name": "world",
+                "visibility": "public",
+            },
+            {
+                "id": 3,
+                "node_id": "n3",
+                "full_name": "octo/extra",
+                "owner_id": 1,
+                "name": "extra",
+                "visibility": "public",
+            },
+        ],
+    )
 
 
 def _item(repo_id: int = 1, full_name: str = "octo/hello", **overrides) -> RunPayloadItem:

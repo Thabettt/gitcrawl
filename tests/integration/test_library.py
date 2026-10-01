@@ -4,7 +4,6 @@ from datetime import datetime
 
 import pytest
 from alembic import command
-from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from serve.filter_spec import parse_filter_spec, spec_hash, spec_to_dict
@@ -28,10 +27,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE saved_filters RESTART IDENTITY CASCADE"))
-    return alembic_engine
+def clean(clean_db):
+    return clean_db()
 
 
 def test_create_filter_normalizes_spec_and_matches_library_hash(clean: Engine):

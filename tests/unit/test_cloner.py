@@ -36,13 +36,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text("TRUNCATE TABLE run_items, runs, owners, repos RESTART IDENTITY CASCADE")
-        )
-        connection.execute(text("INSERT INTO owners (id, login, type) VALUES (1, 'octo', 'User')"))
-    return alembic_engine
+def clean(clean_db):
+    return clean_db(owners=[{"id": 1, "login": "octo", "type": "User"}])
 
 
 def seed_run(engine: Engine, specs: list[tuple[int, str, int | None, int]]) -> tuple[int, str]:

@@ -26,30 +26,37 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE TABLE run_items, runs, saved_filters, audit_log, shards, geo_cache, "
-                "owners, repos, full_name_history RESTART IDENTITY CASCADE"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO owners (id, login, type, location_raw, country_iso, geo_confidence) "
-                "VALUES (1, 'octo', 'User', 'Berlin, Germany', 'DE', 'name')"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility, "
-                "description, language, license_spdx, topics, stargazers, forks_count, "
-                "open_issues, pushed_at) VALUES (1296269, 'R_1296269', 'octo/hello', 1, 'hello', "
-                "'public', 'My first repo', 'Ruby', 'MIT', ARRAY['octocat'], 80, 9, 0, "
-                "'2011-01-26T19:06:43Z')"
-            )
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db(
+        owners=[
+            {
+                "id": 1,
+                "login": "octo",
+                "type": "User",
+                "location_raw": "Berlin, Germany",
+                "country_iso": "DE",
+                "geo_confidence": "name",
+            }
+        ],
+        repos=[
+            {
+                "id": 1296269,
+                "node_id": "R_1296269",
+                "full_name": "octo/hello",
+                "owner_id": 1,
+                "name": "hello",
+                "visibility": "public",
+                "description": "My first repo",
+                "language": "Ruby",
+                "license_spdx": "MIT",
+                "topics": ["octocat"],
+                "stargazers": 80,
+                "forks_count": 9,
+                "open_issues": 0,
+                "pushed_at": "2011-01-26T19:06:43Z",
+            }
+        ],
+    )
 
 
 def payload_item(**overrides) -> RunPayloadItem:

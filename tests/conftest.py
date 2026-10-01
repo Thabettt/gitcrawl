@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
+
+from store.models import Owner, Repo
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,3 +75,47 @@ def alembic_engine(test_database_url: str) -> Iterator[Engine]:
     engine = create_engine(test_database_url)
     yield engine
     engine.dispose()
+
+
+CleanDbFactory = Callable[..., Engine]
+
+FULL_TRUNCATE_TABLES = (
+    "run_items",
+    "runs",
+    "saved_filters",
+    "audit_log",
+    "shards",
+    "geo_cache",
+    "owners",
+    "repos",
+    "full_name_history",
+)
+
+
+@pytest.fixture(scope="session")
+def repo_root() -> Path:
+    return ROOT
+
+
+@pytest.fixture()
+def clean_db(alembic_engine: Engine) -> CleanDbFactory:
+    def seed(
+        *,
+        owners: Sequence[Mapping[str, object]] = (),
+        repos: Sequence[Mapping[str, object]] = (),
+    ) -> Engine:
+        with alembic_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "TRUNCATE TABLE "
+                    + ", ".join(FULL_TRUNCATE_TABLES)
+                    + " RESTART IDENTITY CASCADE"
+                )
+            )
+            if owners:
+                connection.execute(Owner.__table__.insert(), [dict(row) for row in owners])
+            if repos:
+                connection.execute(Repo.__table__.insert(), [dict(row) for row in repos])
+        return alembic_engine
+
+    return seed

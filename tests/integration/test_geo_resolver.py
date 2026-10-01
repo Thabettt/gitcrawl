@@ -24,10 +24,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE geo_cache"))
-    return alembic_engine
+def clean(clean_db):
+    return clean_db()
 
 
 def test_known_iso_codes_exports_all_official_alpha2_codes():
@@ -271,14 +269,10 @@ def test_resolve_owner_rejects_invalid_geocoder_output(clean: Engine):
     assert result == GeoResult(None, "unmatched", "Atlantis")
 
 
-def test_geo_cache_bulk_roundtrip(alembic_engine):
-    from sqlalchemy import text
-
+def test_geo_cache_bulk_roundtrip(clean: Engine):
     from enrich.geo_resolver import GeoCache, GeoResult
 
-    with alembic_engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE geo_cache"))
-    cache = GeoCache(alembic_engine)
+    cache = GeoCache(clean)
     cache.put_many(
         {"london": GeoResult("GB", "name", "London"), "paris": GeoResult("FR", "name", "Paris")}
     )
@@ -287,7 +281,7 @@ def test_geo_cache_bulk_roundtrip(alembic_engine):
     assert found["paris"].country_iso == "FR"
     assert "missing" not in found
     cache.put_many({"london": GeoResult("GB", "name", "London")})
-    with alembic_engine.connect() as connection:
+    with clean.connect() as connection:
         hits = connection.scalar(text("SELECT hits FROM geo_cache WHERE normalized = 'london'"))
     assert hits == 2
 

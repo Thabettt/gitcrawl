@@ -36,12 +36,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text("TRUNCATE TABLE owners, repos, full_name_history, shards RESTART IDENTITY CASCADE")
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db()
 
 
 def test_dedupe_collapses_duplicate_ids_with_last_occurrence_fields():

@@ -34,23 +34,30 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE TABLE run_items, runs, saved_filters, audit_log, shards, geo_cache, "
-                "owners, repos, full_name_history RESTART IDENTITY CASCADE"
-            )
-        )
-        connection.execute(text("INSERT INTO owners (id, login, type) VALUES (1, 'octo', 'User')"))
-        connection.execute(
-            text(
-                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility, size_kb) "
-                "VALUES (1296269, 'R_1296269', 'octo/hello', 1, 'hello', 'public', 1024), "
-                "(2, 'R_2', 'octo/world', 1, 'world', 'public', 2048)"
-            )
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db(
+        owners=[{"id": 1, "login": "octo", "type": "User"}],
+        repos=[
+            {
+                "id": 1296269,
+                "node_id": "R_1296269",
+                "full_name": "octo/hello",
+                "owner_id": 1,
+                "name": "hello",
+                "visibility": "public",
+                "size_kb": 1024,
+            },
+            {
+                "id": 2,
+                "node_id": "R_2",
+                "full_name": "octo/world",
+                "owner_id": 1,
+                "name": "world",
+                "visibility": "public",
+                "size_kb": 2048,
+            },
+        ],
+    )
 
 
 def payload_item(repo_id: int, full_name: str, stargazers: int) -> RunPayloadItem:

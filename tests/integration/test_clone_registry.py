@@ -4,7 +4,6 @@ import threading
 
 import pytest
 from alembic import command
-from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from enrich.cloner import CloneMode
@@ -21,10 +20,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE run_items, runs RESTART IDENTITY CASCADE"))
-    return alembic_engine
+def clean(clean_db):
+    return clean_db()
 
 
 def test_concurrent_starts_return_the_same_progress_object(clean: Engine, tmp_path, monkeypatch):

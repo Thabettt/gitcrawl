@@ -39,35 +39,77 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE TABLE run_items, runs, saved_filters, audit_log, shards, geo_cache, "
-                "owners, repos, full_name_history RESTART IDENTITY CASCADE"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO owners (id, login, type, location_raw, country_iso, geo_confidence) "
-                "VALUES (1, 'octo', 'User', 'Berlin, Germany', 'DE', 'name')"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility, size_kb, "
-                "stargazers, pushed_at, archived, language, license_spdx) VALUES "
-                "(1296269, 'R_1296269', 'octo/hello', 1, 'hello', 'public', 1024, 80, "
-                "'2026-01-03T00:00:00Z', false, 'Ruby', 'MIT'), "
-                "(101, 'R_101', 'octo/alpha', 1, 'alpha', 'public', 1024, 30, "
-                "'2026-01-03T00:00:00Z', false, 'Ruby', 'MIT'), "
-                "(102, 'R_102', 'octo/beta', 1, 'beta', 'public', 1024, 20, "
-                "'2026-01-01T00:00:00Z', false, 'Rust', 'Apache-2.0'), "
-                "(103, 'R_103', 'octo/gamma', 1, 'gamma', 'public', 1024, 10, "
-                "'2026-01-02T00:00:00Z', true, 'Go', 'MIT')"
-            )
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db(
+        owners=[
+            {
+                "id": 1,
+                "login": "octo",
+                "type": "User",
+                "location_raw": "Berlin, Germany",
+                "country_iso": "DE",
+                "geo_confidence": "name",
+            }
+        ],
+        repos=[
+            {
+                "id": 1296269,
+                "node_id": "R_1296269",
+                "full_name": "octo/hello",
+                "owner_id": 1,
+                "name": "hello",
+                "visibility": "public",
+                "size_kb": 1024,
+                "stargazers": 80,
+                "pushed_at": "2026-01-03T00:00:00Z",
+                "archived": False,
+                "language": "Ruby",
+                "license_spdx": "MIT",
+            },
+            {
+                "id": 101,
+                "node_id": "R_101",
+                "full_name": "octo/alpha",
+                "owner_id": 1,
+                "name": "alpha",
+                "visibility": "public",
+                "size_kb": 1024,
+                "stargazers": 30,
+                "pushed_at": "2026-01-03T00:00:00Z",
+                "archived": False,
+                "language": "Ruby",
+                "license_spdx": "MIT",
+            },
+            {
+                "id": 102,
+                "node_id": "R_102",
+                "full_name": "octo/beta",
+                "owner_id": 1,
+                "name": "beta",
+                "visibility": "public",
+                "size_kb": 1024,
+                "stargazers": 20,
+                "pushed_at": "2026-01-01T00:00:00Z",
+                "archived": False,
+                "language": "Rust",
+                "license_spdx": "Apache-2.0",
+            },
+            {
+                "id": 103,
+                "node_id": "R_103",
+                "full_name": "octo/gamma",
+                "owner_id": 1,
+                "name": "gamma",
+                "visibility": "public",
+                "size_kb": 1024,
+                "stargazers": 10,
+                "pushed_at": "2026-01-02T00:00:00Z",
+                "archived": True,
+                "language": "Go",
+                "license_spdx": "MIT",
+            },
+        ],
+    )
 
 
 def make_client(engine: Engine, tmp_path) -> TestClient:

@@ -18,26 +18,52 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE TABLE run_items, runs, saved_filters, audit_log, shards, geo_cache, "
-                "owners, repos, full_name_history RESTART IDENTITY CASCADE"
-            )
-        )
-        connection.execute(text("INSERT INTO owners (id, login, type) VALUES (1, 'octo', 'User')"))
-        connection.execute(
-            text(
-                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility) VALUES "
-                "(1, 'R_1', 'octo/r1', 1, 'r1', 'public'), "
-                "(2, 'R_2', 'octo/r2', 1, 'r2', 'public'), "
-                "(3, 'R_3', 'octo/r3', 1, 'r3', 'public'), "
-                "(4, 'R_4', 'octo/r4', 1, 'r4', 'public'), "
-                "(5, 'R_5', 'octo/r5', 1, 'r5', 'public')"
-            )
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db(
+        owners=[{"id": 1, "login": "octo", "type": "User"}],
+        repos=[
+            {
+                "id": 1,
+                "node_id": "R_1",
+                "full_name": "octo/r1",
+                "owner_id": 1,
+                "name": "r1",
+                "visibility": "public",
+            },
+            {
+                "id": 2,
+                "node_id": "R_2",
+                "full_name": "octo/r2",
+                "owner_id": 1,
+                "name": "r2",
+                "visibility": "public",
+            },
+            {
+                "id": 3,
+                "node_id": "R_3",
+                "full_name": "octo/r3",
+                "owner_id": 1,
+                "name": "r3",
+                "visibility": "public",
+            },
+            {
+                "id": 4,
+                "node_id": "R_4",
+                "full_name": "octo/r4",
+                "owner_id": 1,
+                "name": "r4",
+                "visibility": "public",
+            },
+            {
+                "id": 5,
+                "node_id": "R_5",
+                "full_name": "octo/r5",
+                "owner_id": 1,
+                "name": "r5",
+                "visibility": "public",
+            },
+        ],
+    )
 
 
 def item(repo_id: int, **overrides) -> RunPayloadItem:

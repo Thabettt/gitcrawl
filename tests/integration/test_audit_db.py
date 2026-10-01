@@ -18,15 +18,8 @@ def schema(alembic_config):
 
 
 @pytest.fixture()
-def clean(alembic_engine: Engine) -> Engine:
-    with alembic_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE TABLE audit_log, shards, owners, repos, full_name_history "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-    return alembic_engine
+def clean(clean_db):
+    return clean_db()
 
 
 def _record(
