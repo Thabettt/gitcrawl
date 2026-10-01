@@ -315,7 +315,7 @@ textarea {
 }
 
 .button.primary:hover {
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--gc-accent) 92%, white);
 }
 
 .button.ghost {
@@ -390,7 +390,16 @@ textarea {
 .progress-bar {
   height: 100%;
   background: var(--gc-accent);
-  transition: width 0.2s ease;
+  width: 100%;
+  transform-origin: left center;
+  transform: scaleX(var(--progress, 0));
+  transition: transform 0.2s ease;
+}
+
+.diff-section .data-table tbody tr,
+#run-table tbody tr {
+  content-visibility: auto;
+  contain-intrinsic-size: 1.9rem;
 }
 
 .toast {

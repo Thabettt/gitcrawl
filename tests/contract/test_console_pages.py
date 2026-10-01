@@ -566,6 +566,14 @@ def test_error_toasts_are_wired(client: TestClient):
     assert 'id="toast"' in client.get("/").text
 
 
+def test_app_css_uses_compositor_progress_and_row_containment():
+    from pathlib import Path
+
+    css = Path("src/serve/static/app.css").read_text(encoding="utf-8")
+    assert "transform: scaleX(var(--progress, 0))" in css
+    assert "content-visibility: auto" in css
+
+
 def test_shortcuts_modal_and_theme_toggle_markup(client: TestClient):
     html = client.get("/").text
 

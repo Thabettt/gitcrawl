@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
@@ -56,8 +57,22 @@ R44_VIRTUALS = ("min_commits", "min_loc")
 SAVE_ERROR_STATUS = {"invalid_name": 400, "invalid_spec": 400, "duplicate_name": 409}
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
-_templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+_templates = Jinja2Templates(
+    env=Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        autoescape=select_autoescape(),
+        auto_reload=False,
+    )
+)
 _redis_client = None
+
+
+class CachedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers.setdefault("Cache-Control", "public, max-age=3600")
+        return response
 
 
 def _bounded(check: Callable[[], object], timeout: float = HEALTH_TIMEOUT_SECONDS) -> bool:
@@ -509,7 +524,7 @@ def register_pages(
 ) -> None:
     templates = _templates
     if _STATIC_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+        app.mount("/static", CachedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     def database_ok() -> bool:
         try:

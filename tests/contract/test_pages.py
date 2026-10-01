@@ -348,6 +348,15 @@ def test_static_assets_are_served_with_correct_content_types(
     assert marker in response.content
 
 
+def test_static_assets_are_cacheable(clean: Engine, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+
+    response = client.get("/static/app.css")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
 def test_main_module_reads_env_overrides_without_starting_a_server(monkeypatch):
     entry = importlib.import_module("serve.__main__")
     captured: dict[str, object] = {}
