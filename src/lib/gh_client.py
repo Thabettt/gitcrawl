@@ -150,11 +150,11 @@ def request_with_retry(
                 if limiter is not None:
                     limiter.release(resource, token_id)
         except httpx.TransportError:
-            attempt += 1
-            if attempt >= max_attempts:
-                raise
             extra = {} if jitter is None else {"jitter": jitter}
-            decision = classify_transport(attempt - 1, **extra)
+            decision = classify_transport(attempt, **extra)
+            if decision.action is Action.FAIL_LOUD or attempt + 1 >= max_attempts:
+                raise
+            attempt += 1
             sleep(decision.sleep_seconds or 0.0)
             continue
         latency_ms = (now() - started) * 1000.0

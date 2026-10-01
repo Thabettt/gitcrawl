@@ -91,9 +91,14 @@ def classify(
     return Decision(Action.FIX, None, resource, "unexpected status")
 
 
+_TRANSPORT_MAX_ATTEMPTS = 3
+_TRANSPORT_BACKOFF_CAP = 15.0
+
+
 def classify_transport(
     attempt: int, *, jitter: Callable[[], float] = lambda: random.random()
 ) -> Decision:
-    if attempt >= 5:
-        return Decision(Action.FAIL_LOUD, None, None, "retries exhausted")
-    return Decision(Action.BACKOFF, _backoff_seconds(attempt, jitter), None, "transport error")
+    if attempt >= _TRANSPORT_MAX_ATTEMPTS:
+        return Decision(Action.FAIL_LOUD, None, None, "transport retries exhausted")
+    delay = min(_TRANSPORT_BACKOFF_CAP, 2.0 * 2**attempt) + jitter()
+    return Decision(Action.BACKOFF, delay, None, "transport error")

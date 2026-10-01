@@ -2,7 +2,7 @@ import dataclasses
 
 import pytest
 
-from limiter.classifier import Action, Decision, classify
+from limiter.classifier import Action, Decision, classify, classify_transport
 
 
 def no_jitter():
@@ -265,9 +265,24 @@ def test_decision_is_frozen():
 
 
 def test_classify_transport_backs_off_then_fails_loud():
-    from limiter.classifier import Action, classify_transport
-
-    first = classify_transport(0, jitter=lambda: 0.0)
+    first = classify_transport(0, jitter=no_jitter)
     assert first.action is Action.BACKOFF
-    assert first.sleep_seconds == 60.0
-    assert classify_transport(5, jitter=lambda: 0.0).action is Action.FAIL_LOUD
+    assert first.sleep_seconds == 2.0
+    terminal = classify_transport(3, jitter=no_jitter)
+    assert terminal.action is Action.FAIL_LOUD
+    assert terminal.sleep_seconds is None
+    assert terminal.reason == "transport retries exhausted"
+
+
+@pytest.mark.parametrize(("attempt", "sleep"), [(0, 2.0), (1, 4.0), (2, 8.0)])
+def test_classify_transport_schedule_is_short(attempt, sleep):
+    decision = classify_transport(attempt, jitter=no_jitter)
+    assert decision.action is Action.BACKOFF
+    assert decision.sleep_seconds == sleep
+
+
+def test_classify_transport_total_sleep_is_bounded():
+    delays = [
+        classify_transport(attempt, jitter=no_jitter).sleep_seconds for attempt in range(3)
+    ]
+    assert sum(delays) <= 15.0

@@ -396,7 +396,11 @@ def test_transport_errors_are_retried():
 
 
 def test_transport_errors_fail_loud_after_max_attempts():
+    sends: list[int] = []
+    sleeps: list[float] = []
+
     def handler(request):
+        sends.append(1)
         raise httpx.ConnectError("boom", request=request)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -405,10 +409,13 @@ def test_transport_errors_fail_loud_after_max_attempts():
             client,
             "GET",
             "https://api.github.com/x",
-            sleep=lambda _: None,
+            sleep=sleeps.append,
             now=lambda: 0.0,
             jitter=lambda: 0.0,
         )
+    assert len(sends) == 4
+    assert sleeps == [2.0, 4.0, 8.0]
+    assert sum(sleeps) <= 15.0
 
 
 def test_persistent_retry_after_stops_at_max_attempts():
