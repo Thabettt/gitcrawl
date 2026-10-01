@@ -4,7 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from hydrate.repo_client import HydratedRepo
@@ -36,15 +37,13 @@ def _repo_id(engine: Engine, full_name: str) -> int | None:
 
 
 def _record_history(engine: Engine, repo_id: int, full_name: str) -> None:
+    statement = (
+        pg_insert(FullNameHistory)
+        .values(repo_id=repo_id, full_name=full_name)
+        .on_conflict_do_nothing(index_elements=["repo_id", "full_name"])
+    )
     with engine.begin() as connection:
-        exists = connection.execute(
-            select(FullNameHistory.id)
-            .where(FullNameHistory.repo_id == repo_id)
-            .where(FullNameHistory.full_name == full_name)
-            .limit(1)
-        ).first()
-        if exists is None:
-            connection.execute(insert(FullNameHistory).values(repo_id=repo_id, full_name=full_name))
+        connection.execute(statement)
 
 
 def apply_hydration(
@@ -76,7 +75,8 @@ def apply_hydration(
     payload = hydrated.payload
     if payload is None:
         raise ValueError("hydrated payload is required for a 200 response")
-    upsert_repos(engine, [payload])
+    etags = {payload["id"]: hydrated.etag} if hydrated.etag is not None else None
+    upsert_repos(engine, [payload], etags=etags)
     repo_id = payload.get("id")
     renamed_from = None
     history_added = False
@@ -84,9 +84,6 @@ def apply_hydration(
         renamed_from = requested_full_name
         _record_history(engine, repo_id, requested_full_name)
         history_added = True
-    if hydrated.etag is not None:
-        with engine.begin() as connection:
-            connection.execute(update(Repo).where(Repo.id == repo_id).values(etag=hydrated.etag))
     return LifecycleOutcome(
         repo_id=repo_id,
         renamed_from=renamed_from,

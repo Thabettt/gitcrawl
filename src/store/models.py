@@ -98,7 +98,10 @@ class Repo(Base):
 
 class FullNameHistory(Base):
     __tablename__ = "full_name_history"
-    __table_args__ = (Index("fnh_repo_idx", "repo_id", "seen_at"),)
+    __table_args__ = (
+        Index("fnh_repo_idx", "repo_id", "seen_at"),
+        UniqueConstraint("repo_id", "full_name", name="fnh_repo_name_key"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     repo_id: Mapped[int] = mapped_column(

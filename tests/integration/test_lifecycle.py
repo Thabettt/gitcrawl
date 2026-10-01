@@ -343,6 +343,66 @@ def test_apply_hydration_200_records_etag_without_rename(clean: Engine):
     assert repo_row(clean, 1)["etag"] == 'W/"ok"'
 
 
+def test_apply_hydration_writes_etag_in_single_repo_write(clean: Engine):
+    from sqlalchemy import event
+
+    from hydrate.repo_client import HydratedRepo
+    from store.lifecycle import apply_hydration
+
+    seed(clean, "octo/one", repo_id=1)
+    statements: list[str] = []
+
+    def listener(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(clean, "before_cursor_execute", listener)
+    try:
+        hydrated = HydratedRepo(
+            id=1,
+            node_id="R_1",
+            full_name="octo/one",
+            payload=payload(1, full_name="octo/one", description="changed"),
+            etag='W/"e1"',
+            not_modified=False,
+        )
+        apply_hydration(clean, "octo/one", hydrated)
+    finally:
+        event.remove(clean, "before_cursor_execute", listener)
+    assert repo_row(clean, 1)["etag"] == 'W/"e1"'
+    writes = [
+        statement
+        for statement in statements
+        if "INTO REPOS" in statement.upper() or statement.upper().startswith("UPDATE REPOS")
+    ]
+    assert len(writes) == 1
+
+
+def test_repeated_rename_does_not_duplicate_history(clean: Engine):
+    from hydrate.repo_client import HydratedRepo
+    from store.lifecycle import apply_hydration
+
+    seed(clean, "octo/old", repo_id=1)
+    for _ in range(2):
+        hydrated = HydratedRepo(
+            id=1,
+            node_id="R_1",
+            full_name="octo/new",
+            payload=payload(1, full_name="octo/new"),
+            etag=None,
+            not_modified=False,
+        )
+        apply_hydration(clean, "octo/old", hydrated)
+        seed(clean, "octo/old", repo_id=1)  # force the rename again
+    with clean.connect() as connection:
+        count = connection.scalar(
+            text(
+                "SELECT count(*) FROM full_name_history "
+                "WHERE repo_id = 1 AND full_name = 'octo/old'"
+            )
+        )
+    assert count == 1
+
+
 def test_apply_hydration_304_leaves_the_row_unchanged(clean: Engine):
     from hydrate.repo_client import hydrate_repo
     from store.lifecycle import LifecycleOutcome, apply_hydration

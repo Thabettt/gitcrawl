@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
 
@@ -269,36 +269,47 @@ def _rename_stale_full_names(
                 update(Repo).where(Repo.id == holder_id).values(full_name=f"{entry[1]}~{holder_id}")
             )
             connection.execute(
-                insert(FullNameHistory).values(repo_id=holder_id, full_name=holder_name)
+                pg_insert(FullNameHistory)
+                .values(repo_id=holder_id, full_name=holder_name)
+                .on_conflict_do_nothing(index_elements=["repo_id", "full_name"])
             )
             stats.conflicts += 1
             stats.history_rows += 1
 
 
 def _load_existing(connection: Connection, ids: list[int]) -> dict[int, dict]:
-    columns = [getattr(Repo, field) for field in _REPO_FIELDS]
+    columns = [getattr(Repo, field) for field in _REPO_FIELDS] + [Repo.etag]
     rows = connection.execute(select(*columns).where(Repo.id.in_(ids))).mappings()
     return {row["id"]: dict(row) for row in rows}
 
 
 def _changed(current: dict, row: dict) -> bool:
+    if "etag" in row and current.get("etag") != row["etag"]:
+        return True
     return any(current[field] != row[field] for field in _REPO_FIELDS)
 
 
-def _write_repos(connection: Connection, rows: list[dict]) -> None:
+def _write_repos(connection: Connection, rows: list[dict], *, include_etag: bool = False) -> None:
     if not rows:
         return
-    values = [{field: row[field] for field in _REPO_FIELDS} for row in rows]
+    fields = _REPO_FIELDS + (("etag",) if include_etag else ())
+    values = [{field: row.get(field) for field in fields} for row in rows]
     statement = pg_insert(Repo).values(values)
     connection.execute(
         statement.on_conflict_do_update(
             index_elements=["id"],
-            set_={field: statement.excluded[field] for field in _REPO_FIELDS if field != "id"},
+            set_={field: statement.excluded[field] for field in fields if field != "id"},
         )
     )
 
 
-def upsert_repos(engine: Engine, items: Iterable[dict], *, batch_size: int = 500) -> UpsertStats:
+def upsert_repos(
+    engine: Engine,
+    items: Iterable[dict],
+    *,
+    batch_size: int = 500,
+    etags: Mapping[int, str | None] | None = None,
+) -> UpsertStats:
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
     stats = UpsertStats()
@@ -310,6 +321,10 @@ def upsert_repos(engine: Engine, items: Iterable[dict], *, batch_size: int = 500
             if row is None:
                 stats.skipped += 1
                 continue
+            if etags is not None:
+                etag = etags.get(row["id"])
+                if etag is not None:
+                    row = dict(row, etag=etag)
             normalized.append(row)
             owners[row["owner_id"]] = (row["owner_login"], row["owner_type"])
         if not normalized:
@@ -328,14 +343,21 @@ def upsert_repos(engine: Engine, items: Iterable[dict], *, batch_size: int = 500
                     updates.append(row)
                 else:
                     stats.unchanged += 1
-            _write_repos(connection, inserts + updates)
+            rows_to_write = inserts + updates
+            include_etag = bool(rows_to_write) and all("etag" in row for row in rows_to_write)
+            _write_repos(connection, rows_to_write, include_etag=include_etag)
             history = [{"repo_id": row["id"], "full_name": row["full_name"]} for row in inserts]
             for row in updates:
                 previous = existing[row["id"]]["full_name"]
                 if previous != row["full_name"]:
                     history.append({"repo_id": row["id"], "full_name": previous})
             if history:
-                connection.execute(insert(FullNameHistory), history)
+                connection.execute(
+                    pg_insert(FullNameHistory).on_conflict_do_nothing(
+                        index_elements=["repo_id", "full_name"]
+                    ),
+                    history,
+                )
                 stats.history_rows += len(history)
             stats.inserted += len(inserts)
             stats.updated += len(updates)
@@ -390,6 +412,7 @@ def _merge_staging(connection: Connection, table_name: str) -> tuple[int, int]:
         f") INSERT INTO full_name_history (repo_id, full_name)"
         f" SELECT id, full_name FROM existing"
         f" UNION ALL SELECT id, full_name FROM new_repos"
+        f" ON CONFLICT (repo_id, full_name) DO NOTHING"
     )
     connection.execute(statement)
     return inserted, renamed
