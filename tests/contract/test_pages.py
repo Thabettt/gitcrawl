@@ -195,6 +195,27 @@ def test_dashboard_lists_recent_runs_with_status_and_counts(clean: Engine, tmp_p
     assert 'data-state="ok"' in html
 
 
+def test_navigation_links_to_the_filter_form(clean: Engine, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/find"' in response.text
+
+
+def test_dashboard_run_links_resolve_to_the_run_page(clean: Engine, tmp_path, monkeypatch):
+    run_id, _filter_hash = seed_run(clean, tmp_path)
+    client = healthy_client(clean, tmp_path, monkeypatch)
+
+    dashboard = client.get("/")
+    run_page = client.get(f"/runs/{run_id}")
+
+    assert f'href="/runs/{run_id}"' in dashboard.text
+    assert run_page.status_code == 200
+    assert 'id="run-banner"' in run_page.text
+
+
 def test_dashboard_renders_error_state_when_database_is_down(clean: Engine, tmp_path, monkeypatch):
     client = healthy_client(BrokenEngine(), tmp_path, monkeypatch)
 

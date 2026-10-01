@@ -485,6 +485,7 @@ def create_app(
         runs_root=runs_root,
         redis_ping=redis_ping,
         token_present=token_present,
+        runner_factory=runner_for,
     )
 
     return application

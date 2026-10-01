@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import secrets
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 
-from lib.gh_client import load_tokens
-from store.models import Runs
+from lib.gh_client import API_VERSION, load_tokens
+from serve.executor import Runner, create_run, execute_run
+from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
+from serve.forms import build_spec_from_form, form_state
+from store.models import RunItem, Runs
 
 CSRF_COOKIE = "gc_csrf"
 CSRF_HEADER = "x-csrf-token"
@@ -90,6 +95,14 @@ def _duration(started: datetime | None, finished: datetime | None) -> str:
     return f"{minutes}m {remainder}s"
 
 
+def _iso(value: datetime | None) -> str:
+    if value is None:
+        return "—"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _run_summary(row) -> dict:
     return {
         "id": row["id"],
@@ -134,6 +147,14 @@ async def validate_csrf(request: Request) -> bool:
     return hmac.compare_digest(str(cookie), str(supplied))
 
 
+def _flat_form(form) -> dict[str, str]:
+    grouped: dict[str, list[str]] = {}
+    for key, value in form.multi_items():
+        if isinstance(value, str):
+            grouped.setdefault(key, []).append(value)
+    return {key: ",".join(values) for key, values in grouped.items()}
+
+
 def register_pages(
     app: FastAPI,
     *,
@@ -141,6 +162,7 @@ def register_pages(
     runs_root: str,
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
+    runner_factory: Callable[[], Runner] | None = None,
 ) -> None:
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
     if _STATIC_DIR.is_dir():
@@ -208,3 +230,153 @@ def register_pages(
                 "csrf_token": request.state.csrf_token,
             },
         )
+
+    def render_filters(
+        request: Request,
+        values: dict[str, str],
+        errors: tuple[str, ...] = (),
+        hints: tuple[str, ...] = (),
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        state = replace(form_state(values), errors=tuple(errors), hints=tuple(hints))
+        return templates.TemplateResponse(
+            request,
+            "filters.html",
+            {"state": state, "csrf_token": request.state.csrf_token},
+            status_code=status_code,
+        )
+
+    def runner_or_none() -> Runner | None:
+        if runner_factory is None:
+            return None
+        return runner_factory()
+
+    @app.get("/find", response_class=HTMLResponse)
+    @app.get("/vsearch/", response_class=HTMLResponse)
+    def filter_form(request: Request):
+        values = {key: value for key, value in request.query_params.multi_items() if key != "q"}
+        if "q" in request.query_params:
+            values["keywords"] = request.query_params["q"]
+        return render_filters(request, values)
+
+    @app.post("/find")
+    async def filter_submit(request: Request):
+        if not await validate_csrf(request):
+            return Response(status_code=403, content="invalid csrf token", media_type="text/plain")
+        form = await request.form()
+        values = _flat_form(form)
+        action = values.get("action", "find")
+        if action == "upload":
+            upload = form.get("spec_file")
+            reader = getattr(upload, "read", None)
+            if reader is None:
+                return render_filters(
+                    request,
+                    values,
+                    ("no filter-spec file uploaded",),
+                    ("choose a filter-spec v1 JSON file for `spec_file`",),
+                    400,
+                )
+            try:
+                document = json.loads((await reader()).decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return render_filters(
+                    request,
+                    values,
+                    ("`spec_file` is not valid JSON",),
+                    ("upload a filter-spec v1 JSON object",),
+                    400,
+                )
+            if not isinstance(document, dict):
+                return render_filters(
+                    request,
+                    values,
+                    ("filter-spec must be a JSON object",),
+                    ("upload a filter-spec v1 JSON object",),
+                    400,
+                )
+        else:
+            document = build_spec_from_form(values)
+        try:
+            spec = parse_filter_spec(document)
+        except FilterSpecError as exc:
+            return render_filters(request, values, exc.errors, exc.hints, 400)
+        if action == "download":
+            payload = json.dumps(spec_to_dict(spec), indent=2).encode("utf-8")
+            return Response(
+                content=payload,
+                media_type="application/json",
+                headers={"Content-Disposition": 'attachment; filename="gitcrawl-filter.json"'},
+            )
+        try:
+            runner = runner_or_none()
+        except Exception:
+            return Response(status_code=500, content="runner unavailable", media_type="text/plain")
+        engine = engine_factory()
+        run_id = create_run(engine, spec_to_dict(spec), api_version=API_VERSION)
+        execute_run(engine, run_id, runner=runner, runs_root=runs_root)
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @app.get("/runs/{run_id}", response_class=HTMLResponse)
+    def run_page(request: Request, run_id: int):
+        engine = engine_factory()
+        with engine.connect() as connection:
+            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+            if row is None:
+                return templates.TemplateResponse(
+                    request,
+                    "run_min.html",
+                    {"run": None, "rows": [], "csrf_token": request.state.csrf_token},
+                    status_code=404,
+                )
+            rows = (
+                connection.execute(
+                    select(
+                        RunItem.repo_id,
+                        RunItem.full_name,
+                        RunItem.stargazers,
+                        RunItem.pushed_at,
+                        RunItem.archived,
+                        RunItem.language,
+                        RunItem.license_spdx,
+                        RunItem.country_iso,
+                        RunItem.geo_confidence,
+                    )
+                    .where(RunItem.run_id == run_id)
+                    .order_by(RunItem.stargazers.desc(), RunItem.repo_id)
+                    .limit(100)
+                )
+                .mappings()
+                .all()
+            )
+        summary = {
+            **dict(row),
+            "duration": _duration(row["started_at"], row["finished_at"]),
+            "ran_at": _relative_time(row["finished_at"] or row["started_at"] or row["created_at"]),
+        }
+        return templates.TemplateResponse(
+            request,
+            "run_min.html",
+            {
+                "run": summary,
+                "rows": [{**dict(item), "pushed_at": _iso(item["pushed_at"])} for item in rows],
+                "csrf_token": request.state.csrf_token,
+            },
+        )
+
+    @app.post("/runs/{run_id}/replay")
+    async def replay_run(request: Request, run_id: int):
+        if not await validate_csrf(request):
+            return Response(status_code=403, content="invalid csrf token", media_type="text/plain")
+        engine = engine_factory()
+        with engine.connect() as connection:
+            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+        if row is None:
+            return Response(status_code=404, content="run not found", media_type="text/plain")
+        try:
+            runner = runner_or_none()
+        except Exception:
+            return Response(status_code=500, content="runner unavailable", media_type="text/plain")
+        new_id = create_run(engine, dict(row["filter_spec"]), api_version=row["api_version"])
+        execute_run(engine, new_id, runner=runner, runs_root=runs_root)
+        return RedirectResponse(f"/runs/{new_id}", status_code=303)
