@@ -282,7 +282,5 @@ def test_classify_transport_schedule_is_short(attempt, sleep):
 
 
 def test_classify_transport_total_sleep_is_bounded():
-    delays = [
-        classify_transport(attempt, jitter=no_jitter).sleep_seconds for attempt in range(3)
-    ]
+    delays = [classify_transport(attempt, jitter=no_jitter).sleep_seconds for attempt in range(3)]
     assert sum(delays) <= 15.0

@@ -215,8 +215,6 @@ def test_record_from_response_accepts_preparsed_body():
 
     body = {"total_count": 9}
     response = _response(200)
-    record = record_from_response(
-        {}, response, token_fp="fp", latency_ms=1, now=NOW, body=body
-    )
+    record = record_from_response({}, response, token_fp="fp", latency_ms=1, now=NOW, body=body)
     assert record.total_count == 9
     assert cached_json(response) is body

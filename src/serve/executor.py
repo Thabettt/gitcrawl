@@ -239,9 +239,9 @@ class RunExecutor:
         self._engine = engine
         self._runner = runner
         self._runs_root = runs_root
-        self._queue: queue.PriorityQueue[
-            tuple[int, int, Callable[[], object], Future]
-        ] = queue.PriorityQueue()
+        self._queue: queue.PriorityQueue[tuple[int, int, Callable[[], object], Future]] = (
+            queue.PriorityQueue()
+        )
         self._sequence = itertools.count()
         self._idle = threading.Event()
         self._idle.set()

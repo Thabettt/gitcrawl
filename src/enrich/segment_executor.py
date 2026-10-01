@@ -92,9 +92,7 @@ def execute_segments(
     for repo_id in ranked_ids:
         buckets[bisect_left(ends, repo_id)].append(repo_id)
     work: list[tuple[Segment, list[int]]] = [
-        (segment, ids)
-        for segment, ids in zip(segments_plan, buckets, strict=True)
-        if ids
+        (segment, ids) for segment, ids in zip(segments_plan, buckets, strict=True) if ids
     ]
     work.sort(key=lambda item: rank[item[1][0]])
     field_names = list(handlers)

@@ -806,9 +806,7 @@ def register_pages(
                 request, "run_detail.html", {"run": None}, status_code=404
             )
         item_count = _item_count(engine, run_id)
-        table = _table_view(
-            engine, run_id, "stars", "desc", 1, run_row=row, total=item_count
-        )
+        table = _table_view(engine, run_id, "stars", "desc", 1, run_row=row, total=item_count)
         estimate = clone_estimate_for_run(
             engine, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=clone_root
         )

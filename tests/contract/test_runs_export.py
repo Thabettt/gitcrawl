@@ -371,9 +371,7 @@ def test_export_regeneration_orders_null_stargazers_last(clean: Engine, tmp_path
     (directory / "bundle.json").unlink()
     (directory / "corpus.csv").unlink()
 
-    document = json.loads(
-        client.get(f"/vsearch/runs/{filter_hash}/export").content.decode("utf-8")
-    )
+    document = json.loads(client.get(f"/vsearch/runs/{filter_hash}/export").content.decode("utf-8"))
 
     assert [item["stargazers"] for item in document["items"]] == [5, None]
 
@@ -387,9 +385,7 @@ def test_export_bundle_streams_the_persisted_bundle(clean: Engine, tmp_path):
     json_chunks, json_media_type = export_bundle(
         clean, run_id, format="json", runs_root=str(tmp_path)
     )
-    csv_chunks, csv_media_type = export_bundle(
-        clean, run_id, format="csv", runs_root=str(tmp_path)
-    )
+    csv_chunks, csv_media_type = export_bundle(clean, run_id, format="csv", runs_root=str(tmp_path))
 
     assert json_media_type == "application/json"
     assert csv_media_type == "text/csv"
@@ -408,9 +404,7 @@ def test_export_bundle_streams_regenerated_content(clean: Engine, tmp_path):
     json_chunks, json_media_type = export_bundle(
         clean, run_id, format="json", runs_root=str(tmp_path)
     )
-    csv_chunks, csv_media_type = export_bundle(
-        clean, run_id, format="csv", runs_root=str(tmp_path)
-    )
+    csv_chunks, csv_media_type = export_bundle(clean, run_id, format="csv", runs_root=str(tmp_path))
 
     assert json_media_type == "application/json"
     assert csv_media_type == "text/csv"

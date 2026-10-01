@@ -136,10 +136,7 @@ def _json_chunks(engine: Engine, run_row: RowMapping, run_id: int) -> Iterator[b
     yield b"{"
     for key, value in header.items():
         yield (
-            json.dumps(key).encode()
-            + b": "
-            + json.dumps(value, ensure_ascii=False).encode()
-            + b","
+            json.dumps(key).encode() + b": " + json.dumps(value, ensure_ascii=False).encode() + b","
         )
     yield b'"items": ['
     first = True
