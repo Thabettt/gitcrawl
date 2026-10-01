@@ -1,0 +1,8 @@
+{
+  "path": "/runs/931/clone-estimate",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"repos\":3,\"estimated_mb\":0.5859375,\"warnings\":[]}"
+}

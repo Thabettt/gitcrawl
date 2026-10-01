@@ -1,0 +1,8 @@
+{
+  "path": "/api/runs/931/diff?against=932",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"run_a\":932,\"run_b\":931,\"added\":[{\"repo_id\":912,\"full_name\":\"octo/beta\"},{\"repo_id\":913,\"full_name\":\"octo/gamma\"}],\"removed\":[{\"repo_id\":914,\"full_name\":\"octo/delta\"}],\"changed\":[{\"repo_id\":911,\"full_name\":\"octo/alpha\",\"field\":\"stargazers\",\"from\":250,\"to\":300}],\"summary\":{\"added\":2,\"removed\":1,\"changed_repos\":1,\"changed_fields\":1}}"
+}

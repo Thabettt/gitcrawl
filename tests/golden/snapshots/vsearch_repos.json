@@ -1,0 +1,8 @@
+{
+  "path": "/vsearch/repos?q=language:rust&sort=stars&order=desc",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"total_count\":1,\"incomplete\":false,\"items\":[{\"id\":911,\"full_name\":\"octo/alpha\",\"description\":\"Fast crawler\",\"language\":\"Rust\",\"license_spdx\":\"MIT\",\"topics\":[\"cli\",\"crawler\"],\"stargazers\":300,\"forks_count\":30,\"open_issues\":3,\"pushed_at\":\"2025-12-30T12:00:00Z\",\"owner\":{\"login\":\"octo\",\"type\":\"User\",\"country_iso\":\"DE\",\"geo_confidence\":\"name\",\"raw_location\":\"Berlin, Germany\"},\"has_dockerfile\":true,\"virtuals\":{\"has_dockerfile\":true}}]}"
+}

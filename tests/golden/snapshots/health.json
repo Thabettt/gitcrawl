@@ -1,0 +1,8 @@
+{
+  "path": "/health",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"database\":true,\"redis\":true,\"github_token_present\":true}"
+}

@@ -1,0 +1,10 @@
+{
+  "path": "/vsearch/runs/c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00/export",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "content-disposition": "attachment; filename=\"gitcrawl-c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00-931.json\"",
+    "x-gitcrawl-regenerated": "true"
+  },
+  "body": "{\"filter\": {\"q\": \"language:rust\", \"sort\": \"stars\", \"order\": \"desc\", \"gitcrawl_filter\": 1},\"filter_hash\": \"c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00\",\"run_id\": 931,\"ran_at\": \"2026-01-02T00:05:01Z\",\"api_version\": \"2022-11-28\",\"total_count\": 3,\"fetched\": 3,\"incomplete\": false,\"regenerated\": true,\"items\": [{\"repo_id\": 911, \"full_name\": \"octo/alpha\", \"stargazers\": 300, \"pushed_at\": \"2025-12-30T12:00:00Z\", \"archived\": false, \"language\": \"Rust\", \"license_spdx\": \"MIT\", \"country_iso\": \"DE\", \"geo_confidence\": \"name\", \"virtuals\": {\"has_dockerfile\": true}},{\"repo_id\": 912, \"full_name\": \"octo/beta\", \"stargazers\": 200, \"pushed_at\": \"2025-12-29T12:00:00Z\", \"archived\": false, \"language\": \"Python\", \"license_spdx\": \"Apache-2.0\", \"country_iso\": null, \"geo_confidence\": null, \"virtuals\": {}},{\"repo_id\": 913, \"full_name\": \"octo/gamma\", \"stargazers\": 100, \"pushed_at\": \"2025-01-15T12:00:00Z\", \"archived\": true, \"language\": null, \"license_spdx\": null, \"country_iso\": null, \"geo_confidence\": null, \"virtuals\": {}}], \"field_stats\": {}}"
+}

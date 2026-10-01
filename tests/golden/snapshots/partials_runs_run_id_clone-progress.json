@@ -1,0 +1,8 @@
+{
+  "path": "/partials/runs/931/clone-progress",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"status\":\"done\",\"total\":0,\"completed\":0,\"failed\":0,\"current\":null,\"errors\":[],\"error_count\":0}"
+}
