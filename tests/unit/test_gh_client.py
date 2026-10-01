@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import fakeredis
 import httpx
@@ -423,6 +424,93 @@ def test_persistent_wait_reset_stops_at_max_attempts():
     assert response.status_code == 429
     assert len(sends) == 2
     assert sleeps == [300.0]
+
+
+def test_request_with_retry_posts_json_body_and_extra_headers():
+    captured = {}
+
+    def handler(request):
+        captured["method"] = request.method
+        captured["body"] = json.loads(request.content)
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(
+        headers={"User-Agent": "gitcrawl/0.0.1"},
+        transport=httpx.MockTransport(handler),
+    )
+    response = request_with_retry(
+        client,
+        "POST",
+        "https://api.github.com/graphql",
+        json_body={"query": "{ rateLimit { cost } }"},
+        extra_headers={"Authorization": "Bearer tok"},
+        now=lambda: 1000.0,
+    )
+    assert response.status_code == 200
+    assert captured["method"] == "POST"
+    assert captured["body"] == {"query": "{ rateLimit { cost } }"}
+    assert captured["headers"]["Authorization"] == "Bearer tok"
+    assert captured["headers"]["User-Agent"] == "gitcrawl/0.0.1"
+
+
+def test_request_with_retry_merges_extra_headers_over_client_defaults():
+    captured = {}
+
+    def handler(request):
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(
+        headers={"User-Agent": "gitcrawl/0.0.1", "Authorization": "Bearer original"},
+        transport=httpx.MockTransport(handler),
+    )
+    response = request_with_retry(
+        client,
+        "GET",
+        "https://api.github.com/repos/octo/hello",
+        extra_headers={"If-None-Match": 'W/"one"', "Authorization": "Bearer override"},
+        now=lambda: 1000.0,
+    )
+    assert response.status_code == 200
+    assert captured["headers"]["If-None-Match"] == 'W/"one"'
+    assert captured["headers"]["Authorization"] == "Bearer override"
+    assert captured["headers"]["User-Agent"] == "gitcrawl/0.0.1"
+
+
+def test_request_with_retry_keeps_json_body_and_audit_hook_across_retries():
+    bodies = []
+    sleeps = []
+    recorded = []
+    responses = iter(
+        [
+            httpx.Response(403, headers={"retry-after": "5"}, json={"message": "slow"}),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return next(responses)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    response = request_with_retry(
+        client,
+        "POST",
+        "https://api.github.com/graphql",
+        json_body={"query": "q"},
+        extra_headers={"Authorization": "Bearer tok"},
+        sleep=sleeps.append,
+        now=lambda: 1000.0,
+        jitter=lambda: 0.0,
+        on_response=lambda response, latency_ms: recorded.append(
+            (response.status_code, latency_ms)
+        ),
+    )
+    assert response.status_code == 200
+    assert bodies == [{"query": "q"}, {"query": "q"}]
+    assert sleeps == [5.0]
+    assert [status for status, _ in recorded] == [403, 200]
 
 
 def test_limiter_deny_loop_raises_at_configured_cap():

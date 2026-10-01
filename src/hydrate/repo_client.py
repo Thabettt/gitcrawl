@@ -31,15 +31,6 @@ class HydratedRepo:
     not_modified: bool
 
 
-class _HeaderClient:
-    def __init__(self, client: httpx.Client, headers: dict[str, str]) -> None:
-        self._client = client
-        self._headers = headers
-
-    def request(self, method: str, url: str) -> httpx.Response:
-        return self._client.request(method, url, headers=self._headers)
-
-
 def _valid_payload(payload: object) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -68,11 +59,11 @@ def hydrate_repo(
     headers = {"If-None-Match": etag} if etag else {}
     hops = 0
     while True:
-        target = _HeaderClient(client, headers) if headers else client
         response = request_with_retry(
-            target,
+            client,
             "GET",
             url,
+            extra_headers=headers or None,
             limiter=limiter,
             token_id=token_id,
             sleep=sleep,

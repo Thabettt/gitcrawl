@@ -1,7 +1,7 @@
 import hashlib
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
 import httpx
@@ -108,6 +108,8 @@ def request_with_retry(
     method: str,
     url: str,
     *,
+    json_body: dict | None = None,
+    extra_headers: Mapping[str, str] | None = None,
     limiter: BucketLimiter | None = None,
     token_id: str | None = None,
     max_attempts: int = 5,
@@ -117,6 +119,11 @@ def request_with_retry(
     on_response: Callable[[httpx.Response, float], None] | None = None,
 ) -> httpx.Response:
     resource = resource_for_url(url)
+    request_kwargs: dict = {}
+    if json_body is not None:
+        request_kwargs["json"] = json_body
+    if extra_headers is not None:
+        request_kwargs["headers"] = dict(extra_headers)
     denials = 0
     attempt = 0
     while True:
@@ -131,7 +138,7 @@ def request_with_retry(
             denials = 0
         try:
             started = now()
-            response = client.request(method, url)
+            response = client.request(method, url, **request_kwargs)
             latency_ms = (now() - started) * 1000.0
             if on_response is not None:
                 on_response(response, latency_ms)
