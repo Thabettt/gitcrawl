@@ -3,13 +3,25 @@ from __future__ import annotations
 import csv
 import io
 import json
+import threading
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine, Row
 from sqlalchemy.engine.row import RowMapping
 
+from enrich.cloner import (
+    PROGRESS_NAME,
+    CloneEstimate,
+    CloneMode,
+    CloneProgress,
+    GitRunner,
+    clone_repos,
+    estimate_clone,
+    free_disk_mb,
+)
 from serve.executor import _CSV_HEADER, _csv_cell
 from store.models import RunItem, Runs
 
@@ -147,3 +159,157 @@ def export_bundle(
     if format == "json":
         return _regenerate_json(engine, run_row, run_id), _MEDIA_TYPES[format]
     return _regenerate_csv(engine, run_id), _MEDIA_TYPES[format]
+
+
+class CloneRegistry:
+    def __init__(self) -> None:
+        self._entries: dict[int, CloneProgress] = {}
+        self._lock = threading.Lock()
+
+    def get(self, run_id: int) -> CloneProgress | None:
+        with self._lock:
+            return self._entries.get(run_id)
+
+    def set(self, run_id: int, progress: CloneProgress) -> None:
+        with self._lock:
+            self._entries[run_id] = progress
+
+
+class _PersistedProgress(CloneProgress):
+    def __init__(self, path: Path, **values: object) -> None:
+        super().__init__(**values)
+        self._path = path
+
+    def emit(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(asdict(self), ensure_ascii=False), encoding="utf-8")
+
+
+def _count_run_items(engine: Engine, run_id: int) -> int:
+    with engine.connect() as connection:
+        count = connection.scalar(
+            select(func.count()).select_from(RunItem).where(RunItem.run_id == run_id)
+        )
+    return int(count or 0)
+
+
+def clone_estimate_for_run(
+    engine: Engine,
+    run_id: int,
+    *,
+    limit: int | None,
+    mode: CloneMode,
+    dest_root: str = "clones",
+    low_disk_threshold_mb: float = 2048.0,
+) -> CloneEstimate:
+    if limit is None:
+        limit = _count_run_items(engine, run_id)
+    if limit < 0:
+        raise ValueError("limit", "limit must be >= 0")
+    return estimate_clone(
+        engine,
+        run_id,
+        limit=limit,
+        mode=mode,
+        disk_free_mb=free_disk_mb(dest_root),
+        low_disk_threshold_mb=low_disk_threshold_mb,
+    )
+
+
+def progress_payload(progress: CloneProgress) -> dict:
+    return asdict(progress)
+
+
+def read_clone_progress(
+    engine: Engine,
+    run_id: int,
+    *,
+    registry: CloneRegistry,
+    runs_root: str = "runs",
+) -> CloneProgress:
+    row = _row_for_run(engine, run_id)
+    tracked = registry.get(run_id)
+    if tracked is not None:
+        return tracked
+    path = run_bundle_dir(runs_root, row["filter_hash"], run_id) / PROGRESS_NAME
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            errors = data.get("errors")
+            return CloneProgress(
+                status=str(data.get("status", "done")),
+                total=int(data.get("total", 0)),
+                completed=int(data.get("completed", 0)),
+                failed=int(data.get("failed", 0)),
+                current=data.get("current"),
+                errors=[str(item) for item in errors] if isinstance(errors, list) else [],
+            )
+    return CloneProgress(status="done", total=0, completed=0, failed=0)
+
+
+def start_clone(
+    engine: Engine,
+    run_id: int,
+    *,
+    limit: int,
+    mode: CloneMode,
+    registry: CloneRegistry,
+    runs_root: str = "runs",
+    dest_root: str = "clones",
+    git_runner: GitRunner | None = None,
+) -> CloneProgress:
+    row = _row_for_run(engine, run_id)
+    existing = registry.get(run_id)
+    if existing is not None and existing.status == "running":
+        return existing
+    bundle_dir = run_bundle_dir(runs_root, row["filter_hash"], run_id)
+    progress = _PersistedProgress(
+        bundle_dir / PROGRESS_NAME,
+        status="running",
+        total=0,
+        completed=0,
+        failed=0,
+    )
+    registry.set(run_id, progress)
+    progress.total = min(limit, _count_run_items(engine, run_id)) if limit > 0 else 0
+    if limit <= 0:
+        progress.status = "done"
+        progress.emit()
+        return progress
+    worker = threading.Thread(
+        target=_clone_worker,
+        args=(engine, run_id, limit, mode, dest_root, git_runner, progress),
+        daemon=True,
+    )
+    worker.start()
+    return progress
+
+
+def _clone_worker(
+    engine: Engine,
+    run_id: int,
+    limit: int,
+    mode: CloneMode,
+    dest_root: str,
+    git_runner: GitRunner | None,
+    progress: CloneProgress,
+) -> None:
+    try:
+        clone_repos(
+            engine,
+            run_id,
+            limit=limit,
+            mode=mode,
+            dest_root=dest_root,
+            git_runner=git_runner,
+            progress=progress,
+        )
+    except Exception as exc:
+        progress.status = "failed"
+        progress.current = None
+        progress.errors.append(f"{type(exc).__name__}: {exc}"[:300])
+    finally:
+        progress.emit()

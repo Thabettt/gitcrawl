@@ -11,16 +11,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 
+from enrich.cloner import parse_mode
 from lib.gh_client import API_VERSION, load_tokens
 from serve.executor import Runner, create_run, execute_run
 from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
 from serve.forms import build_spec_from_form, form_state
+from serve.runs import (
+    CloneRegistry,
+    clone_estimate_for_run,
+    progress_payload,
+    read_clone_progress,
+    start_clone,
+)
 from store.models import RunItem, Runs
 
 CSRF_COOKIE = "gc_csrf"
@@ -155,11 +163,23 @@ def _flat_form(form) -> dict[str, str]:
     return {key: ",".join(values) for key, values in grouped.items()}
 
 
+def _invalid_param(param: str, hint: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={"error": "invalid_param", "param": param, "hint": hint},
+    )
+
+
+def _run_not_found(run_id: int) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"error": "run_not_found", "run_id": run_id})
+
+
 def register_pages(
     app: FastAPI,
     *,
     engine_factory: Callable[[], Engine],
     runs_root: str,
+    clone_root: str = "clones",
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
     runner_factory: Callable[[], Runner] | None = None,
@@ -381,3 +401,80 @@ def register_pages(
         new_id = create_run(engine, dict(row["filter_spec"]), api_version=row["api_version"])
         execute_run(engine, new_id, runner=runner, runs_root=runs_root)
         return RedirectResponse(f"/runs/{new_id}", status_code=303)
+
+    progress_registry = CloneRegistry()
+
+    @app.get("/runs/{run_id}/clone-estimate")
+    def clone_estimate_route(request: Request, run_id: int):
+        raw_limit = request.query_params.get("limit")
+        limit: int | None = None
+        if raw_limit is not None:
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                return _invalid_param("limit", "limit must be an integer >= 0")
+            if limit < 0:
+                return _invalid_param("limit", "limit must be an integer >= 0")
+        raw_mode = request.query_params.get("mode", "shallow")
+        try:
+            mode = parse_mode(raw_mode)
+        except ValueError:
+            return _invalid_param("mode", "mode must be one of: shallow, file_only, windowed")
+        try:
+            estimate = clone_estimate_for_run(
+                engine_factory(), run_id, limit=limit, mode=mode, dest_root=clone_root
+            )
+        except KeyError:
+            return _run_not_found(run_id)
+        except ValueError:
+            return _invalid_param("limit", "limit must be an integer >= 0")
+        return {
+            "repos": estimate.repos,
+            "estimated_mb": estimate.estimated_mb,
+            "warnings": list(estimate.warnings),
+        }
+
+    @app.post("/runs/{run_id}/clone")
+    async def clone_start_route(request: Request, run_id: int):
+        try:
+            document = await request.json()
+        except Exception:
+            return _invalid_param("body", "body must be a JSON object with limit and mode")
+        if not isinstance(document, dict):
+            return _invalid_param("body", "body must be a JSON object with limit and mode")
+        limit = document.get("limit", 0)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            return _invalid_param("limit", "limit must be an integer >= 0")
+        raw_mode = document.get("mode", "shallow")
+        if not isinstance(raw_mode, str):
+            return _invalid_param("mode", "mode must be one of: shallow, file_only, windowed")
+        try:
+            mode = parse_mode(raw_mode)
+        except ValueError:
+            return _invalid_param("mode", "mode must be one of: shallow, file_only, windowed")
+        try:
+            progress = start_clone(
+                engine_factory(),
+                run_id,
+                limit=limit,
+                mode=mode,
+                registry=progress_registry,
+                runs_root=runs_root,
+                dest_root=clone_root,
+            )
+        except KeyError:
+            return _run_not_found(run_id)
+        payload = progress_payload(progress)
+        if limit > 0:
+            payload["status"] = "running"
+        return payload
+
+    @app.get("/partials/runs/{run_id}/clone-progress")
+    def clone_progress_route(run_id: int):
+        try:
+            progress = read_clone_progress(
+                engine_factory(), run_id, registry=progress_registry, runs_root=runs_root
+            )
+        except KeyError:
+            return _run_not_found(run_id)
+        return progress_payload(progress)
