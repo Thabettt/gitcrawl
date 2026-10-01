@@ -198,8 +198,8 @@ def test_run_page_renders_full_detail(clean: Engine, tmp_path):
     assert 'id="run-finished"' in html
     assert 'id="run-flags"' not in html
     assert f'hx-get="/runs/{run_id}/clone-estimate"' in html
-    assert 'hx-trigger="every 2s"' not in html
-    assert 'hx-trigger="every 1s"' not in html
+    assert "every 2s [document.visibilityState === 'visible']" not in html
+    assert "every 1s [document.visibilityState === 'visible']" not in html
     assert 'colspan="7"' not in html
     assert "octo/hello" in html
 
@@ -252,11 +252,11 @@ def test_run_page_polls_only_while_non_terminal(clean: Engine, tmp_path):
         connection.execute(text("UPDATE runs SET status = 'done' WHERE id = :id"), {"id": run_id})
     done = client.get(f"/runs/{run_id}")
 
-    assert 'hx-trigger="every 2s"' in running.text
+    assert "every 2s [document.visibilityState === 'visible']" in running.text
     assert f'hx-get="/partials/runs/{run_id}/status"' in running.text
     assert 'hx-swap="outerHTML"' in running.text
     assert 'data-status="running"' in running.text
-    assert 'hx-trigger="every 2s"' not in done.text
+    assert "every 2s [document.visibilityState === 'visible']" not in done.text
     assert 'data-status="done"' in done.text
 
 
@@ -285,9 +285,9 @@ def test_status_fragment_polls_while_running_and_stops_when_terminal(clean: Engi
     assert queued.status_code == done.status_code == 200
     assert 'id="run-status"' in queued.text
     assert 'data-status="queued"' in queued.text
-    assert 'hx-trigger="every 2s"' in queued.text
+    assert "every 2s [document.visibilityState === 'visible']" in queued.text
     assert 'hx-swap="outerHTML"' in queued.text
-    assert 'hx-trigger="every 2s"' not in done.text
+    assert "every 2s [document.visibilityState === 'visible']" not in done.text
     assert 'data-status="done"' in done.text
     assert 'id="run-counts"' in done.text
 
@@ -477,7 +477,7 @@ def test_clone_progress_fragment_idle_and_running(clean: Engine, tmp_path):
     assert 'id="clone-progress"' in idle.text
     assert 'data-status="done"' in idle.text
     assert "No clone in progress" in idle.text
-    assert 'hx-trigger="every 1s"' not in idle.text
+    assert "every 1s [document.visibilityState === 'visible']" not in idle.text
 
     with clean.connect() as connection:
         filter_hash = connection.scalar(
@@ -504,7 +504,7 @@ def test_clone_progress_fragment_idle_and_running(clean: Engine, tmp_path):
 
     html = running.text
     assert 'data-status="running"' in html
-    assert 'hx-trigger="every 1s"' in html
+    assert "every 1s [document.visibilityState === 'visible']" in html
     assert f'hx-get="/partials/runs/{run_id}/clone-progress"' in html
     assert 'hx-swap="outerHTML"' in html
     assert "2 / 5" in html

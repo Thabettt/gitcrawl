@@ -1,4 +1,4 @@
-<div id="run-status" aria-live="polite" data-status="{{ run.status }}"{% if run.polling %} hx-get="/partials/runs/{{ run.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+<div id="run-status" aria-live="polite" data-status="{{ run.status }}"{% if run.polling %} hx-get="/partials/runs/{{ run.id }}/status" hx-trigger="every 2s [document.visibilityState === 'visible']" hx-swap="outerHTML"{% endif %}>
   <div class="run-status-line">
     <span id="run-status-pill" class="pill {{ run.status }}" data-status="{{ run.status }}">{{ run.status }}</span>
     <span id="run-total" class="muted" data-total="{{ run.total_count if run.total_count is not none else '' }}">total {{ run.total_count if run.total_count is not none else '—' }}</span>
