@@ -378,3 +378,24 @@ def test_fetch_tree_reuses_the_audit_cached_body():
 
     assert presence.paths == TREE_BLOB_PATHS
     assert parses == [1]
+
+
+def test_fetch_metafiles_never_forwards_the_client_authorization_header():
+    from enrich.trees_first import fetch_metafiles
+
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"manifests": [{"filename": "Dockerfile"}]})
+
+    client = httpx.Client(
+        headers={"Authorization": "Bearer super-secret"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    presence = fetch_metafiles(client, "octo/hello", names=("Dockerfile",))
+
+    assert presence.paths == frozenset({"Dockerfile"})
+    assert len(captured) == 1
+    assert "authorization" not in captured[0].headers

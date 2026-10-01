@@ -178,6 +178,7 @@ def fetch_metafiles(
             client,
             "GET",
             f"{base_url}/{full_name}",
+            auth=False,
             limiter=limiter,
             token_id=token_id,
             sleep=sleep,
