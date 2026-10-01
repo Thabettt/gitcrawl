@@ -13,6 +13,7 @@ from enrich.cloner import (
     CloneMode,
     CloneProgress,
     CloneStats,
+    _default_git_runner,
     clone_repos,
     estimate_clone,
     parse_mode,
@@ -340,6 +341,67 @@ def test_clone_repos_zero_limit_is_a_noop(clean: Engine, tmp_path):
     )
     assert progress == CloneProgress(status="done", total=0, completed=0, failed=0)
     assert not (tmp_path / "clones").exists()
+
+
+def test_clone_workers_run_in_parallel(clean: Engine, tmp_path):
+    import threading
+    import time as time_module
+
+    specs = [(repo_id, f"octo/r{repo_id}", 1, repo_id) for repo_id in range(1, 5)]
+    run_id, _ = seed_run(clean, specs)
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def fake_runner(argv, cwd):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time_module.sleep(0.05)
+        with lock:
+            active -= 1
+
+    clone_repos(
+        clean,
+        run_id,
+        limit=4,
+        mode=CloneMode.SHALLOW,
+        dest_root=str(tmp_path),
+        git_runner=fake_runner,
+        workers=4,
+    )
+    assert peak >= 2
+
+
+def test_clone_errors_are_capped(clean: Engine, tmp_path):
+    specs = [(repo_id, f"octo/r{repo_id}", 1, repo_id) for repo_id in range(1, 21)]
+    run_id, _ = seed_run(clean, specs)
+    progress = CloneProgress(status="running", total=0, completed=0, failed=0)
+
+    def failing(argv, cwd):
+        raise RuntimeError("boom")
+
+    stats = clone_repos(
+        clean,
+        run_id,
+        limit=20,
+        mode=CloneMode.SHALLOW,
+        dest_root=str(tmp_path),
+        git_runner=failing,
+        errors_cap=5,
+        progress=progress,
+    )
+    assert stats.failed == 20
+    assert progress.error_count == 20
+    assert len(progress.errors) == 5
+
+
+def test_default_git_runner_enforces_timeout():
+    import subprocess
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _default_git_runner(["python", "-c", "import time; time.sleep(5)"], ".", timeout=0.05)
 
 
 def test_load_rows_batches(clean: Engine):

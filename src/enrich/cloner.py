@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -55,6 +57,7 @@ class CloneProgress:
     failed: int
     current: str | None = None
     errors: list[str] = field(default_factory=list)
+    error_count: int = 0
 
     def emit(self) -> None:
         return None
@@ -143,8 +146,8 @@ def _clone_argv(full_name: str, destination: Path, mode: CloneMode) -> list[str]
     ]
 
 
-def _default_git_runner(argv: Sequence[str], cwd: str) -> None:
-    subprocess.run(list(argv), cwd=cwd, check=True)
+def _default_git_runner(argv: Sequence[str], cwd: str, *, timeout: float | None = None) -> None:
+    subprocess.run(list(argv), cwd=cwd, check=True, timeout=timeout)
 
 
 def _error_message(full_name: str, exc: BaseException) -> str:
@@ -161,6 +164,9 @@ def clone_repos(
     git_runner: Callable[[Sequence[str], str], None] | None = None,
     progress: CloneProgress | None = None,
     disk_free_mb: float | None = None,
+    workers: int = 1,
+    clone_timeout: float | None = None,
+    errors_cap: int = 20,
 ) -> CloneStats:
     mode = CloneMode(mode)
     run_row = _run_row(engine, run_id)
@@ -183,33 +189,61 @@ def clone_repos(
         return stats
     run_dir = Path(dest_root) / run_row["filter_hash"] / str(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
-    runner = git_runner or _default_git_runner
-    for row in items:
+    runner = git_runner
+    lock = threading.Lock()
+    progress.error_count = 0
+
+    def clone_one(row: RowMapping) -> str:
         full_name = str(row["full_name"])
         destination = run_dir / full_name.replace("/", "__")
-        progress.current = full_name
-        progress.emit()
+        with lock:
+            progress.current = full_name
+            progress.emit()
         if (destination / MARKER_NAME).exists():
-            stats.skipped += 1
-            progress.completed += 1
+            outcome = "skipped"
+        else:
+            try:
+                if runner is not None:
+                    runner(_clone_argv(full_name, destination, mode), str(destination.parent))
+                elif clone_timeout is None:
+                    _default_git_runner(
+                        _clone_argv(full_name, destination, mode), str(destination.parent)
+                    )
+                else:
+                    _default_git_runner(
+                        _clone_argv(full_name, destination, mode),
+                        str(destination.parent),
+                        timeout=clone_timeout,
+                    )
+            except Exception as exc:
+                shutil.rmtree(destination, ignore_errors=True)
+                outcome = "failed"
+                with lock:
+                    stats.failed += 1
+                    progress.failed += 1
+                    progress.error_count += 1
+                    if len(progress.errors) < errors_cap:
+                        progress.errors.append(_error_message(full_name, exc))
+            else:
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / MARKER_NAME).write_text(
+                    json.dumps({"full_name": full_name, "mode": mode.value}), encoding="utf-8"
+                )
+                outcome = "completed"
+        with lock:
+            if outcome in ("completed", "skipped"):
+                stats.completed += int(outcome == "completed")
+                stats.skipped += int(outcome == "skipped")
+                progress.completed += 1
             progress.emit()
-            continue
-        try:
-            runner(_clone_argv(full_name, destination, mode), str(destination.parent))
-        except Exception as exc:
-            stats.failed += 1
-            progress.failed += 1
-            progress.errors.append(_error_message(full_name, exc))
-            shutil.rmtree(destination, ignore_errors=True)
-            progress.emit()
-            continue
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / MARKER_NAME).write_text(
-            json.dumps({"full_name": full_name, "mode": mode.value}), encoding="utf-8"
-        )
-        stats.completed += 1
-        progress.completed += 1
-        progress.emit()
+        return outcome
+
+    if workers <= 1:
+        for row in items:
+            clone_one(row)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(clone_one, items))
     progress.current = None
     progress.status = "done"
     progress.emit()

@@ -239,13 +239,15 @@ def read_clone_progress(
             data = None
         if isinstance(data, dict):
             errors = data.get("errors")
+            error_list = [str(item) for item in errors] if isinstance(errors, list) else []
             return CloneProgress(
                 status=str(data.get("status", "done")),
                 total=int(data.get("total", 0)),
                 completed=int(data.get("completed", 0)),
                 failed=int(data.get("failed", 0)),
                 current=data.get("current"),
-                errors=[str(item) for item in errors] if isinstance(errors, list) else [],
+                errors=error_list,
+                error_count=int(data.get("error_count", len(error_list))),
             )
     return CloneProgress(status="done", total=0, completed=0, failed=0)
 

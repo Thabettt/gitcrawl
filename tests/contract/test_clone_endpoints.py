@@ -24,6 +24,7 @@ IDLE_PROGRESS = {
     "failed": 0,
     "current": None,
     "errors": [],
+    "error_count": 0,
 }
 
 
@@ -206,6 +207,7 @@ def test_clone_start_returns_running_then_progress_completes(clean: Engine, tmp_
         "failed": 0,
         "current": None,
         "errors": [],
+        "error_count": 0,
     }
     run_dir = tmp_path / "clones" / filter_hash / str(run_id)
     assert len(calls) == 2
