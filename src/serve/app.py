@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
@@ -24,6 +24,7 @@ from serve.filter_spec import (
     spec_to_dict,
 )
 from serve.runner import apply_sort, build_deps, make_runner
+from serve.runs import export_bundle, latest_run_for_hash
 from serve.virtual_params import VIRTUAL_FILTERS
 from store.models import Owner, Repo, RunItem, Runs
 
@@ -434,23 +435,47 @@ def create_app(
     @application.get("/vsearch/runs/{filter_hash}")
     def replay(filter_hash: str):
         bound_engine = engine_for()
-        with bound_engine.connect() as connection:
-            run_row = (
-                connection.execute(
-                    select(Runs)
-                    .where(Runs.filter_hash == filter_hash)
-                    .order_by(Runs.created_at.desc(), Runs.id.desc())
-                    .limit(1)
-                )
-                .mappings()
-                .one_or_none()
-            )
+        run_row = latest_run_for_hash(bound_engine, filter_hash)
         if run_row is None:
             return JSONResponse(
                 status_code=404,
                 content={"error": "run_not_found", "filter_hash": filter_hash},
             )
         return _replay_body(bound_engine, run_row, run_row["id"])
+
+    @application.get("/vsearch/runs/{filter_hash}/export")
+    def export(filter_hash: str, format: str = "json"):
+        if format not in ("json", "csv"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_param",
+                    "param": "format",
+                    "hint": "format must be one of: json, csv",
+                },
+            )
+        bound_engine = engine_for()
+        run_row = latest_run_for_hash(bound_engine, filter_hash)
+        if run_row is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "run_not_found", "filter_hash": filter_hash},
+            )
+        try:
+            content, media_type = export_bundle(
+                bound_engine, run_row["id"], format=format, runs_root=runs_root
+            )
+        except KeyError:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "run_not_found", "filter_hash": filter_hash},
+            )
+        filename = f"gitcrawl-{filter_hash}-{run_row['id']}.{format}"
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     return application
 
