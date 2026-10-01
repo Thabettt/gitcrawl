@@ -340,3 +340,27 @@ def test_resolve_many_memoizes_and_bounds_the_process_cache(clean: Engine, monke
     for raw in ("Atlantis", "Xanadu", "El Dorado", "Shangri-La", "Camelot"):
         geo_resolver.resolve_many(clean, [raw])
         assert len(geo_resolver._MEMO) <= 2
+
+
+def test_geo_cache_put_many_chunks_statements(clean: Engine):
+    statements: list[str] = []
+
+    def listener(conn, cursor, statement, parameters, context, executemany):
+        if "INTO GEO_CACHE" in statement.upper():
+            statements.append(statement)
+
+    cache = GeoCache(clean)
+    results = {
+        f"city-{index}": GeoResult("US", "gazetteer-city", f"City {index}") for index in range(5)
+    }
+    sa.event.listen(clean, "before_cursor_execute", listener)
+    try:
+        cache.put_many(results, batch_size=2)
+    finally:
+        sa.event.remove(clean, "before_cursor_execute", listener)
+
+    assert len(statements) == 3
+    found = cache.get_many(list(results))
+    assert {key: result.country_iso for key, result in found.items()} == {
+        key: "US" for key in results
+    }

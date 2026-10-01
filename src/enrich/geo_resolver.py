@@ -792,32 +792,35 @@ class GeoCache:
                     found[str(normalized)] = GeoResult(country_iso, confidence, raw_sample)
         return found
 
-    def put_many(self, results: Mapping[str, GeoResult]) -> None:
+    def put_many(
+        self, results: Mapping[str, GeoResult], *, batch_size: int = 1000
+    ) -> None:
         if not results:
             return
-        values = [
-            {
-                "normalized": key,
-                "country_iso": result.country_iso,
-                "confidence": result.confidence,
-                "raw_sample": result.raw_location,
-                "hits": 1,
-            }
-            for key, result in results.items()
-        ]
-        base = pg_insert(GeoCacheRow).values(values)
-        statement = base.on_conflict_do_update(
-            index_elements=[GeoCacheRow.normalized],
-            set_={
-                "country_iso": base.excluded.country_iso,
-                "confidence": base.excluded.confidence,
-                "raw_sample": base.excluded.raw_sample,
-                "hits": GeoCacheRow.hits + 1,
-                "updated_at": sa.func.now(),
-            },
-        )
-        with self._engine.begin() as connection:
-            connection.execute(statement)
+        for batch in chunked(list(results.items()), batch_size):
+            values = [
+                {
+                    "normalized": key,
+                    "country_iso": result.country_iso,
+                    "confidence": result.confidence,
+                    "raw_sample": result.raw_location,
+                    "hits": 1,
+                }
+                for key, result in batch
+            ]
+            base = pg_insert(GeoCacheRow).values(values)
+            statement = base.on_conflict_do_update(
+                index_elements=[GeoCacheRow.normalized],
+                set_={
+                    "country_iso": base.excluded.country_iso,
+                    "confidence": base.excluded.confidence,
+                    "raw_sample": base.excluded.raw_sample,
+                    "hits": GeoCacheRow.hits + 1,
+                    "updated_at": sa.func.now(),
+                },
+            )
+            with self._engine.begin() as connection:
+                connection.execute(statement)
 
 
 def resolve_many(
