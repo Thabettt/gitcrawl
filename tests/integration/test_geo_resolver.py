@@ -111,7 +111,9 @@ def test_normalize_location_is_stable_and_collapses_noise():
     assert normalize_location("  🇩🇪 Berlin!!! / NYC  ") == "🇩🇪 berlin nyc"
     assert normalize_location("Berlin / NYC") == normalize_location("Berlin / NYC")
     assert normalize_location("Berlin • NYC") == "berlin nyc"
-    assert normalize_location(normalize_location("Berlin • NYC")) == normalize_location("Berlin • NYC")
+    assert normalize_location(normalize_location("Berlin • NYC")) == normalize_location(
+        "Berlin • NYC"
+    )
     assert normalize_location("🌍 Remote") == "remote"
     assert normalize_location("") == ""
     assert normalize_location("!!!") == ""
