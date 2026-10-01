@@ -288,6 +288,42 @@ def test_normalize_repo_coerces_coercible_numeric_counts():
     assert row["forks_count"] == 7
 
 
+def test_normalize_repo_skips_a_non_numeric_size():
+    assert normalize_repo(repo_item(1, size="not-a-number")) is None
+    assert normalize_repo(repo_item(1, size=[1])) is None
+
+
+def test_normalize_repo_normalizes_dirty_language_visibility_and_flags():
+    row = normalize_repo(
+        repo_item(
+            1,
+            language={"name": "Python"},
+            visibility=7,
+            has_wiki="yes",
+            has_issues=1,
+            archived="yes",
+            fork="yes",
+        )
+    )
+    assert row is not None
+    assert row["language"] is None
+    assert row["visibility"] == "public"
+    assert row["has_wiki"] is None
+    assert row["has_issues"] is None
+    assert row["archived"] is False
+    assert row["fork"] is False
+
+
+def test_normalize_repo_keeps_private_fallback_for_a_dirty_visibility():
+    row = normalize_repo(repo_item(1, private=True, visibility=7))
+    assert row["visibility"] == "private"
+
+
+def test_normalize_repo_keeps_coercible_numeric_sizes():
+    assert normalize_repo(repo_item(1, size="2048"))["size_kb"] == 2048
+    assert normalize_repo(repo_item(1, size=2048.0))["size_kb"] == 2048
+
+
 def test_insert_new_repos_and_owners(clean: Engine):
     stats = upsert_repos(
         clean,
@@ -419,6 +455,23 @@ def test_dirty_page_rows_are_skipped_without_aborting_the_batch(clean: Engine):
     )
     assert stats == UpsertStats(inserted=1, skipped=3, history_rows=1)
     assert [repo["id"] for repo in dump_repos(clean)] == [1]
+
+
+def test_upsert_repos_isolates_rows_that_would_abort_the_chunk(clean: Engine):
+    stats = upsert_repos(
+        clean,
+        [
+            repo_item(1),
+            repo_item(2, size="not-a-number"),
+            repo_item(3, has_wiki="yes", archived="not-a-bool", language=["Python"]),
+        ],
+    )
+    assert stats == UpsertStats(inserted=2, skipped=1, history_rows=2)
+    repos = {repo["id"]: repo for repo in dump_repos(clean)}
+    assert sorted(repos) == [1, 3]
+    assert repos[3]["has_wiki"] is None
+    assert repos[3]["archived"] is False
+    assert repos[3]["language"] is None
 
 
 def test_batch_size_splits_repo_writes(clean: Engine):

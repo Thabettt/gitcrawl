@@ -96,6 +96,36 @@ def _valid_id(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+_INVALID = object()
+
+
+def _coerce_optional_int(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return _INVALID
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return _INVALID
+    return _INVALID
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _flag(value: object) -> bool:
+    return value if isinstance(value, bool) else False
+
+
 def normalize_repo(item: dict) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -124,10 +154,17 @@ def normalize_repo(item: dict) -> dict | None:
     open_issues = _coerce_count(item.get("open_issues_count"))
     if stargazers is None or forks_count is None or watchers is None or open_issues is None:
         return None
+    size_kb = _coerce_optional_int(item.get("size"))
+    if size_kb is _INVALID:
+        return None
+    raw_visibility = item.get("visibility")
+    if isinstance(raw_visibility, str) and raw_visibility:
+        visibility = raw_visibility
+    else:
+        visibility = "private" if item.get("private") else "public"
     license_obj = item.get("license")
     parent = item.get("parent")
     source = item.get("source")
-    visibility = item.get("visibility") or ("private" if item.get("private") else "public")
     return {
         "id": repo_id,
         "node_id": node_id,
@@ -136,29 +173,29 @@ def normalize_repo(item: dict) -> dict | None:
         "name": item.get("name") or _last_segment(full_name),
         "description": item.get("description"),
         "homepage": item.get("homepage"),
-        "language": item.get("language"),
+        "language": _optional_str(item.get("language")),
         "license_spdx": license_obj.get("spdx_id") if isinstance(license_obj, dict) else None,
         "topics": topics,
         "visibility": visibility,
-        "fork": bool(item.get("fork")),
+        "fork": _flag(item.get("fork")),
         "parent_full_name": parent.get("full_name") if isinstance(parent, dict) else None,
         "source_full_name": source.get("full_name") if isinstance(source, dict) else None,
-        "archived": bool(item.get("archived")),
-        "disabled": bool(item.get("disabled")),
+        "archived": _flag(item.get("archived")),
+        "disabled": _flag(item.get("disabled")),
         "mirror_url": item.get("mirror_url"),
-        "is_template": bool(item.get("is_template")),
-        "size_kb": item.get("size"),
+        "is_template": _flag(item.get("is_template")),
+        "size_kb": size_kb,
         "stargazers": stargazers,
         "forks_count": forks_count,
         "watchers": watchers,
         "open_issues": open_issues,
         "default_branch": item.get("default_branch"),
-        "has_wiki": item.get("has_wiki"),
-        "has_issues": item.get("has_issues"),
-        "has_projects": item.get("has_projects"),
-        "has_pages": item.get("has_pages"),
-        "has_discussions": item.get("has_discussions"),
-        "has_pull_requests": item.get("has_pull_requests"),
+        "has_wiki": _optional_bool(item.get("has_wiki")),
+        "has_issues": _optional_bool(item.get("has_issues")),
+        "has_projects": _optional_bool(item.get("has_projects")),
+        "has_pages": _optional_bool(item.get("has_pages")),
+        "has_discussions": _optional_bool(item.get("has_discussions")),
+        "has_pull_requests": _optional_bool(item.get("has_pull_requests")),
         "custom_properties": dict(item.get("custom_properties") or {}),
         "created_at": _parse_timestamp(item.get("created_at")),
         "pushed_at": _parse_timestamp(item.get("pushed_at")),
