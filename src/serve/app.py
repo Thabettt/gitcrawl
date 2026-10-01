@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
@@ -31,7 +31,12 @@ from serve.library import (
     list_filters,
     rename_filter,
 )
-from serve.pages import register_pages
+from serve.pages import (
+    FORM_CONTENT_TYPES,
+    register_pages,
+    render_library,
+    validate_csrf,
+)
 from serve.runner import apply_sort, build_deps, make_runner
 from serve.runs import bundle_file, export_bundle, latest_run_for_hash
 from serve.virtual_params import VIRTUAL_FILTERS
@@ -507,8 +512,14 @@ def create_app(
             headers["X-Gitcrawl-Regenerated"] = "true"
         return Response(content=content, media_type=media_type, headers=headers)
 
+    def is_form_request(request: Request) -> bool:
+        content_type = request.headers.get("content-type", "")
+        return any(media_type in content_type for media_type in FORM_CONTENT_TYPES)
+
     @application.get("/filters")
-    def list_filters_route():
+    def list_filters_route(request: Request):
+        if "text/html" in request.headers.get("accept", ""):
+            return render_library(request, engine_for())
         views = list_filters(engine_for())
         return {
             "filters": [
@@ -545,6 +556,24 @@ def create_app(
 
     @application.post("/filters/{filter_id}/rename")
     async def rename_filter_route(request: Request, filter_id: int):
+        if is_form_request(request):
+            if not await validate_csrf(request):
+                return Response(
+                    status_code=403, content="invalid csrf token", media_type="text/plain"
+                )
+            form = await request.form()
+            name = form.get("name")
+            try:
+                rename_filter(engine_for(), filter_id, name if isinstance(name, str) else None)
+            except LibraryError as exc:
+                return render_library(
+                    request,
+                    engine_for(),
+                    error=exc.message,
+                    hints=exc.hints,
+                    status_code=_LIBRARY_STATUS.get(exc.code, 400),
+                )
+            return RedirectResponse("/filters", status_code=303)
         try:
             document = await request.json()
         except Exception:
@@ -564,7 +593,23 @@ def create_app(
         return _library_view_payload(view)
 
     @application.post("/filters/{filter_id}/delete")
-    def delete_filter_route(filter_id: int):
+    async def delete_filter_route(request: Request, filter_id: int):
+        if is_form_request(request):
+            if not await validate_csrf(request):
+                return Response(
+                    status_code=403, content="invalid csrf token", media_type="text/plain"
+                )
+            try:
+                delete_filter(engine_for(), filter_id)
+            except LibraryError as exc:
+                return render_library(
+                    request,
+                    engine_for(),
+                    error=exc.message,
+                    hints=exc.hints,
+                    status_code=_LIBRARY_STATUS.get(exc.code, 400),
+                )
+            return RedirectResponse("/filters", status_code=303)
         try:
             delete_filter(engine_for(), filter_id)
         except LibraryError as exc:

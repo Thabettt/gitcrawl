@@ -184,6 +184,31 @@ def build_spec_from_form(form: Mapping[str, str]) -> dict:
     return document
 
 
+def spec_to_form_values(spec: Mapping[str, object]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    q = spec.get("q")
+    if isinstance(q, str) and q:
+        values["keywords"] = q
+    for name in ("sort", "order"):
+        value = spec.get(name)
+        if isinstance(value, str) and value:
+            values[name] = value
+    virtual = spec.get("virtual")
+    if isinstance(virtual, Mapping):
+        for name, value in virtual.items():
+            if isinstance(value, bool):
+                values[str(name)] = "true" if value else "false"
+            elif value is not None:
+                values[str(name)] = str(value)
+    page = spec.get("page")
+    if isinstance(page, Mapping):
+        for name in ("per_page", "max_pages"):
+            value = page.get(name)
+            if value is not None:
+                values[name] = str(value)
+    return values
+
+
 def form_state(form: Mapping[str, str]) -> FormState:
     fields = {key: value for key, value in form.items() if isinstance(value, str)}
     org = fields.get("org", "").strip()

@@ -39,13 +39,15 @@
     }, 6000);
   }
 
-  function handleShortcuts(event) {
-    if (event.defaultPrevented) {
-      return;
+  function isEditable(target) {
+    if (!target) {
+      return false;
     }
-    if (event.key === "?") {
-      document.dispatchEvent(new CustomEvent("gc:shortcuts-requested"));
+    if (target.isContentEditable) {
+      return true;
     }
+    var tag = target.tagName ? target.tagName.toLowerCase() : "";
+    return tag === "input" || tag === "textarea" || tag === "select" || tag === "option";
   }
 
   function openModal(id) {
@@ -64,6 +66,145 @@
     var modal = document.getElementById(id);
     if (modal) {
       modal.hidden = true;
+    }
+  }
+
+  function toggleShortcutsModal() {
+    var modal = document.getElementById("shortcuts-modal");
+    if (!modal) {
+      return;
+    }
+    modal.hidden = !modal.hidden;
+  }
+
+  function closeOpenModal() {
+    var open = document.querySelector(".modal:not([hidden])");
+    if (open) {
+      open.hidden = true;
+      return true;
+    }
+    return false;
+  }
+
+  function selectableRows() {
+    return Array.prototype.slice.call(document.querySelectorAll("tbody tr")).filter(function (row) {
+      return !row.hidden && row.querySelector("a[href]");
+    });
+  }
+
+  function selectRow(delta) {
+    var rows = selectableRows();
+    if (!rows.length) {
+      return;
+    }
+    var current = -1;
+    for (var index = 0; index < rows.length; index += 1) {
+      if (rows[index].classList.contains("row-selected")) {
+        current = index;
+        break;
+      }
+    }
+    var next;
+    if (current < 0) {
+      next = delta > 0 ? 0 : rows.length - 1;
+    } else {
+      next = Math.min(Math.max(current + delta, 0), rows.length - 1);
+    }
+    rows.forEach(function (row) {
+      row.classList.remove("row-selected");
+    });
+    rows[next].classList.add("row-selected");
+    if (rows[next].scrollIntoView) {
+      rows[next].scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function openSelectedRow() {
+    var row = document.querySelector("tr.row-selected");
+    if (!row) {
+      return false;
+    }
+    var link = row.querySelector("a[href]");
+    if (!link) {
+      return false;
+    }
+    window.location.assign(link.href);
+    return true;
+  }
+
+  var pendingG = false;
+  var pendingTimer = null;
+
+  function clearPendingG() {
+    pendingG = false;
+    if (pendingTimer) {
+      window.clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+  }
+
+  function handleKeyboard(event) {
+    if (event.defaultPrevented) {
+      return;
+    }
+    if (event.key === "Escape") {
+      clearPendingG();
+      closeOpenModal();
+      return;
+    }
+    if (isEditable(event.target)) {
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      return;
+    }
+    if (event.key === "?") {
+      event.preventDefault();
+      toggleShortcutsModal();
+      return;
+    }
+    if (pendingG) {
+      clearPendingG();
+      if (event.key === "h") {
+        event.preventDefault();
+        window.location.assign("/");
+      } else if (event.key === "f") {
+        event.preventDefault();
+        window.location.assign("/find");
+      } else if (event.key === "r") {
+        event.preventDefault();
+        window.location.assign("/runs");
+      } else if (event.key === "l") {
+        event.preventDefault();
+        window.location.assign("/filters");
+      }
+      return;
+    }
+    if (event.key === "g") {
+      pendingG = true;
+      pendingTimer = window.setTimeout(clearPendingG, 1200);
+      return;
+    }
+    if (event.key === "/") {
+      var search = document.getElementById("quick-find-q");
+      if (search) {
+        event.preventDefault();
+        search.focus();
+      }
+      return;
+    }
+    if (event.key === "j") {
+      event.preventDefault();
+      selectRow(1);
+      return;
+    }
+    if (event.key === "k") {
+      event.preventDefault();
+      selectRow(-1);
+      return;
+    }
+    if (event.key === "Enter" && openSelectedRow()) {
+      event.preventDefault();
     }
   }
 
@@ -194,14 +335,5 @@
     }
   });
 
-  document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape") {
-      var open = document.querySelector(".modal:not([hidden])");
-      if (open) {
-        open.hidden = true;
-      }
-    }
-  });
-
-  document.addEventListener("keydown", handleShortcuts);
+  document.addEventListener("keydown", handleKeyboard);
 })();

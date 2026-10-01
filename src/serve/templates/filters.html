@@ -207,6 +207,7 @@
     <section class="filter-section" id="filter-controls">
       <h2>Run</h2>
       <div class="field-grid">
+        {{ text_field("name", "Filter name (Save filter)") }}
         <label class="field" for="field-spec-file">
           <span class="field-label">Upload filter-spec JSON</span>
           <input class="field-input" type="file" id="field-spec-file" name="spec_file" accept="application/json">
@@ -216,6 +217,7 @@
         <button class="button primary" type="submit" name="action" value="find">Find</button>
         <button class="button" type="submit" name="action" value="download">Download as JSON</button>
         <button class="button" type="submit" name="action" value="upload">Upload and run</button>
+        <button class="button" type="submit" name="action" value="save">Save filter</button>
       </div>
     </section>
   </form>

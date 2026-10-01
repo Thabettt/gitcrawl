@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Runs · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Run history</h1>
+    <a class="button primary" href="/find">New find</a>
+  </div>
+  <form id="run-filters" class="run-filters" action="/runs" method="get">
+    <label class="field" for="run-filter-status">
+      <span class="field-label">Status</span>
+      <select class="field-input" id="run-filter-status" name="status">
+        <option value="" {{ 'selected' if not status }}>any</option>
+        {% for name in statuses %}
+        <option value="{{ name }}" {{ 'selected' if name == status }}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field" for="run-filter-hash">
+      <span class="field-label">Filter hash (exact or prefix)</span>
+      <input class="field-input" type="text" id="run-filter-hash" name="hash" value="{{ hash }}">
+    </label>
+    <div class="form-actions">
+      <button class="button" type="submit">Apply</button>
+      <a class="button ghost" href="/runs">Clear</a>
+    </div>
+  </form>
+  {% if filter_error %}
+  <div id="runs-filter-error" class="empty-state error-state" role="alert">
+    <p>{{ filter_error }}</p>
+    <p class="muted">Valid statuses: {{ statuses | join(", ") }}.</p>
+  </div>
+  {% endif %}
+  <div class="table-wrap">
+    <table id="run-history" class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Run</th>
+          <th scope="col">Hash</th>
+          <th scope="col">Status</th>
+          <th scope="col">Fetched</th>
+          <th scope="col">Inserted</th>
+          <th scope="col">Duration</th>
+          <th scope="col">When</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="run-history-body">
+      {% for run in runs %}
+        <tr id="history-run-{{ run.id }}" data-run-id="{{ run.id }}" data-status="{{ run.status }}"{% if run.incomplete %} data-incomplete="true"{% endif %}>
+          <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+          <td class="mono"><a href="/runs/{{ run.id }}" aria-label="Open run {{ run.id }}">{{ run.hash_short }}</a></td>
+          <td>
+            <span class="pill {{ run.status }}" data-status="{{ run.status }}">{{ run.status }}</span>
+            {% if run.incomplete %}<span class="badge flag incomplete" data-flag="incomplete" title="Partial or incomplete shards">incomplete</span>{% endif %}
+          </td>
+          <td data-count="fetched">{{ run.fetched }}</td>
+          <td data-count="inserted">{{ run.inserted }}</td>
+          <td data-field="duration">{{ run.duration }}</td>
+          <td>{{ run.ran_at }}</td>
+          <td class="history-actions">
+            <a class="button ghost" href="/runs/{{ run.id }}">Detail</a>
+            {% if run.terminal %}
+            <form class="inline-form" action="/runs/{{ run.id }}/replay" method="post" data-replay="true">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <button class="button" type="submit" aria-label="Replay run {{ run.id }}">Replay</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if runs_error %}
+  <div id="runs-error" class="empty-state error-state" role="alert">
+    <p>Run history unavailable</p>
+    <p class="muted">The database did not answer; try again once the service is back.</p>
+  </div>
+  {% endif %}
+  {% if not runs and not runs_error %}
+  <div id="runs-empty" class="empty-state">
+    <p>No runs match</p>
+    <p class="muted">{% if status or hash %}Loosen the filters or clear them.{% else %}Start with a quick find on the <a href="/">dashboard</a> or the full <a href="/find">Find</a> form.{% endif %}</p>
+  </div>
+  {% endif %}
+  <nav id="runs-pagination" class="pagination" aria-label="Run history pages">
+    {% if page > 1 %}
+    <a id="runs-page-prev" class="button" href="/runs?page={{ page - 1 }}{{ query_suffix }}">Previous</a>
+    {% endif %}
+    <span id="runs-page-status" class="muted" data-page="{{ page }}" data-pages="{{ pages }}">Page {{ page }} of {{ pages }} · {{ total }} runs</span>
+    {% if page < pages %}
+    <a id="runs-page-next" class="button" href="/runs?page={{ page + 1 }}{{ query_suffix }}">Next</a>
+    {% endif %}
+  </nav>
+</section>
+{% endblock %}

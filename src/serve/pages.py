@@ -9,19 +9,22 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.engine import Engine
 
 from enrich.cloner import CloneMode, parse_mode
 from lib.gh_client import API_VERSION, load_tokens
+from serve.diff import diff_runs
 from serve.executor import Runner, create_run, execute_run
 from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
-from serve.forms import build_spec_from_form, form_state
+from serve.forms import build_spec_from_form, form_state, spec_to_form_values
+from serve.library import LibraryError, create_filter, get_filter, list_filters
 from serve.runs import (
     CloneRegistry,
     clone_estimate_for_run,
@@ -44,9 +47,13 @@ RUN_SORT_COLUMNS = {
     "name": RunItem.full_name,
 }
 NON_TERMINAL_STATUSES = ("queued", "running")
+HISTORY_STATUSES = ("queued", "running", "done", "partial", "failed")
+HISTORY_PAGE_SIZE = 50
 R44_VIRTUALS = ("min_commits", "min_loc")
+SAVE_ERROR_STATUS = {"invalid_name": 400, "invalid_spec": 400, "duplicate_name": 409}
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
+_templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
 def _bounded(check: Callable[[], object], timeout: float = HEALTH_TIMEOUT_SECONDS) -> bool:
@@ -142,6 +149,145 @@ def _recent_runs(engine: Engine, limit: int = RECENT_RUNS_LIMIT) -> list[dict]:
             .all()
         )
     return [_run_summary(row) for row in rows]
+
+
+def _history_summary(row) -> dict:
+    return {
+        "id": row["id"],
+        "filter_hash": row["filter_hash"],
+        "hash_short": row["filter_hash"][:8],
+        "status": row["status"],
+        "fetched": row["fetched"],
+        "inserted": row["inserted"],
+        "total_count": row["total_count"],
+        "duration": _duration(row["started_at"], row["finished_at"]),
+        "ran_at": _relative_time(row["finished_at"] or row["started_at"] or row["created_at"]),
+        "incomplete": row["status"] == "partial" or bool(row["incomplete_shards"]),
+        "terminal": row["status"] not in NON_TERMINAL_STATUSES,
+        "error": row["error"],
+    }
+
+
+def _history_page(engine: Engine, *, status: str, hash_prefix: str, page: int) -> dict:
+    statement = select(Runs)
+    if status:
+        statement = statement.where(Runs.status == status)
+    if hash_prefix:
+        statement = statement.where(Runs.filter_hash.startswith(hash_prefix))
+    with engine.connect() as connection:
+        total = int(connection.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        pages = max(1, (total + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE)
+        current = min(max(page, 1), pages)
+        rows = (
+            connection.execute(
+                statement.order_by(Runs.created_at.desc(), Runs.id.desc())
+                .offset((current - 1) * HISTORY_PAGE_SIZE)
+                .limit(HISTORY_PAGE_SIZE)
+            )
+            .mappings()
+            .all()
+        )
+    return {
+        "runs": [_history_summary(row) for row in rows],
+        "page": current,
+        "pages": pages,
+        "total": total,
+    }
+
+
+def _same_hash_runs(engine: Engine, row) -> list[dict]:
+    with engine.connect() as connection:
+        rows = (
+            connection.execute(
+                select(Runs)
+                .where(Runs.filter_hash == row["filter_hash"], Runs.id != row["id"])
+                .order_by(Runs.created_at.desc(), Runs.id.desc())
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            "id": candidate["id"],
+            "status": candidate["status"],
+            "hash_short": candidate["filter_hash"][:8],
+            "ran_at": _relative_time(
+                candidate["finished_at"] or candidate["started_at"] or candidate["created_at"]
+            ),
+        }
+        for candidate in rows
+    ]
+
+
+def _previous_same_hash_run(engine: Engine, row) -> int | None:
+    with engine.connect() as connection:
+        return connection.scalar(
+            select(Runs.id)
+            .where(
+                Runs.filter_hash == row["filter_hash"],
+                Runs.id != row["id"],
+                or_(
+                    Runs.created_at < row["created_at"],
+                    and_(Runs.created_at == row["created_at"], Runs.id < row["id"]),
+                ),
+            )
+            .order_by(Runs.created_at.desc(), Runs.id.desc())
+            .limit(1)
+        )
+
+
+def _last_run_times(engine: Engine, hashes: list[str]) -> dict[str, str]:
+    unique = [value for value in dict.fromkeys(hashes) if value]
+    if not unique:
+        return {}
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(Runs.filter_hash, func.max(Runs.created_at))
+            .where(Runs.filter_hash.in_(unique))
+            .group_by(Runs.filter_hash)
+        ).all()
+    return {row[0]: _relative_time(row[1]) for row in rows}
+
+
+def render_library(
+    request: Request,
+    engine: Engine,
+    *,
+    error: str = "",
+    hints: tuple[str, ...] = (),
+    status_code: int = 200,
+) -> HTMLResponse:
+    library_error = error
+    try:
+        views = list_filters(engine)
+        last_runs = _last_run_times(engine, [view.filter_hash for view in views])
+    except Exception:
+        views = []
+        last_runs = {}
+        library_error = library_error or "Saved filters unavailable; the database did not answer."
+        hints = ()
+    items = [
+        {
+            "id": view.id,
+            "name": view.name,
+            "filter_hash": view.filter_hash,
+            "hash_short": view.filter_hash[:8],
+            "created_at": _relative_time(view.created_at),
+            "last_run": last_runs.get(view.filter_hash),
+        }
+        for view in views
+    ]
+    return _templates.TemplateResponse(
+        request,
+        "library.html",
+        {
+            "filters": items,
+            "error": library_error,
+            "hints": list(hints),
+            "csrf_token": request.state.csrf_token,
+        },
+        status_code=status_code,
+    )
 
 
 def _run_detail_row(engine: Engine, run_id: int):
@@ -327,7 +473,7 @@ def register_pages(
     token_present: Callable[[], bool] | None = None,
     runner_factory: Callable[[], Runner] | None = None,
 ) -> None:
-    templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    templates = _templates
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -417,9 +563,26 @@ def register_pages(
     @app.get("/find", response_class=HTMLResponse)
     @app.get("/vsearch/", response_class=HTMLResponse)
     def filter_form(request: Request):
-        values = {key: value for key, value in request.query_params.multi_items() if key != "q"}
+        values = {
+            key: value
+            for key, value in request.query_params.multi_items()
+            if key not in ("q", "filter")
+        }
         if "q" in request.query_params:
             values["keywords"] = request.query_params["q"]
+        filter_id = request.query_params.get("filter")
+        if filter_id is not None:
+            try:
+                view = get_filter(engine_factory(), int(filter_id))
+            except (TypeError, ValueError, LibraryError):
+                return render_filters(
+                    request,
+                    values,
+                    ("saved filter not found",),
+                    ("pick a saved filter from the library",),
+                    404,
+                )
+            values.update(spec_to_form_values(view.filter_spec))
         return render_filters(request, values)
 
     @app.post("/find")
@@ -471,6 +634,18 @@ def register_pages(
                 media_type="application/json",
                 headers={"Content-Disposition": 'attachment; filename="gitcrawl-filter.json"'},
             )
+        if action == "save":
+            try:
+                create_filter(engine_factory(), values.get("name", ""), spec_to_dict(spec))
+            except LibraryError as exc:
+                return render_filters(
+                    request,
+                    values,
+                    (exc.message,),
+                    exc.hints,
+                    SAVE_ERROR_STATUS.get(exc.code, 400),
+                )
+            return RedirectResponse("/filters", status_code=303)
         try:
             runner = runner_or_none()
         except Exception:
@@ -479,6 +654,72 @@ def register_pages(
         run_id = create_run(engine, spec_to_dict(spec), api_version=API_VERSION)
         execute_run(engine, run_id, runner=runner, runs_root=runs_root)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @app.get("/runs", response_class=HTMLResponse)
+    def runs_page(request: Request, status: str = "", hash: str = "", page: int = 1):
+        hash_prefix = hash.strip()
+        filtered_status = status if status in HISTORY_STATUSES else ""
+        filter_error = ""
+        if status and not filtered_status:
+            filter_error = f"unknown status `{status}`"
+        try:
+            view = _history_page(
+                engine_factory(), status=filtered_status, hash_prefix=hash_prefix, page=page
+            )
+            runs_error = False
+        except Exception:
+            view = {"runs": [], "page": 1, "pages": 1, "total": 0}
+            runs_error = True
+        filter_query = urlencode({"status": filtered_status, "hash": hash_prefix})
+        query_suffix = f"&{filter_query}" if (filtered_status or hash_prefix) else ""
+        return templates.TemplateResponse(
+            request,
+            "runs.html",
+            {
+                "csrf_token": request.state.csrf_token,
+                "status": filtered_status,
+                "hash": hash_prefix,
+                "statuses": HISTORY_STATUSES,
+                "filter_error": filter_error,
+                "runs_error": runs_error,
+                "query_suffix": query_suffix,
+                **view,
+            },
+        )
+
+    @app.get("/runs/{run_id}/diff", response_class=HTMLResponse)
+    def run_diff_page(request: Request, run_id: int, against: str | None = None):
+        engine = engine_factory()
+        viewed = _run_detail_row(engine, run_id)
+        if viewed is None:
+            return templates.TemplateResponse(request, "diff.html", {"run": None}, status_code=404)
+        candidates = _same_hash_runs(engine, viewed)
+        baseline_id: int | None
+        if against is None:
+            baseline_id = _previous_same_hash_run(engine, viewed)
+        else:
+            try:
+                baseline_id = int(against)
+            except (TypeError, ValueError):
+                baseline_id = None
+            if baseline_id is None or _run_detail_row(engine, baseline_id) is None:
+                return templates.TemplateResponse(
+                    request, "diff.html", {"run": None}, status_code=404
+                )
+        context = {
+            "run_id": run_id,
+            "hash_short": viewed["filter_hash"][:8],
+            "against": baseline_id,
+            "candidates": candidates,
+            "result": None,
+            "empty": False,
+            "no_baseline": baseline_id is None,
+        }
+        if baseline_id is not None:
+            result = diff_runs(engine, baseline_id, run_id)
+            context["result"] = result
+            context["empty"] = not (result.added or result.removed or result.changed)
+        return templates.TemplateResponse(request, "diff.html", context)
 
     progress_registry = CloneRegistry()
 
