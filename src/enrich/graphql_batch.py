@@ -18,8 +18,8 @@ _SPLIT_MARKERS = ("timeout", "resource limits", "something went wrong")
 _REPOSITORY_FIELDS = (
     "      fundingLinks { url platform }",
     "      hasDiscussionsEnabled",
-    "      discussions(first: 50) { totalCount }",
-    "      sponsorsListing { tiers(first: 50) { monthlyPriceInDollars } }",
+    "      discussions(first: 1) { totalCount }",
+    "      sponsorsListing { tiers(first: 1) { monthlyPriceInDollars } }",
 )
 
 
@@ -194,44 +194,17 @@ def _fetch(
     on_response: Callable[[httpx.Response, float], None] | None,
     depth: int,
 ) -> dict[int, RepoGraphQL]:
-    payload = _post_query(
-        client,
-        token=token,
-        repo_ids=repo_ids,
-        node_ids=node_ids,
-        graphql_url=graphql_url,
-        max_aliases=max_aliases,
-        limiter=limiter,
-        sleep=sleep,
-        now=now,
-        jitter=jitter,
-        on_response=on_response,
-    )
-    messages = _error_messages(payload)
-    if not messages:
-        return parse_batch_response(payload)
-    if _is_split_worthy(messages) and len(repo_ids) > 1 and depth < _MAX_SPLIT_DEPTH:
-        middle = len(repo_ids) // 2
-        merged = _fetch(
-            client,
-            token=token,
-            repo_ids=repo_ids[:middle],
-            node_ids=node_ids[:middle],
-            graphql_url=graphql_url,
-            max_aliases=max_aliases,
-            limiter=limiter,
-            sleep=sleep,
-            now=now,
-            jitter=jitter,
-            on_response=on_response,
-            depth=depth + 1,
-        )
-        merged.update(
-            _fetch(
+    merged: dict[int, RepoGraphQL] = {}
+    stack: list[tuple[list[int], list[str], int]] = [(repo_ids, node_ids, depth)]
+    last_error: RequestFailed | None = None
+    while stack:
+        ids, nodes, current_depth = stack.pop()
+        try:
+            payload = _post_query(
                 client,
                 token=token,
-                repo_ids=repo_ids[middle:],
-                node_ids=node_ids[middle:],
+                repo_ids=ids,
+                node_ids=nodes,
                 graphql_url=graphql_url,
                 max_aliases=max_aliases,
                 limiter=limiter,
@@ -239,11 +212,27 @@ def _fetch(
                 now=now,
                 jitter=jitter,
                 on_response=on_response,
-                depth=depth + 1,
             )
-        )
-        return merged
-    raise RequestFailed(200, messages[0])
+        except RequestFailed as exc:
+            last_error = exc
+            if len(ids) > 1 and current_depth < _MAX_SPLIT_DEPTH:
+                middle = len(ids) // 2
+                stack.append((ids[middle:], nodes[middle:], current_depth + 1))
+                stack.append((ids[:middle], nodes[:middle], current_depth + 1))
+            continue
+        messages = _error_messages(payload)
+        if not messages:
+            merged.update(parse_batch_response(payload))
+            continue
+        if _is_split_worthy(messages) and len(ids) > 1 and current_depth < _MAX_SPLIT_DEPTH:
+            middle = len(ids) // 2
+            stack.append((ids[middle:], nodes[middle:], current_depth + 1))
+            stack.append((ids[:middle], nodes[:middle], current_depth + 1))
+            continue
+        last_error = RequestFailed(200, messages[0])
+    if not merged and last_error is not None:
+        raise last_error
+    return merged
 
 
 def fetch_graphql_batch(

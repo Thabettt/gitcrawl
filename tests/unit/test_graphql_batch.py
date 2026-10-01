@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 
 import httpx
 import pytest
 
 from discover.search_shards import RequestFailed
 from enrich.graphql_batch import (
+    _MAX_SPLIT_DEPTH,
     RepoGraphQL,
     build_batch_query,
     fetch_graphql_batch,
@@ -65,11 +67,11 @@ def test_build_batch_query_is_shallow_node_form_with_ratelimit_and_first_cap():
     for field in (
         "fundingLinks { url platform }",
         "hasDiscussionsEnabled",
-        "discussions(first: 50) { totalCount }",
-        "sponsorsListing { tiers(first: 50) { monthlyPriceInDollars } }",
+        "discussions(first: 1) { totalCount }",
+        "sponsorsListing { tiers(first: 1) { monthlyPriceInDollars } }",
     ):
         assert query.count(field) == 2
-    assert re.findall(r"first: (\d+)", query) == ["50", "50", "50", "50"]
+    assert re.findall(r"first: (\d+)", query) == ["1", "1", "1", "1"]
     assert "issues" not in query
     assert "pullRequests" not in query
 
@@ -213,36 +215,41 @@ def test_fetch_graphql_batch_raises_on_non_split_errors():
 
 
 @pytest.mark.parametrize("error", SPLIT_ERRORS)
-def test_fetch_graphql_batch_splits_on_split_errors_without_same_shape_retry(error):
-    captured = []
-    responses = [
-        httpx.Response(200, json={"data": None, "errors": [error]}),
-        httpx.Response(200, json=payload_for([1, 2], cost=1)),
-        httpx.Response(200, json=payload_for([3, 4], cost=1)),
-    ]
-    client = client_from(responses, captured)
+def test_split_returns_partial_results_and_retries_only_failures(error):
+    posts = []
+
+    def handler(request):
+        query = json.loads(request.content)["query"]
+        ids = [int(match) for match in re.findall(r"c(\d+): node", query)]
+        posts.append(ids)
+        if any(repo_id in {1, 2} for repo_id in ids):
+            return httpx.Response(200, json={"data": None, "errors": [error]})
+        return httpx.Response(200, json=payload_for(ids, cost=1))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
     result = fetch_graphql_batch(
         client,
         token="tok",
-        repo_ids=[1, 2, 3, 4],
-        node_ids=["NODE_1", "NODE_2", "NODE_3", "NODE_4"],
+        repo_ids=list(range(1, 5)),
+        node_ids=[f"NODE_{repo_id}" for repo_id in range(1, 5)],
     )
-    assert sorted(result) == [1, 2, 3, 4]
-    assert result[1].rate_limit_cost == 1
-    assert len(captured) == 3
-    queries = [json.loads(request.content)["query"] for request in captured]
-    assert len(set(queries)) == 3
-    halves = {frozenset(re.findall(r"c(\d+): node", query)) for query in queries[1:]}
-    assert halves == {frozenset({"1", "2"}), frozenset({"3", "4"})}
+    assert set(result) == {3, 4}
+    assert result[3].rate_limit_cost == 1
+    counts = Counter(frozenset(ids) for ids in posts)
+    assert counts[frozenset({3, 4})] == 1
+    assert all(3 not in ids and 4 not in ids for ids in posts[posts.index([3, 4]) + 1 :])
+    failing = sum(count for ids, count in counts.items() if ids <= {1, 2})
+    assert 0 < failing <= _MAX_SPLIT_DEPTH
 
 
 def test_fetch_graphql_batch_depth_cap_stops_recursion_with_request_failed():
     captured = []
-    responses = [
-        httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
-        for _ in range(5)
-    ]
-    client = client_from(responses, captured)
+
+    def handler(request):
+        captured.append(request)
+        return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
     repo_ids = list(range(1, 17))
     with pytest.raises(RequestFailed):
         fetch_graphql_batch(
@@ -251,7 +258,7 @@ def test_fetch_graphql_batch_depth_cap_stops_recursion_with_request_failed():
             repo_ids=repo_ids,
             node_ids=[f"NODE_{repo_id}" for repo_id in repo_ids],
         )
-    assert len(captured) == 5
+    assert len(captured) == 2 ** (_MAX_SPLIT_DEPTH + 1) - 1
 
 
 def test_fetch_graphql_batch_returns_empty_map_without_requests_for_no_ids():
