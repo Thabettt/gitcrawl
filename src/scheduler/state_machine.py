@@ -58,10 +58,10 @@ def _as_text(value) -> str:
 
 
 def _get_field(fields, name: str) -> str | None:
-    for key, value in fields.items():
-        if _as_text(key) == name:
-            return _as_text(value)
-    return None
+    value = fields.get(name)
+    if value is None:
+        value = fields.get(name.encode())
+    return _as_text(value) if value is not None else None
 
 
 class ShardStore:

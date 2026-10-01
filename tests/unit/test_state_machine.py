@@ -58,6 +58,14 @@ def test_allowed_transitions_table_is_exact():
     }
 
 
+def test_get_field_prefers_direct_key_access():
+    from scheduler.state_machine import _get_field
+
+    assert _get_field({"shard_id": "7"}, "shard_id") == "7"
+    assert _get_field({b"shard_id": b"8"}, "shard_id") == "8"
+    assert _get_field({}, "shard_id") is None
+
+
 def test_create_and_get_roundtrip(store):
     shard_id = store.create(spec())
     row = store.get(shard_id)

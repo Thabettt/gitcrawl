@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -192,7 +193,7 @@ def run_search_discovery(
     on_response = _audit_hook(deps)
     store = ShardStore(deps.engine)
     queue = ShardQueue(deps.redis) if deps.redis is not None else None
-    pending: list[int] = []
+    pending: deque[int] = deque()
     created = 0
     seen_ids: set[int] = set()
     collected_ids: list[int] = []
@@ -290,7 +291,7 @@ def run_search_discovery(
     consumer = f"gitcrawl-{os.getpid()}"
     if queue is None:
         while pending:
-            process(pending.pop(0))
+            process(pending.popleft())
     else:
         while True:
             claimed = queue.claim(consumer, count=1)
