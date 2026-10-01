@@ -26,6 +26,13 @@ ALLOWED_TRANSITIONS: dict[ShardState, frozenset[ShardState]] = {
     ShardState.INCOMPLETE: frozenset(),
 }
 
+_SOURCES: dict[ShardState, frozenset[ShardState]] = {
+    target: frozenset(
+        source for source, targets in ALLOWED_TRANSITIONS.items() if target in targets
+    )
+    for target in ShardState
+}
+
 _GROUP = "workers"
 _SHARD_FIELD = "shard_id"
 _ATTEMPTS_FIELD = "attempts"
@@ -125,21 +132,28 @@ class ShardStore:
         incomplete: bool | None = None,
         total_count: int | None = None,
     ) -> None:
+        values: dict[str, object] = {"state": new_state.value}
+        if fetched is not None:
+            values["fetched"] = fetched
+        if incomplete is not None:
+            values["incomplete"] = incomplete
+        if total_count is not None:
+            values["total_count"] = total_count
+        allowed = [state.value for state in _SOURCES[new_state]]
         with self._engine.begin() as connection:
-            row = connection.execute(select(Shard.state).where(Shard.id == shard_id)).one_or_none()
-            if row is None:
-                raise KeyError(shard_id)
-            current = ShardState(row[0])
-            if new_state not in ALLOWED_TRANSITIONS[current]:
-                raise ValueError(f"illegal shard transition {current.value} -> {new_state.value}")
-            values: dict[str, object] = {"state": new_state.value}
-            if fetched is not None:
-                values["fetched"] = fetched
-            if incomplete is not None:
-                values["incomplete"] = incomplete
-            if total_count is not None:
-                values["total_count"] = total_count
-            connection.execute(update(Shard).where(Shard.id == shard_id).values(**values))
+            updated = connection.execute(
+                update(Shard)
+                .where(Shard.id == shard_id, Shard.state.in_(allowed))
+                .values(**values)
+                .returning(Shard.id)
+            ).scalar_one_or_none()
+            if updated is None:
+                current = connection.execute(
+                    select(Shard.state).where(Shard.id == shard_id)
+                ).scalar_one_or_none()
+                if current is None:
+                    raise KeyError(shard_id)
+                raise ValueError(f"illegal shard transition {current} -> {new_state.value}")
 
     def counts(self) -> dict[str, int]:
         counts = {state.value: 0 for state in ShardState}
@@ -163,6 +177,7 @@ class ShardQueue:
         self._lanes = lanes
         self._max_attempts = max_attempts
         self._prefix = prefix
+        self._groups_ready: set[int] = set()
 
     def lane_for(self, shard_id: int) -> int:
         return shard_id % self._lanes
@@ -175,11 +190,14 @@ class ShardQueue:
         return f"{self._prefix}:dlq"
 
     def _ensure_group(self, lane: int) -> None:
+        if lane in self._groups_ready:
+            return
         try:
             self._redis.xgroup_create(self._lane_key(lane), _GROUP, id="0", mkstream=True)
         except ResponseError as error:
             if "BUSYGROUP" not in str(error):
                 raise
+        self._groups_ready.add(lane)
 
     def _read(self, lane: int, consumer: str, start: str, count: int, block_ms: int):
         options = {"count": count}

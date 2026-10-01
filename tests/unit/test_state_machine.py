@@ -190,6 +190,30 @@ def test_enqueue_routes_to_lane_stream(redis):
     assert redis.xlen("gitcrawl:shards:lane:1") == 1
 
 
+def test_ensure_group_runs_once_per_lane(redis):
+    class CountingRedis:
+        def __init__(self, inner):
+            self._inner = inner
+            self.group_creates = 0
+
+        def xgroup_create(self, *args, **kwargs):
+            self.group_creates += 1
+            return self._inner.xgroup_create(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    counting = CountingRedis(redis)
+    queue = ShardQueue(counting)
+    queue.enqueue(1)
+    first = counting.group_creates
+    assert first >= 1
+    queue.claim("consumer", count=10)
+    after_claim = counting.group_creates
+    queue.claim("consumer", count=10)
+    assert counting.group_creates == after_claim
+
+
 def test_claim_drains_pel_history_before_new_messages():
     queue = ShardQueue(fakeredis.FakeRedis(), lanes=1)
     first = queue.enqueue(1)
