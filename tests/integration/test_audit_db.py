@@ -108,6 +108,52 @@ def test_record_audit_inserts_and_reads_back(clean: Engine):
     assert row["latency_ms"] == record.latency_ms
 
 
+def _audit_count(engine: Engine) -> int:
+    with engine.connect() as connection:
+        return int(connection.scalar(text("SELECT count(*) FROM audit_log")))
+
+
+def test_audit_buffer_batches_inserts(clean: Engine):
+    from sqlalchemy import event
+
+    from serve.audit import AuditBuffer
+
+    statements: list[str] = []
+
+    def listener(conn, cursor, statement, parameters, context, executemany):
+        if "INTO AUDIT_LOG" in statement.upper():
+            statements.append(statement)
+
+    buffer = AuditBuffer(clean, batch_size=10)
+    event.listen(clean, "before_cursor_execute", listener)
+    try:
+        for index in range(10):
+            buffer.add(_record(index))
+    finally:
+        event.remove(clean, "before_cursor_execute", listener)
+    assert len(statements) == 1
+    assert _audit_count(clean) == 10
+
+
+def test_audit_buffer_flush_persists_remaining_records_and_clears(clean: Engine):
+    from serve.audit import AuditBuffer
+
+    buffer = AuditBuffer(clean, batch_size=10)
+    for index in range(3):
+        buffer.add(_record(index))
+    buffer.flush()
+    assert _audit_count(clean) == 3
+    buffer.flush()
+    assert _audit_count(clean) == 3
+
+
+def test_audit_buffer_rejects_non_positive_batch_size(clean: Engine):
+    from serve.audit import AuditBuffer
+
+    with pytest.raises(ValueError):
+        AuditBuffer(clean, batch_size=0)
+
+
 def test_slo_snapshot_empty_tables_returns_all_none(clean: Engine):
     assert slo_snapshot(clean) == SloSnapshot(
         search_remaining=None,

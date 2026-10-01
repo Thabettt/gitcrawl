@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Callable
 from datetime import date
@@ -545,3 +546,25 @@ def test_deps_defaults(clean: Engine):
     assert deps.redis is None
     assert deps.limiter is None
     assert deps.token_id == "anonymous"
+    assert deps.audit_buffer is None
+
+
+def test_audit_buffer_defers_record_audit_until_run_end(clean: Engine, monkeypatch):
+    from serve.audit import AuditBuffer
+
+    def boom(engine, record):
+        raise RuntimeError("record_audit should not run while a buffer is wired")
+
+    monkeypatch.setattr(audit_module, "record_audit", boom)
+
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json=[repo_item(46, owner_login="acme")])
+
+    deps = dataclasses.replace(
+        make_deps(clean, scripted_client(handler, [])),
+        audit_buffer=AuditBuffer(clean, batch_size=100),
+    )
+    stats = run_org_enum(deps, org="acme", jitter=lambda: 0.0)
+
+    assert stats.fetched == 1
+    assert scalar(clean, "SELECT count(*) FROM audit_log") == 1

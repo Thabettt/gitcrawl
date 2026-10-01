@@ -76,6 +76,13 @@ def _has_next_link(link: str | None) -> bool:
     return False
 
 
+_PARSED_BODY_KEY = "gitcrawl.json"
+
+
+def cached_json(response: httpx.Response) -> object | None:
+    return response.extensions.get(_PARSED_BODY_KEY)
+
+
 def record_from_response(
     params: Mapping[str, object],
     response: httpx.Response,
@@ -84,13 +91,15 @@ def record_from_response(
     latency_ms: int,
     etag_sent: str | None = None,
     now: datetime | None = None,
+    body: object | None = None,
 ) -> AuditRecord:
     headers = response.headers
-    body: object = None
-    try:
-        body = response.json()
-    except Exception:
-        body = None
+    if body is None:
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+    response.extensions[_PARSED_BODY_KEY] = body
     total_count: int | None = None
     incomplete_results: bool | None = None
     if isinstance(body, Mapping):
@@ -120,6 +129,27 @@ def record_from_response(
 def record_audit(engine: Engine, record: AuditRecord) -> None:
     with engine.begin() as connection:
         connection.execute(insert(AuditLog).values(**asdict(record)))
+
+
+class AuditBuffer:
+    def __init__(self, engine: Engine, *, batch_size: int = 100) -> None:
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        self._engine = engine
+        self._batch_size = batch_size
+        self._records: list[AuditRecord] = []
+
+    def add(self, record: AuditRecord) -> None:
+        self._records.append(record)
+        if len(self._records) >= self._batch_size:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._records:
+            return
+        records, self._records = self._records, []
+        with self._engine.begin() as connection:
+            connection.execute(insert(AuditLog), [asdict(record) for record in records])
 
 
 _AUDIT_WINDOW_SQL = text("""

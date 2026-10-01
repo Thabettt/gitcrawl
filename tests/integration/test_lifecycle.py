@@ -639,3 +639,30 @@ def test_refresh_repos_counts_throttled_failures_and_continues(clean: Engine, mo
     assert stats == RefreshStats(failed=1, not_modified=1)
     assert calls == ["octo/a", "octo/b"]
     assert repo_count(clean) == 2
+
+
+def test_hydrate_repo_reuses_the_audit_cached_body():
+    from hydrate.repo_client import hydrate_repo
+    from serve.audit import record_from_response
+
+    parses: list[int] = []
+    body = payload(1, full_name="octo/one")
+    response = httpx.Response(200, json=body)
+    original = response.json
+
+    def counting_json():
+        parses.append(1)
+        return original()
+
+    response.json = counting_json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response
+
+    def hook(resp: httpx.Response, latency_ms: float) -> None:
+        record_from_response({}, resp, token_fp="fp", latency_ms=latency_ms)
+
+    hydrated = hydrate_repo(mock_client(handler), "octo/one", now=lambda: 1000.0, on_response=hook)
+
+    assert hydrated.payload == body
+    assert parses == [1]

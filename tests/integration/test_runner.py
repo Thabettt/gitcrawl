@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -672,6 +673,8 @@ def test_build_deps_requires_a_token(clean: Engine, monkeypatch):
 
 
 def test_build_deps_fingerprints_the_token_and_wires_the_stack(clean: Engine):
+    from serve.audit import AuditBuffer
+
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
     redis = fakeredis.FakeRedis()
     deps = build_deps(clean, token="sekret", redis_client=redis, client=client)
@@ -680,6 +683,44 @@ def test_build_deps_fingerprints_the_token_and_wires_the_stack(clean: Engine):
     assert deps.client is client
     assert deps.redis is redis
     assert deps.limiter is not None
+    assert isinstance(deps.audit_buffer, AuditBuffer)
+
+
+def test_run_filter_flushes_the_audit_buffer_at_run_end(clean: Engine, monkeypatch):
+    from serve.audit import AuditBuffer
+
+    def boom(engine, record):
+        raise RuntimeError("record_audit should not run while a buffer is wired")
+
+    monkeypatch.setattr(runner_module.audit, "record_audit", boom)
+
+    client, _ = scripted(lambda request: count_response(0))
+    deps = dataclasses.replace(
+        make_deps(clean, client), audit_buffer=AuditBuffer(clean, batch_size=100)
+    )
+    payload = run_filter(deps, spec_for(q="topic:ai"), config=RunnerConfig(max_shards=1))
+
+    assert payload.total_count == 0
+    with clean.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM audit_log")) == 1
+
+
+def test_run_filter_flushes_the_audit_buffer_when_the_run_fails(clean: Engine, monkeypatch):
+    from serve.audit import AuditBuffer
+
+    def boom(engine, record):
+        raise RuntimeError("record_audit should not run while a buffer is wired")
+
+    monkeypatch.setattr(runner_module.audit, "record_audit", boom)
+
+    client, _ = scripted(lambda request: httpx.Response(404))
+    deps = dataclasses.replace(
+        make_deps(clean, client), audit_buffer=AuditBuffer(clean, batch_size=100)
+    )
+    with pytest.raises(pipeline.RequestFailed):
+        run_filter(deps, spec_for(q="topic:ai"), config=RunnerConfig(max_shards=1))
+    with clean.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM audit_log")) == 1
 
 
 def test_make_runner_parses_filter_spec_dicts(clean: Engine):

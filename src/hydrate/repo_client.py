@@ -10,6 +10,7 @@ import httpx
 from discover.search_shards import RequestFailed, _short_message
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
+from serve import audit
 
 _REDIRECT_STATUSES = frozenset({301, 302})
 _MAX_REDIRECTS = 3
@@ -93,7 +94,7 @@ def hydrate_repo(
         if response.status_code != 200:
             raise RequestFailed(int(response.status_code), _short_message(response))
         try:
-            payload = response.json()
+            payload = audit.cached_json(response) or response.json()
         except ValueError:
             raise RequestFailed(200, _short_message(response)) from None
         if not _valid_payload(payload):

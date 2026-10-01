@@ -179,3 +179,44 @@ def test_audit_record_is_frozen():
     record = record_from_response({}, _response(200), token_fp="fp", latency_ms=1, now=NOW)
     with pytest.raises(dataclasses.FrozenInstanceError):
         record.status = 500
+
+
+def test_record_from_response_caches_parsed_body():
+    from serve.audit import cached_json
+
+    response = _response(200, json={"total_count": 7, "incomplete_results": False})
+    body = response.json()
+    # emulate the hook having cached it
+    response.extensions["gitcrawl.json"] = body
+    assert cached_json(response) is body
+
+
+def test_record_from_response_parses_and_caches_the_body():
+    from serve.audit import cached_json
+
+    body = {"total_count": 7, "incomplete_results": False}
+    response = _response(200, json=body)
+    record = record_from_response({}, response, token_fp="fp", latency_ms=1, now=NOW)
+    assert record.total_count == 7
+    assert cached_json(response) == body
+
+
+def test_record_from_response_caches_a_malformed_body_as_none():
+    from serve.audit import cached_json
+
+    response = _response(200, text="<html>nope</html>")
+    record = record_from_response({}, response, token_fp="fp", latency_ms=1, now=NOW)
+    assert record.total_count is None
+    assert cached_json(response) is None
+
+
+def test_record_from_response_accepts_preparsed_body():
+    from serve.audit import cached_json, record_from_response
+
+    body = {"total_count": 9}
+    response = _response(200)
+    record = record_from_response(
+        {}, response, token_fp="fp", latency_ms=1, now=NOW, body=body
+    )
+    assert record.total_count == 9
+    assert cached_json(response) is body

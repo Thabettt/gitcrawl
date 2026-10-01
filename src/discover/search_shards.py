@@ -9,6 +9,7 @@ import httpx
 
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
+from serve import audit
 
 _CAP_MESSAGE = "only the first 1000"
 _BODY_FALLBACK_CHARS = 300
@@ -95,7 +96,7 @@ def iter_shard_pages(
         )
         if response.status_code == 200:
             try:
-                payload = response.json()
+                payload = audit.cached_json(response) or response.json()
             except ValueError:
                 raise RequestFailed(200, _short_message(response)) from None
             if isinstance(payload, list):

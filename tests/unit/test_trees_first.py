@@ -354,3 +354,27 @@ def test_fetch_metafiles_malformed_body_raises_request_failed():
     with pytest.raises(RequestFailed) as excinfo:
         fetch_metafiles(client, "octo/hello", names=("Dockerfile",))
     assert excinfo.value.status == 200
+
+
+def test_fetch_tree_reuses_the_audit_cached_body():
+    from enrich.trees_first import fetch_tree
+    from serve.audit import record_from_response
+
+    parses: list[int] = []
+    response = httpx.Response(200, json=TREE_RESPONSE)
+    original = response.json
+
+    def counting_json():
+        parses.append(1)
+        return original()
+
+    response.json = counting_json
+    client = client_from([response])
+
+    def hook(resp, latency_ms):
+        record_from_response({}, resp, token_fp="fp", latency_ms=latency_ms)
+
+    presence = fetch_tree(client, "octo/hello", ref="v1", on_response=hook)
+
+    assert presence.paths == TREE_BLOB_PATHS
+    assert parses == [1]

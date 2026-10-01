@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.engine import Engine
+from starlette.concurrency import run_in_threadpool
 
 from enrich.cloner import CloneMode, parse_mode
 from lib.gh_client import API_VERSION, load_tokens
@@ -686,7 +687,9 @@ def register_pages(
             )
         if action == "save":
             try:
-                create_filter(engine_factory(), values.get("name", ""), spec_to_dict(spec))
+                await run_in_threadpool(
+                    create_filter, engine_factory(), values.get("name", ""), spec_to_dict(spec)
+                )
             except LibraryError as exc:
                 return render_filters(
                     request,
@@ -697,11 +700,13 @@ def register_pages(
                 )
             return RedirectResponse("/filters", status_code=303)
         try:
-            runner = runner_or_none()
+            runner = await run_in_threadpool(runner_or_none)
         except Exception:
             return Response(status_code=500, content="runner unavailable", media_type="text/plain")
         engine = engine_factory()
-        run_id = create_run(engine, spec_to_dict(spec), api_version=API_VERSION)
+        run_id = await run_in_threadpool(
+            create_run, engine, spec_to_dict(spec), api_version=API_VERSION
+        )
         executor_factory().submit(run_id, runner=runner)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
@@ -813,15 +818,16 @@ def register_pages(
         if not await validate_csrf(request):
             return Response(status_code=403, content="invalid csrf token", media_type="text/plain")
         engine = engine_factory()
-        with engine.connect() as connection:
-            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+        row = await run_in_threadpool(_run_detail_row, engine, run_id)
         if row is None:
             return Response(status_code=404, content="run not found", media_type="text/plain")
         try:
-            runner = runner_or_none()
+            runner = await run_in_threadpool(runner_or_none)
         except Exception:
             return Response(status_code=500, content="runner unavailable", media_type="text/plain")
-        new_id = create_run(engine, dict(row["filter_spec"]), api_version=row["api_version"])
+        new_id = await run_in_threadpool(
+            create_run, engine, dict(row["filter_spec"]), api_version=row["api_version"]
+        )
         executor_factory().submit(new_id, runner=runner)
         return RedirectResponse(f"/runs/{new_id}", status_code=303)
 
@@ -911,7 +917,8 @@ def register_pages(
         except ValueError:
             return _invalid_param("mode", "mode must be one of: shallow, file_only, windowed")
         try:
-            progress = start_clone(
+            progress = await run_in_threadpool(
+                start_clone,
                 engine_factory(),
                 run_id,
                 limit=limit,

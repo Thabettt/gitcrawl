@@ -40,6 +40,7 @@ class Deps:
     redis: object | None = None
     limiter: BucketLimiter | None = None
     token_id: str = "anonymous"
+    audit_buffer: audit.AuditBuffer | None = None
 
 
 @dataclass
@@ -78,9 +79,17 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
             token_fp=deps.token_id,
             latency_ms=latency_ms,
         )
-        audit.record_audit(deps.engine, record)
+        if deps.audit_buffer is not None:
+            deps.audit_buffer.add(record)
+        else:
+            audit.record_audit(deps.engine, record)
 
     return hook
+
+
+def _flush_audit(deps: Deps) -> None:
+    if deps.audit_buffer is not None:
+        deps.audit_buffer.flush()
 
 
 def _collect_ids(seen: set[int], collected: list[int], items: Iterable[Mapping]) -> None:
@@ -302,6 +311,7 @@ def run_search_discovery(
                 queue.ack(queued.stream_id, queued.shard_id)
 
     stats.repo_ids = tuple(collected_ids)
+    _flush_audit(deps)
     _log_summary("search", stats)
     return stats
 
@@ -338,6 +348,7 @@ def run_since_scan(
         _fold(stats, upsert_repos(deps.engine, page.items))
         if checkpoint_shard_id is not None and page.max_id is not None:
             save_checkpoint(deps.engine, checkpoint_shard_id, page.max_id)
+    _flush_audit(deps)
     _log_summary("since", stats)
     return stats
 
@@ -391,5 +402,6 @@ def run_org_enum(
         stats.pages += 1
         stats.fetched += len(page.items)
         _fold(stats, upsert_repos(deps.engine, page.items))
+    _flush_audit(deps)
     _log_summary("org" if org is not None else "user", stats)
     return stats

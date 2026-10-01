@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
+from starlette.concurrency import run_in_threadpool
 
 from discover.search_shards import RequestFailed
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
@@ -433,10 +434,12 @@ def create_app(
             )
         bound_engine = engine_for()
         try:
-            runner = runner_for()
+            runner = await run_in_threadpool(runner_for)
         except Exception:
             return JSONResponse(status_code=500, content={"error": "internal_error"})
-        run_id = create_run(bound_engine, spec_to_dict(spec), api_version=API_VERSION)
+        run_id = await run_in_threadpool(
+            create_run, bound_engine, spec_to_dict(spec), api_version=API_VERSION
+        )
         captured: list[BaseException] = []
 
         def capturing(rid: int, filter_spec: dict) -> RunPayload:
@@ -463,11 +466,15 @@ def create_app(
                     content={"error": "upstream_unavailable", "retry_after_ms": 0},
                 )
             return JSONResponse(status_code=500, content={"error": "run_failed"})
-        with bound_engine.connect() as connection:
-            run_row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one()
-        if run_row["status"] == "failed":
-            return JSONResponse(status_code=500, content={"error": "run_failed"})
-        return _replay_body(bound_engine, run_row, run_id)
+
+        def finish() -> object:
+            with bound_engine.connect() as connection:
+                run_row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one()
+            if run_row["status"] == "failed":
+                return JSONResponse(status_code=500, content={"error": "run_failed"})
+            return _replay_body(bound_engine, run_row, run_id)
+
+        return await run_in_threadpool(finish)
 
     @application.get("/vsearch/runs/{filter_hash}")
     def replay(filter_hash: str):
@@ -563,7 +570,9 @@ def create_app(
                 )
             )
         try:
-            view = create_filter(engine_for(), document.get("name"), document.get("spec"))
+            view = await run_in_threadpool(
+                create_filter, engine_for(), document.get("name"), document.get("spec")
+            )
         except LibraryError as exc:
             return _library_error_response(exc)
         return JSONResponse(status_code=201, content=_library_view_payload(view))
@@ -578,9 +587,12 @@ def create_app(
             form = await request.form()
             name = form.get("name")
             try:
-                rename_filter(engine_for(), filter_id, name if isinstance(name, str) else None)
+                await run_in_threadpool(
+                    rename_filter, engine_for(), filter_id, name if isinstance(name, str) else None
+                )
             except LibraryError as exc:
-                return render_library(
+                return await run_in_threadpool(
+                    render_library,
                     request,
                     engine_for(),
                     error=exc.message,
@@ -601,7 +613,9 @@ def create_app(
                 )
             )
         try:
-            view = rename_filter(engine_for(), filter_id, document.get("name"))
+            view = await run_in_threadpool(
+                rename_filter, engine_for(), filter_id, document.get("name")
+            )
         except LibraryError as exc:
             return _library_error_response(exc)
         return _library_view_payload(view)
@@ -614,9 +628,10 @@ def create_app(
                     status_code=403, content="invalid csrf token", media_type="text/plain"
                 )
             try:
-                delete_filter(engine_for(), filter_id)
+                await run_in_threadpool(delete_filter, engine_for(), filter_id)
             except LibraryError as exc:
-                return render_library(
+                return await run_in_threadpool(
+                    render_library,
                     request,
                     engine_for(),
                     error=exc.message,
@@ -625,7 +640,7 @@ def create_app(
                 )
             return RedirectResponse("/filters", status_code=303)
         try:
-            delete_filter(engine_for(), filter_id)
+            await run_in_threadpool(delete_filter, engine_for(), filter_id)
         except LibraryError as exc:
             return _library_error_response(exc)
         return Response(status_code=204)

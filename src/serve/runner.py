@@ -90,6 +90,7 @@ def build_deps(
         redis=redis_client,
         limiter=BucketLimiter(redis_client) if redis_client is not None else None,
         token_id=token_fingerprint(token),
+        audit_buffer=audit.AuditBuffer(engine),
     )
 
 
@@ -121,7 +122,10 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
             token_fp=deps.token_id,
             latency_ms=latency_ms,
         )
-        audit.record_audit(deps.engine, record)
+        if deps.audit_buffer is not None:
+            deps.audit_buffer.add(record)
+        else:
+            audit.record_audit(deps.engine, record)
 
     return hook
 
@@ -499,6 +503,14 @@ def apply_sort(items: list[dict], sort: str | None, order: str | None) -> list[d
 
 
 def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
+    try:
+        return _run_filter(deps, spec, config=config)
+    finally:
+        if deps.audit_buffer is not None:
+            deps.audit_buffer.flush()
+
+
+def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
     cfg = config or RunnerConfig()
     virtual = dict(spec.virtual)
     warnings = _r44_warnings(virtual)

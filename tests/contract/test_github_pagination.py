@@ -278,3 +278,31 @@ def test_scalar_json_200_body_raises_request_failed():
     with pytest.raises(RequestFailed) as excinfo:
         list(iter_shard_pages(client, QUERY, now=lambda: 1000.0))
     assert excinfo.value.status == 200
+
+
+def test_audit_cached_body_is_reused_for_the_page_parse():
+    from serve.audit import record_from_response
+
+    parses: list[int] = []
+    response = search_page()
+    original = response.json
+
+    def counting_json():
+        parses.append(1)
+        return original()
+
+    response.json = counting_json
+    client = client_from([response])
+
+    pages = list(
+        iter_shard_pages(
+            client,
+            QUERY,
+            on_response=lambda resp, latency_ms: record_from_response(
+                {}, resp, token_fp="fp", latency_ms=latency_ms
+            ),
+        )
+    )
+
+    assert pages[0].items == ({"id": 1}, {"id": 2})
+    assert parses == [1]
