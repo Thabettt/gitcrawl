@@ -700,9 +700,10 @@ def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, 
     ]
     assert [item.repo_id for item in payload.items] == [1]
     assert payload.field_stats == {
-        "per_field_sources": {"owner_country": 1, "min_geo_confidence": 1, "has_dockerfile": 1},
-        "calls_spent": {"owner_country": 2, "min_geo_confidence": 0, "has_dockerfile": 1},
+        "per_field_sources": {"owner_country": 1, "has_dockerfile": 1},
+        "calls_spent": {"owner_country": 2, "has_dockerfile": 1},
         "requeues": 0,
+        "warnings": [],
     }
 
 
@@ -730,6 +731,7 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
         "per_field_sources": {"min_stars": 1, "team_topic": 1},
         "calls_spent": {"min_stars": 0, "team_topic": 0},
         "requeues": 0,
+        "warnings": [],
     }
 
     run_id = create_run(clean, {"gitcrawl_filter": 1, "q": "language:python"}, api_version="v1")
@@ -737,3 +739,37 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
     status = run_status(clean, run_id)
     bundle = json.loads((Path(status["bundle_dir"]) / "bundle.json").read_text(encoding="utf-8"))
     assert bundle["field_stats"] == payload.field_stats
+
+
+def test_run_filter_surfaces_dropped_segments_as_incomplete(clean: Engine, monkeypatch):
+    page = [repo_item(1, stars=30)]
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(1)
+            return page_response(page)
+        if path == "/repos/owner1/repo1":
+            return httpx.Response(200, json=repo_item(1))
+        return httpx.Response(404)
+
+    def always_fail(*args, **kwargs):
+        raise RuntimeError("lane down")
+
+    monkeypatch.setattr(runner_module, "_apply_dockerfile", always_fail)
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"has_dockerfile": True}),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert payload.items == []
+    assert payload.incomplete is True
+    assert payload.field_stats["requeues"] == 1
+    assert len(payload.field_stats["warnings"]) == 1
+    dropped = payload.field_stats["warnings"][0]
+    assert "dropped" in dropped
+    assert "`has_dockerfile`" in dropped
+    assert dropped in payload.warnings

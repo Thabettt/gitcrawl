@@ -108,6 +108,7 @@ def _regenerate_json(engine: Engine, run_row: RowMapping, run_id: int) -> bytes:
         "incomplete": run_row["status"] == "partial",
         "regenerated": True,
         "items": [_snapshot(row) for row in _item_rows(engine, run_id)],
+        "field_stats": {},
     }
     return json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8")
 

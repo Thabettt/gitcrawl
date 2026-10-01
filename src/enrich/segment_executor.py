@@ -16,6 +16,7 @@ class SegmentStats:
     per_field_sources: dict[str, int] = field(default_factory=dict)
     calls_spent: dict[str, int] = field(default_factory=dict)
     requeues: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -117,15 +118,13 @@ def execute_segments(
                 item["requeues"] += 1
                 queue.insert(1 if queue else 0, item)
             else:
-                logger.warning(
-                    "segment (%s, %s] dropped after %s requeue(s): field `%s` failed: %s: %s",
-                    item["segment"].start,
-                    item["segment"].end,
-                    item["requeues"],
-                    field,
-                    type(failed).__name__,
-                    failed,
+                message = (
+                    f"segment ({item['segment'].start}, {item['segment'].end}] dropped "
+                    f"{len(item['ids'])} repo(s) after {item['requeues']} requeue(s): "
+                    f"field `{field}` failed: {type(failed).__name__}: {failed}"
                 )
+                stats.warnings.append(message)
+                logger.warning(message)
             continue
         survivors.extend(ids)
     survivors.sort()

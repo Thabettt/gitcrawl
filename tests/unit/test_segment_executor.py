@@ -91,6 +91,7 @@ def test_stats_count_survivors_and_calls_per_field():
     assert stats.per_field_sources == {"first": 2, "second": 1}
     assert stats.calls_spent == {"first": 2, "second": 3}
     assert stats.requeues == 0
+    assert stats.warnings == []
 
 
 def test_survivors_first_orders_by_stars_then_pushed_at():
@@ -194,10 +195,13 @@ def test_exhausted_requeues_drop_the_segment_with_a_warning(caplog):
     assert stats.requeues == 1
     assert stats.per_field_sources == {"x": 2}
     assert stats.calls_spent == {"x": 1}
-    assert any(
-        "dropped" in record.getMessage() and "`x`" in record.getMessage()
-        for record in caplog.records
-    )
+    assert len(stats.warnings) == 1
+    warning = stats.warnings[0]
+    assert "dropped" in warning
+    assert "`x`" in warning
+    assert "(2, 4]" in warning
+    assert "2 repo(s)" in warning
+    assert any(record.getMessage() == warning for record in caplog.records)
 
 
 def test_requeue_resumes_at_the_failed_handler():

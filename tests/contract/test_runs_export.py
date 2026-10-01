@@ -225,6 +225,19 @@ def test_export_regenerates_json_and_csv_when_bundle_files_are_absent(clean: Eng
     assert json_response.headers["x-gitcrawl-regenerated"] == "true"
     assert csv_response.headers["x-gitcrawl-regenerated"] == "true"
     document = json.loads(json_response.content.decode("utf-8"))
+    assert set(document) == {
+        "filter",
+        "filter_hash",
+        "run_id",
+        "ran_at",
+        "api_version",
+        "total_count",
+        "fetched",
+        "incomplete",
+        "regenerated",
+        "items",
+        "field_stats",
+    }
     assert document["filter"] == stored_filter_spec(clean, run_id)
     assert document["filter_hash"] == filter_hash
     assert document["run_id"] == run_id
@@ -234,6 +247,7 @@ def test_export_regenerates_json_and_csv_when_bundle_files_are_absent(clean: Eng
     assert document["incomplete"] is False
     assert document["regenerated"] is True
     assert document["ran_at"].endswith("Z")
+    assert document["field_stats"] == {}
     assert document["items"] == [expected_snapshot()]
     rows = list(csv.reader(io.StringIO(csv_response.content.decode("utf-8"))))
     assert rows == [

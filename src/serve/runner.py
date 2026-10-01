@@ -423,11 +423,16 @@ def _enrich_handlers(
 ) -> dict:
     rows_by_id = {row["id"]: row for row in rows}
     handlers: dict = {}
+    geo_claimed = False
     for step in plan_enrichment(list(virtual), depth="page").steps:
         if step.field in ("min_stars", "team_topic"):
             handlers[step.field] = _record_handler(rows_by_id, step.field, virtual)
         elif step.field in ("owner_country", "min_geo_confidence"):
-            handlers[step.field] = _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped)
+            if not geo_claimed:
+                handlers[step.field] = _geo_handler(
+                    deps, rows_by_id, virtual, budget, hook, skipped
+                )
+                geo_claimed = True
         elif step.field == "has_dockerfile":
             handlers[step.field] = _dockerfile_handler(
                 deps, rows_by_id, virtual.get("has_dockerfile"), budget, hook, skipped
@@ -524,6 +529,7 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
     survivors, segment_stats = execute_segments([row["id"] for row in rows], handlers, segments=1)
     surviving = set(survivors)
     rows = [row for row in rows if row["id"] in surviving]
+    warnings.extend(segment_stats.warnings)
     if skipped["geo"] > 0:
         warnings.append(
             f"{skipped['geo']} repo(s) skipped because owner country could not be resolved; "
@@ -544,7 +550,7 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
     return RunPayload(
         total_count=total_count,
         fetched=stats.fetched,
-        incomplete=bool(warnings) or stats.incomplete_shards > 0,
+        incomplete=bool(warnings) or bool(segment_stats.warnings) or stats.incomplete_shards > 0,
         warnings=warnings,
         items=items,
         field_stats=asdict(segment_stats),
