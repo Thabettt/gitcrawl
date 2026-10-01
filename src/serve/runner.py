@@ -7,14 +7,14 @@ from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlparse
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import bindparam, select, update
 from sqlalchemy.engine import Engine
 
 from discover import pipeline
 from discover.pipeline import Deps
 from discover.search_shards import RequestFailed
 from enrich.cost_planner import plan_enrichment
-from enrich.geo_resolver import GeoResult, resolve_owner
+from enrich.geo_resolver import GeoCache, _cache_key, resolve_many
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import refresh_repos
@@ -258,27 +258,6 @@ def _fetch_owner_location(
     return True, None
 
 
-def _store_owner_geo(
-    engine: Engine,
-    owner_id: int,
-    *,
-    location_raw: str | None,
-    result: GeoResult | None,
-) -> None:
-    confidence = result.confidence if result is not None else "unmatched"
-    country_iso = result.country_iso if result is not None else None
-    with engine.begin() as connection:
-        connection.execute(
-            update(Owner)
-            .where(Owner.id == owner_id)
-            .values(
-                location_raw=location_raw,
-                country_iso=country_iso,
-                geo_confidence=confidence,
-            )
-        )
-
-
 def _apply_geo(
     deps: Deps,
     rows: list[dict],
@@ -290,12 +269,11 @@ def _apply_geo(
     threshold = virtual.get("min_geo_confidence")
     if country is None and threshold is None:
         return rows, 0, 0
-    owner_ids: list[int] = []
-    for row in rows:
-        if row["owner_id"] not in owner_ids:
-            owner_ids.append(row["owner_id"])
+    owner_ids = list(dict.fromkeys(row["owner_id"] for row in rows))
     owners = _load_owners(deps.engine, owner_ids)
+    cache = GeoCache(deps.engine)
     used = 0
+    pending: list[tuple[int, str | None]] = []
     for owner_id in owner_ids:
         owner = owners.get(owner_id)
         if owner is None:
@@ -309,15 +287,37 @@ def _apply_geo(
             ok, location = _fetch_owner_location(deps, owner["login"], hook)
             if not ok:
                 continue
-            if location is None:
-                _store_owner_geo(deps.engine, owner_id, location_raw=None, result=None)
-                owner["geo_confidence"] = "unmatched"
-                continue
             owner["location_raw"] = location
-        result = resolve_owner(deps.engine, owner["location_raw"])
-        _store_owner_geo(deps.engine, owner_id, location_raw=owner["location_raw"], result=result)
-        owner["country_iso"] = result.country_iso
-        owner["geo_confidence"] = result.confidence
+        pending.append((owner_id, owner["location_raw"]))
+    resolved = resolve_many(deps.engine, [raw for _, raw in pending], cache=cache)
+    updates: list[dict] = []
+    for owner_id, raw in pending:
+        result = resolved.get(_cache_key(raw))
+        confidence = result.confidence if result is not None else "unmatched"
+        country_iso = result.country_iso if result is not None else None
+        updates.append(
+            {
+                "owner_id": owner_id,
+                "location_raw": raw,
+                "country_iso": country_iso,
+                "geo_confidence": confidence,
+            }
+        )
+        owner = owners[owner_id]
+        owner["country_iso"] = country_iso
+        owner["geo_confidence"] = confidence
+    if updates:
+        statement = (
+            update(Owner)
+            .where(Owner.id == bindparam("owner_id"))
+            .values(
+                location_raw=bindparam("location_raw"),
+                country_iso=bindparam("country_iso"),
+                geo_confidence=bindparam("geo_confidence"),
+            )
+        )
+        with deps.engine.begin() as connection:
+            connection.execute(statement, updates)
     threshold_index = None
     if isinstance(threshold, str) and threshold in GEO_CONFIDENCE_ORDER:
         threshold_index = GEO_CONFIDENCE_ORDER.index(threshold)

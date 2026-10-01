@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
+from lib.batching import chunked
 from store.models import GeoCache as GeoCacheRow
 
 _FLAG_PATTERN = re.compile("[\U0001f1e6-\U0001f1ff]{2}")
@@ -726,6 +727,15 @@ def resolve_location(
     return GeoResult(None, "unmatched", original)
 
 
+_MEMO_MAX = 4096
+_MEMO: dict[str, GeoResult] = {}
+
+
+def _cache_key(raw: str | None) -> str:
+    cleaned = _as_raw(raw)
+    return normalize_location(cleaned) if cleaned is not None else ""
+
+
 class GeoCache:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
@@ -763,6 +773,84 @@ class GeoCache:
         )
         with self._engine.begin() as connection:
             connection.execute(statement)
+
+    def get_many(self, keys: Sequence[str], *, batch_size: int = 1000) -> dict[str, GeoResult]:
+        if not keys:
+            return {}
+        found: dict[str, GeoResult] = {}
+        with self._engine.connect() as connection:
+            for batch in chunked(keys, batch_size):
+                rows = connection.execute(
+                    sa.select(
+                        GeoCacheRow.normalized,
+                        GeoCacheRow.country_iso,
+                        GeoCacheRow.confidence,
+                        GeoCacheRow.raw_sample,
+                    ).where(GeoCacheRow.normalized.in_(batch))
+                ).all()
+                for normalized, country_iso, confidence, raw_sample in rows:
+                    found[str(normalized)] = GeoResult(country_iso, confidence, raw_sample)
+        return found
+
+    def put_many(self, results: Mapping[str, GeoResult]) -> None:
+        if not results:
+            return
+        values = [
+            {
+                "normalized": key,
+                "country_iso": result.country_iso,
+                "confidence": result.confidence,
+                "raw_sample": result.raw_location,
+                "hits": 1,
+            }
+            for key, result in results.items()
+        ]
+        base = pg_insert(GeoCacheRow).values(values)
+        statement = base.on_conflict_do_update(
+            index_elements=[GeoCacheRow.normalized],
+            set_={
+                "country_iso": base.excluded.country_iso,
+                "confidence": base.excluded.confidence,
+                "raw_sample": base.excluded.raw_sample,
+                "hits": GeoCacheRow.hits + 1,
+                "updated_at": sa.func.now(),
+            },
+        )
+        with self._engine.begin() as connection:
+            connection.execute(statement)
+
+
+def resolve_many(
+    engine: Engine,
+    raw_locations: Sequence[str | None],
+    *,
+    cache: GeoCache | None = None,
+) -> dict[str | None, GeoResult]:
+    if not raw_locations:
+        return {}
+    store = cache or GeoCache(engine)
+    keys = [_cache_key(raw) for raw in raw_locations]
+    raw_by_key: dict[str, str | None] = {}
+    for key, raw in zip(keys, raw_locations, strict=True):
+        raw_by_key.setdefault(key, raw)
+    unique = list(raw_by_key)
+    cached = store.get_many(unique)
+    results: dict[str, GeoResult] = dict(cached)
+    fresh: dict[str, GeoResult] = {}
+    for key in unique:
+        if key in results:
+            continue
+        memo = _MEMO.get(key)
+        if memo is None:
+            memo = resolve_location(_as_raw(raw_by_key[key]))
+            if len(_MEMO) >= _MEMO_MAX:
+                _MEMO.clear()
+            _MEMO[key] = memo
+            fresh[key] = memo
+        results[key] = memo
+    if fresh:
+        store.put_many(fresh)
+    return results
 
 
 def resolve_owner(

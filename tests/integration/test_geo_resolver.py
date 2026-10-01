@@ -269,3 +269,74 @@ def test_resolve_owner_skips_geocoder_for_known_tiers(clean: Engine):
 def test_resolve_owner_rejects_invalid_geocoder_output(clean: Engine):
     result = resolve_owner(clean, "Atlantis", geocoder=lambda candidate: "not-a-country")
     assert result == GeoResult(None, "unmatched", "Atlantis")
+
+
+def test_geo_cache_bulk_roundtrip(alembic_engine):
+    from sqlalchemy import text
+
+    from enrich.geo_resolver import GeoCache, GeoResult
+
+    with alembic_engine.begin() as connection:
+        connection.execute(text("TRUNCATE TABLE geo_cache"))
+    cache = GeoCache(alembic_engine)
+    cache.put_many(
+        {"london": GeoResult("GB", "name", "London"), "paris": GeoResult("FR", "name", "Paris")}
+    )
+    found = cache.get_many(["london", "paris", "missing"])
+    assert found["london"].country_iso == "GB"
+    assert found["paris"].country_iso == "FR"
+    assert "missing" not in found
+    cache.put_many({"london": GeoResult("GB", "name", "London")})
+    with alembic_engine.connect() as connection:
+        hits = connection.scalar(text("SELECT hits FROM geo_cache WHERE normalized = 'london'"))
+    assert hits == 2
+
+
+@pytest.fixture()
+def fresh_memo():
+    from enrich import geo_resolver
+
+    geo_resolver._MEMO.clear()
+    yield
+    geo_resolver._MEMO.clear()
+
+
+def test_resolve_many_keys_by_normalized_location(clean: Engine, fresh_memo):
+    from enrich.geo_resolver import resolve_many
+
+    results = resolve_many(clean, ["Lagos", "Lagos", "  lagos!!  ", None])
+    assert set(results) == {"lagos", ""}
+    assert results["lagos"] == GeoResult("NG", "gazetteer-city", "Lagos")
+    assert results[""] == GeoResult(None, "unmatched", None)
+    with clean.connect() as connection:
+        stored = (
+            connection.execute(sa.text("SELECT normalized FROM geo_cache ORDER BY normalized"))
+            .scalars()
+            .all()
+        )
+    assert stored == ["", "lagos"]
+
+
+def test_resolve_many_memoizes_and_bounds_the_process_cache(clean: Engine, monkeypatch, fresh_memo):
+    from enrich import geo_resolver
+
+    calls: list[str | None] = []
+    real_resolve = geo_resolver.resolve_location
+
+    def spy(raw, **kwargs):
+        calls.append(raw)
+        return real_resolve(raw, **kwargs)
+
+    monkeypatch.setattr(geo_resolver, "resolve_location", spy)
+    first = geo_resolver.resolve_many(clean, ["Atlantis"])
+    assert calls == ["Atlantis"]
+    with clean.begin() as connection:
+        connection.execute(sa.text("DELETE FROM geo_cache WHERE normalized = 'atlantis'"))
+    assert geo_resolver.resolve_many(clean, ["Atlantis"]) == first
+    assert calls == ["Atlantis"]
+
+    monkeypatch.setattr(geo_resolver, "_MEMO_MAX", 2)
+    geo_resolver._MEMO.clear()
+    for raw in ("Atlantis", "Xanadu", "El Dorado", "Shangri-La", "Camelot"):
+        geo_resolver.resolve_many(clean, [raw])
+        assert len(geo_resolver._MEMO) <= 2
