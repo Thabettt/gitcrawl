@@ -188,7 +188,12 @@ class RunItem(Base):
     __tablename__ = "run_items"
     __table_args__ = (
         Index("run_items_repo_idx", "repo_id"),
-        Index("run_items_stars_idx", "run_id", text("stargazers DESC")),
+        Index(
+            "run_items_stars_idx",
+            "run_id",
+            text("stargazers DESC NULLS LAST"),
+            "repo_id",
+        ),
         UniqueConstraint("run_id", "repo_id", name="run_items_run_repo_key"),
     )
 

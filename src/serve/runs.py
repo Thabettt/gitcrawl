@@ -89,7 +89,7 @@ def _item_rows(engine: Engine, run_id: int) -> list[RowMapping]:
                     RunItem.virtuals,
                 )
                 .where(RunItem.run_id == run_id)
-                .order_by(RunItem.stargazers.desc(), RunItem.repo_id)
+                .order_by(RunItem.stargazers.desc().nullslast(), RunItem.repo_id)
             ).mappings()
         )
 

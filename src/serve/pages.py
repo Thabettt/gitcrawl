@@ -212,13 +212,14 @@ def _history_page(engine: Engine, *, status: str, hash_prefix: str, page: int) -
     }
 
 
-def _same_hash_runs(engine: Engine, row) -> list[dict]:
+def _same_hash_runs(engine: Engine, row, *, limit: int = 50) -> list[dict]:
     with engine.connect() as connection:
         rows = (
             connection.execute(
                 select(Runs)
                 .where(Runs.filter_hash == row["filter_hash"], Runs.id != row["id"])
                 .order_by(Runs.created_at.desc(), Runs.id.desc())
+                .limit(limit)
             )
             .mappings()
             .all()

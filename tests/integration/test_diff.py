@@ -214,6 +214,21 @@ def test_diff_unknown_runs_raise_key_error(clean: Engine, tmp_path):
         diff_runs(clean, 424242, run_a)
 
 
+def test_same_hash_candidates_are_capped(clean: Engine, tmp_path):
+    from serve.pages import _same_hash_runs
+
+    run_id = seed_run(clean, tmp_path, [item(1)])
+    for _ in range(55):
+        create_run(clean, FILTER, api_version=API_VERSION)
+    with clean.connect() as connection:
+        row = (
+            connection.execute(text("SELECT * FROM runs WHERE id = :id"), {"id": run_id})
+            .mappings()
+            .one()
+        )
+    assert len(_same_hash_runs(clean, row)) == 50
+
+
 def test_changed_fields_constant_is_exact():
     assert CHANGED_FIELDS == (
         "stargazers",

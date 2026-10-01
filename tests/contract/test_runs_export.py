@@ -351,6 +351,33 @@ def test_export_regeneration_orders_rows_by_stargazers_desc_then_repo_id(clean: 
     assert [row[0] for row in rows[1:]] == ["1296269", "2", "3"]
 
 
+def test_export_regeneration_orders_null_stargazers_last(clean: Engine, tmp_path):
+    with clean.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility, "
+                "stargazers) VALUES (2, 'R_2', 'octo/two', 1, 'two', 'public', 5), "
+                "(3, 'R_3', 'octo/three', 1, 'three', 'public', 5)"
+            )
+        )
+    items = [
+        payload_item(repo_id=2, full_name="octo/two", stargazers=None),
+        payload_item(repo_id=3, full_name="octo/three", stargazers=5),
+    ]
+    payload = RunPayload(total_count=2, fetched=2, items=items)
+    client = make_client(clean, payload, tmp_path)
+    filter_hash, run_id = seed_run(client, clean)
+    directory = tmp_path / filter_hash / str(run_id)
+    (directory / "bundle.json").unlink()
+    (directory / "corpus.csv").unlink()
+
+    document = json.loads(
+        client.get(f"/vsearch/runs/{filter_hash}/export").content.decode("utf-8")
+    )
+
+    assert [item["stargazers"] for item in document["items"]] == [5, None]
+
+
 def test_export_bundle_rejects_unknown_format_without_touching_the_database(
     clean: Engine, tmp_path
 ):

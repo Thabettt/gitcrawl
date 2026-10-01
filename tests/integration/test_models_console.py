@@ -99,7 +99,7 @@ def _indexdefs(engine: Engine) -> dict[str, str]:
 
 
 def test_single_alembic_head(alembic_config):
-    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0006"]
+    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0007"]
 
 
 def test_metadata_declares_exactly_the_expected_tables():
@@ -178,7 +178,7 @@ def test_console_indexes_exist(migrated: Engine):
     assert defs["runs_created_idx"].endswith("(created_at DESC)")
     assert defs["runs_filter_hash_idx"].endswith("(filter_hash, created_at DESC)")
     assert defs["run_items_repo_idx"].endswith("(repo_id)")
-    assert defs["run_items_stars_idx"].endswith("(run_id, stargazers DESC)")
+    assert defs["run_items_stars_idx"].endswith("(run_id, stargazers DESC NULLS LAST, repo_id)")
 
 
 def test_model_metadata_indexes_match_console_contract():
