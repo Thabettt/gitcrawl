@@ -542,6 +542,65 @@ def test_run_executor_wait_timeout_and_idle(db: Engine, tmp_path):
     assert run_status(db, run_id)["status"] == "done"
 
 
+def test_run_executor_enqueue_keeps_idle_cleared_for_outstanding_job(
+    db: Engine, tmp_path, monkeypatch
+):
+    started = threading.Event()
+    release_first = threading.Event()
+
+    def runner(run_id: int, spec: dict) -> RunPayload:
+        started.set()
+        release_first.wait(10)
+        return RunPayload(1, [_item()])
+
+    run_id = create_run(db, FILTER, api_version="v1")
+    executor = RunExecutor(db, runner=runner, runs_root=str(tmp_path))
+    executor.submit(run_id)
+    assert started.wait(10) is True
+
+    real_put = executor._queue.put
+    real_task_done = executor._queue.task_done
+    put_entered = threading.Event()
+    allow_put = threading.Event()
+    task_done_finished = threading.Event()
+
+    def gated_put(item):
+        put_entered.set()
+        assert allow_put.wait(10) is True
+        real_put(item)
+
+    def gated_task_done():
+        real_task_done()
+        task_done_finished.set()
+
+    monkeypatch.setattr(executor._queue, "put", gated_put)
+    monkeypatch.setattr(executor._queue, "task_done", gated_task_done)
+
+    pending: list = []
+
+    def enqueue_interactive() -> None:
+        pending.append(executor.submit_call(lambda: "interactive"))
+
+    submitter = threading.Thread(target=enqueue_interactive)
+    submitter.start()
+    assert put_entered.wait(10) is True
+
+    release_first.set()
+    assert task_done_finished.wait(10) is True
+    try:
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline and not executor._idle.is_set():
+            time.sleep(0.005)
+        assert executor._idle.is_set() is False
+    finally:
+        allow_put.set()
+    submitter.join(10)
+
+    assert len(pending) == 1
+    assert pending[0].result(timeout=10) == "interactive"
+    assert executor.wait(10) is True
+
+
 def test_run_executor_concurrent_submits_keep_single_worker(db: Engine, tmp_path, monkeypatch):
     events: list[tuple[str, int]] = []
     lock = threading.Lock()

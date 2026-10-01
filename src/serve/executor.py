@@ -275,8 +275,9 @@ class RunExecutor:
         return future
 
     def _enqueue(self, priority: int, job: Callable[[], object], future: Future) -> None:
-        self._idle.clear()
-        self._queue.put((priority, next(self._sequence), job, future))
+        with self._lock:
+            self._idle.clear()
+            self._queue.put((priority, next(self._sequence), job, future))
 
     def wait_for(self, run_id: int, timeout: float | None = None) -> bool:
         with self._lock:
@@ -306,5 +307,6 @@ class RunExecutor:
                     future.set_exception(exc)
             finally:
                 self._queue.task_done()
-                if self._queue.unfinished_tasks == 0:
-                    self._idle.set()
+                with self._lock:
+                    if self._queue.unfinished_tasks == 0:
+                        self._idle.set()
