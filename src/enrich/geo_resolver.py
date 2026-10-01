@@ -792,9 +792,7 @@ class GeoCache:
                     found[str(normalized)] = GeoResult(country_iso, confidence, raw_sample)
         return found
 
-    def put_many(
-        self, results: Mapping[str, GeoResult], *, batch_size: int = 1000
-    ) -> None:
+    def put_many(self, results: Mapping[str, GeoResult], *, batch_size: int = 1000) -> None:
         if not results:
             return
         for batch in chunked(list(results.items()), batch_size):
