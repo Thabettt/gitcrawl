@@ -59,7 +59,7 @@ class CloneProgress:
     errors: list[str] = field(default_factory=list)
     error_count: int = 0
 
-    def emit(self) -> None:
+    def emit(self, *, force: bool = False) -> None:
         return None
 
 
@@ -203,7 +203,7 @@ def clone_repos(
     )
     if not items:
         progress.status = "done"
-        progress.emit()
+        progress.emit(force=True)
         return stats
     run_dir = Path(dest_root) / run_row["filter_hash"] / str(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -264,5 +264,5 @@ def clone_repos(
             list(pool.map(clone_one, items))
     progress.current = None
     progress.status = "done"
-    progress.emit()
+    progress.emit(force=True)
     return stats

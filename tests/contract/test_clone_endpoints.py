@@ -224,7 +224,7 @@ def test_clone_start_returns_running_then_progress_completes(clean: Engine, tmp_
     assert json.loads(progress_path.read_text(encoding="utf-8")) == done
 
 
-def test_progress_is_persisted_after_each_repo(clean: Engine, tmp_path, monkeypatch):
+def test_progress_is_live_in_flight_and_persisted_when_done(clean: Engine, tmp_path, monkeypatch):
     run_id, filter_hash = seed_run(clean, tmp_path)
     release = threading.Event()
     seen: list[list[str]] = []
@@ -240,24 +240,86 @@ def test_progress_is_persisted_after_each_repo(clean: Engine, tmp_path, monkeypa
     response = client.post(f"/runs/{run_id}/clone", json={"limit": 2, "mode": "shallow"})
 
     assert response.json()["status"] == "running"
-    progress_path = tmp_path / "runs" / filter_hash / str(run_id) / "clone-progress.json"
-    data = None
+    live = None
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
-        try:
-            data = json.loads(progress_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = None
-        if data is not None and data["completed"] == 1 and data["current"] == "octo/world":
+        live = client.get(f"/partials/runs/{run_id}/clone-progress").json()
+        if live["completed"] == 1 and live["current"] == "octo/world":
             break
         time.sleep(0.01)
-    assert data is not None
-    assert data["status"] == "running"
-    assert data["completed"] == 1
-    assert data["current"] == "octo/world"
+    assert live is not None
+    assert live["status"] == "running"
+    assert live["completed"] == 1
+    assert live["current"] == "octo/world"
     release.set()
     done = wait_for_status(client, run_id)
     assert done["completed"] == 2
+    progress_path = tmp_path / "runs" / filter_hash / str(run_id) / "clone-progress.json"
+    persisted = None
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            persisted = json.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            persisted = None
+        if persisted == done:
+            break
+        time.sleep(0.01)
+    assert persisted == done
+
+
+def test_clone_progress_renders_worker_level_failures(clean: Engine, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("worker exploded")
+
+    monkeypatch.setattr("serve.runs.clone_repos", boom)
+    client = make_client(clean, tmp_path)
+
+    response = client.post(f"/runs/{run_id}/clone", json={"limit": 1, "mode": "shallow"})
+
+    assert response.status_code == 200
+    partial = None
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        partial = client.get(
+            f"/partials/runs/{run_id}/clone-progress", headers={"HX-Request": "true"}
+        )
+        if 'data-status="failed"' in partial.text:
+            break
+        time.sleep(0.01)
+    assert partial is not None
+    assert 'data-status="failed"' in partial.text
+    assert "RuntimeError: worker exploded" in partial.text
+
+
+def test_clone_progress_caps_rendered_errors(clean: Engine, tmp_path):
+    run_id, filter_hash = seed_run(clean, tmp_path)
+    progress_path = tmp_path / "runs" / filter_hash / str(run_id) / "clone-progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "total": 25,
+                "completed": 5,
+                "failed": 25,
+                "current": None,
+                "errors": [f"octo/r{index}: RuntimeError: boom" for index in range(20)],
+                "error_count": 25,
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = make_client(clean, tmp_path)
+
+    response = client.get(f"/partials/runs/{run_id}/clone-progress", headers={"HX-Request": "true"})
+
+    assert response.status_code == 200
+    assert response.text.count("<li>") <= 20
+    assert "5 more failure" in response.text
+    assert 'style="--progress: 0.2"' in response.text
 
 
 def test_clone_unknown_run_is_404(clean: Engine, tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from alembic import command
@@ -469,3 +470,51 @@ def test_load_rows_batches(clean: Engine):
     )
     rows = _load_rows(clean, [1, 2, 3], batch_size=2)
     assert set(rows) == {1, 2, 3}
+
+
+def test_persisted_progress_throttles_and_replaces_atomically(tmp_path):
+    from serve.runs import _PersistedProgress
+
+    now = {"value": 0.0}
+    progress = _PersistedProgress(
+        tmp_path / "progress.json",
+        status="running",
+        total=10,
+        completed=0,
+        failed=0,
+        now=lambda: now["value"],
+    )
+    progress.completed = 1
+    progress.emit()
+    first = (tmp_path / "progress.json").read_text(encoding="utf-8")
+    progress.completed = 2
+    progress.emit()  # throttled
+    assert (tmp_path / "progress.json").read_text(encoding="utf-8") == first
+    progress.emit(force=True)
+    assert '"completed": 2' in (tmp_path / "progress.json").read_text(encoding="utf-8")
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_persisted_progress_retries_transient_replace_failures(tmp_path, monkeypatch):
+    from serve.runs import _PersistedProgress
+
+    real_replace = os.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(source, destination):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise PermissionError("locked by a reader")
+        real_replace(source, destination)
+
+    monkeypatch.setattr("serve.runs.os.replace", flaky_replace)
+    progress = _PersistedProgress(
+        tmp_path / "progress.json", status="running", total=1, completed=0, failed=0
+    )
+
+    progress.emit(force=True)
+
+    data = json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))
+    assert attempts["count"] == 2
+    assert data["status"] == "running"
+    assert not list(tmp_path.glob("*.tmp"))

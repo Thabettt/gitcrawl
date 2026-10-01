@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -198,14 +200,40 @@ class CloneRegistry:
             self._entries[run_id] = progress
 
 
+_EMIT_INTERVAL_SECONDS = 0.25
+
+
 class _PersistedProgress(CloneProgress):
-    def __init__(self, path: Path, **values: object) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        now: Callable[[], float] = time.monotonic,
+        emit_interval: float = _EMIT_INTERVAL_SECONDS,
+        **values: object,
+    ) -> None:
         super().__init__(**values)
         self._path = path
+        self._now = now
+        self._emit_interval = emit_interval
+        self._last_emit = float("-inf")
 
-    def emit(self) -> None:
+    def emit(self, *, force: bool = False) -> None:
+        moment = self._now()
+        if not force and moment - self._last_emit < self._emit_interval:
+            return
+        self._last_emit = moment
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(asdict(self), ensure_ascii=False), encoding="utf-8")
+        temp = self._path.with_suffix(".tmp")
+        temp.write_text(json.dumps(asdict(self), ensure_ascii=False), encoding="utf-8")
+        for attempt in range(5):
+            try:
+                os.replace(temp, self._path)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
 
 
 def _count_run_items(engine: Engine, run_id: int) -> int:
@@ -321,7 +349,7 @@ def start_clone(
     progress.total = min(limit, _count_run_items(engine, run_id)) if limit > 0 else 0
     if limit <= 0:
         progress.status = "done"
-        progress.emit()
+        progress.emit(force=True)
         return progress
     worker = threading.Thread(
         target=_clone_worker,
@@ -354,6 +382,7 @@ def _clone_worker(
     except Exception as exc:
         progress.status = "failed"
         progress.current = None
+        progress.error_count += 1
         progress.errors.append(f"{type(exc).__name__}: {exc}"[:300])
     finally:
-        progress.emit()
+        progress.emit(force=True)
