@@ -74,7 +74,7 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "normalized": False,
         "country_iso": True,
         "confidence": False,
-        "raw_sample": False,
+        "raw_sample": True,
         "hits": False,
         "updated_at": False,
     },

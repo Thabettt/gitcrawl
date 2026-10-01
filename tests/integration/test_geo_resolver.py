@@ -156,6 +156,24 @@ def test_weak_timezone_ambiguous_band_never_guesses():
     assert resolve_location("Atlantis", tz_offset=9.0).confidence == "unmatched"
 
 
+def test_complete_timezone_bands_never_guess():
+    assert resolve_location("Atlantis", tz_offset=12.0).confidence == "unmatched"
+    assert resolve_location("Atlantis", tz_offset=-10.0).confidence == "unmatched"
+    assert resolve_location("Atlantis", tz_offset=-9.0).confidence == "unmatched"
+
+
+def test_non_finite_timezone_never_raises():
+    for value in (float("inf"), float("-inf"), float("nan"), "inf", "-inf", "not-a-number"):
+        result = resolve_location("Atlantis", tz_offset=value)
+        assert result == GeoResult(None, "unmatched", "Atlantis")
+
+
+def test_nfd_input_matches_nfc_gazetteer_and_aliases():
+    assert normalize_location("Zu\u0308rich") == "zürich"
+    assert resolve_location("Zu\u0308rich") == GeoResult("CH", "gazetteer-city", "Zu\u0308rich")
+    assert resolve_location("Tu\u0308rkiye") == GeoResult("TR", "name", "Tu\u0308rkiye")
+
+
 def test_weak_never_overrides_stronger_tiers():
     strong = resolve_location("Lagos", blog="https://example.de", tz_offset=-8.0)
     assert strong == GeoResult("NG", "gazetteer-city", "Lagos")
@@ -187,6 +205,23 @@ def test_geo_cache_round_trip_and_hit_counter(clean: Engine):
             sa.text("SELECT hits FROM geo_cache WHERE normalized = 'lagos'")
         ).scalar_one()
     assert hits == 2
+
+
+def test_geo_cache_round_trips_none_raw_location(clean: Engine):
+    cache = GeoCache(clean)
+    cache.put("", GeoResult(None, "unmatched", None))
+    assert cache.get("") == GeoResult(None, "unmatched", None)
+    with clean.connect() as connection:
+        raw = connection.execute(
+            sa.text("SELECT raw_sample FROM geo_cache WHERE normalized = ''")
+        ).scalar_one()
+    assert raw is None
+
+
+def test_resolve_owner_round_trips_none_raw_location(clean: Engine):
+    first = resolve_owner(clean, None)
+    assert first == GeoResult(None, "unmatched", None)
+    assert resolve_owner(clean, None) == first
 
 
 def test_resolve_owner_calls_geocoder_once_across_calls(clean: Engine):

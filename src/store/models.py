@@ -106,7 +106,7 @@ class GeoCache(Base):
     normalized: Mapped[str] = mapped_column(Text, primary_key=True)
     country_iso: Mapped[str | None] = mapped_column(CHAR(2))
     confidence: Mapped[str] = mapped_column(Text, nullable=False)
-    raw_sample: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_sample: Mapped[str | None] = mapped_column(Text)
     hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")

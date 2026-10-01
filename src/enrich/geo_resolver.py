@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
@@ -506,9 +507,9 @@ _CC_TLDS = {
 }
 
 _TZ_BANDS: dict[float, frozenset[str]] = {
-    -10.0: frozenset({"US"}),
-    -9.0: frozenset({"US"}),
-    -8.0: frozenset({"US", "CA"}),
+    -10.0: frozenset({"US", "PF", "CK"}),
+    -9.0: frozenset({"US", "PF"}),
+    -8.0: frozenset({"US", "CA", "MX"}),
     -5.0: frozenset({"US", "CA", "CO", "PE", "EC", "CU"}),
     -3.0: frozenset({"BR", "AR", "UY"}),
     0.0: frozenset({"GB", "IE", "PT", "IS", "GH", "SN", "CI"}),
@@ -524,7 +525,7 @@ _TZ_BANDS: dict[float, frozenset[str]] = {
     9.0: frozenset({"JP", "KR"}),
     9.5: frozenset({"AU"}),
     10.0: frozenset({"AU", "PG"}),
-    12.0: frozenset({"NZ"}),
+    12.0: frozenset({"NZ", "FJ", "TV", "WF", "MH", "NR", "KI"}),
 }
 
 
@@ -537,7 +538,7 @@ class GeoResult:
 
 def _clean(text: str, *, keep_flags: bool) -> str:
     parts: list[str] = []
-    for char in text.lower():
+    for char in unicodedata.normalize("NFC", text.lower()):
         category = unicodedata.category(char)
         keep = char.isalnum() or char.isspace() or category.startswith("M")
         if keep and char not in _SKIPPED_MARKS:
@@ -665,9 +666,12 @@ def _tz_iso(tz_offset: float | None) -> str | None:
     if tz_offset is None:
         return None
     try:
-        key = round(float(tz_offset) * 4) / 4
+        offset = float(tz_offset)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(offset):
+        return None
+    key = round(offset * 4) / 4
     codes = _TZ_BANDS.get(key)
     if codes is not None and len(codes) == 1:
         return next(iter(codes))
@@ -741,7 +745,7 @@ class GeoCache:
             normalized=normalized,
             country_iso=result.country_iso,
             confidence=result.confidence,
-            raw_sample=result.raw_location or "",
+            raw_sample=result.raw_location,
             hits=1,
         )
         statement = base.on_conflict_do_update(
