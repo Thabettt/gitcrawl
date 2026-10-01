@@ -168,6 +168,34 @@ def normalize_repo(item: dict) -> dict | None:
     }
 
 
+def dedupe_items(items: Iterable[dict]) -> list[dict]:
+    result: list[dict] = []
+    positions: dict[int, int] = {}
+    pushed: dict[int, object] = {}
+    for item in items:
+        raw_id = item.get("id") if isinstance(item, dict) else None
+        if not _valid_id(raw_id):
+            result.append(item)
+            continue
+        if raw_id not in positions:
+            positions[raw_id] = len(result)
+            pushed[raw_id] = item.get("pushed_at")
+            result.append(item)
+            continue
+        candidate = item.get("pushed_at")
+        chosen = pushed[raw_id]
+        chosen_dt = _parse_timestamp(chosen)
+        candidate_dt = _parse_timestamp(candidate)
+        if candidate_dt is not None and (chosen_dt is None or candidate_dt > chosen_dt):
+            chosen = candidate
+        if chosen is not candidate:
+            item = dict(item)
+            item["pushed_at"] = chosen
+        pushed[raw_id] = chosen
+        result[positions[raw_id]] = item
+    return result
+
+
 def _chunks(items: Iterable[dict], size: int) -> Iterator[list[dict]]:
     chunk: list[dict] = []
     for item in items:
