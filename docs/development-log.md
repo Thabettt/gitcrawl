@@ -2,7 +2,7 @@
 
 **Purpose**: durable, committed record of what has been done, decided, and is next — so nothing is lost when a session, tool, or the temporary SDD workspace disappears. Environment details live in `environment.md`.
 
-**Updated**: 2026-10-01 · **Branch**: `001-gitcrawl` · **HEAD**: `f64bd69`
+**Updated**: 2026-10-01 (overnight console run complete) · **Branch**: `001-gitcrawl` · **HEAD**: `918339e`
 
 ## Objective (frozen 2026-09-30)
 
@@ -113,6 +113,55 @@ The final whole-branch review triaged every prior deferred minor as **"Can ship"
 - **Morning leftovers**: branch integration decision (merge/PR/keep), the residual minors ledger, and any parked findings surfaced by the final console review.
 - **Temporary workspace**: `.superpowers/sdd/tasks/` (gitignored) holds the SDD ledger, task briefs, reports, and review packages. It is scratch — this log is the durable mirror; the workspace is deleted after the final whole-branch review.
 - **Execution process**: subagent-driven development — fresh implementer per task/batch, scripted task briefs, spec+quality review after each batch, scoped re-review per fix round, whole-branch review at the end. Deferred findings above are triaged at that final review.
+
+## Console build run — completion record (2026-10-01 overnight)
+
+**Scope executed:** US2 within-run lifecycle (T019–T023), US3 enrichment + serve (T028–T037, T051), and US4 operator console (T052–T059: persistence, executor, library, diff, UI shell/detail/history/library, keyboard/dark, polish). Batches B1–B9 + final review + one fix wave, all on `001-gitcrawl`.
+
+**Result:** **1020 tests passing first-hand (live golden-org + delta included)**, ruff/black clean, working tree clean. Final layered whole-branch review (3 reviewers: US2+enrichment / backend serve / clone+UI) → one fix wave (`918339e`) → scoped re-review: all items addressed; one latent residual parked (below). Head: `918339e`.
+
+**How to run the app** (details in `environment.md` → "Running the app"):
+```powershell
+$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
+# then open http://127.0.0.1:8000/  (dashboard; /find, /runs, /filters, /health)
+```
+
+**Rulings R32–R57 (append to the table above):**
+
+| # | Ruling | Cost if wrong |
+|---|---|---|
+| R32 | No GraphQL pre-flight dryRun (not a query feature); cost from `rateLimit` + guardrails | cost gate less precise |
+| R33 | `request_with_retry` gains `json_body`/`extra_headers` | refactor needed |
+| R34 | Persistent WSL session keeps the localhost relay alive for Redis | live calls flake |
+| R35 | T031 scope = zero-auth mirrors; GitHub-REST enrichments deferred | fewer fields |
+| R36 | Gazetter collisions by table order (injectable gazetteer later) | rare wrong country |
+| R37 | Weak tz tiebreak only for guaranteed-unique bands | fewer resolutions |
+| R38 | Console migration is `0003_console` (0002 was consumed) | doc mismatch |
+| R39 | Executor mechanics use an injectable runner; production runner in B5b | small refactor |
+| R40 | B5 split into three reviewable batches | review cadence |
+| R41 | Filter-spec `frame` opaque/verbatim until T038 | unvalidated frame |
+| R42 | ISO validity via `KNOWN_ISO_CODES` export | move helper |
+| R43 | `DiscoveryStats.repo_ids` collected by the pipeline | small refactor |
+| R44 | `min_commits`/`min_loc` warn + mark incomplete (no data source) | partial flagged |
+| R45 | `count_total` exposed and reused | duplication |
+| R46 | Hand-rolled CSS (R31 fallback), htmx vendored (sha256 recorded) | style differs from Tailwind |
+| R47 | Regenerated exports marked; raw stays file-only | degraded fallback marked |
+| R48 | Form at `/find` with `/vsearch/` alias | route naming |
+| R49 | Minimal run page in B5d; B8 upgraded it | placeholder churn |
+| R50 | Download-as-JSON = server-built spec action | parity drift |
+| R51 | Planner/segments wired into the runner | runner churn |
+| R52 | `field_stats` on payload + bundle (no DB column) | less provenance |
+| R53 | Clone progress in registry + bundle JSON file | lost on restart |
+| R54 | Canonical clone routes (spec amended) | B8 wiring mismatch |
+| R55 | Final fix-wave scope (C1 truncation, I1 executor, I2 replay status, auth strip, FK migration 0004, minors) | larger wave |
+| R56 | API paths execute via FIFO executor with per-run wait; browser POSTs enqueue+303 | latency/loop semantics |
+| R57 | GraphQL/mirrors/full-depth remain built-but-unwired (like R24); clamp + warning | missing enrichment fields |
+
+**Parked residuals (non-blocking, for the morning):**
+- `trees_first.fetch_metafiles` still sends the GitHub `Authorization` header by default (fixed for `mirrors.py`; metafiles is unwired). One-line `auth=False` when wired — parked (ruling under R55).
+- Executor `_futures` never evicts; `/vsearch/repos` cache-miss shares the FIFO queue; 0004 downgrade is lossy for NULL `repo_id` rows; lazy executor/runner init is unsynchronized. All minor/local.
+- Keyboard/JS behavior is markup-tested only; first browser pass recommended.
+- `runs.error` can carry ≤300 chars of upstream body (escaped everywhere it renders).
 
 ## Repo/git facts
 
