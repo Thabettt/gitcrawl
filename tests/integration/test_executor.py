@@ -12,6 +12,7 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from serve import executor as executor_module
 from serve.executor import (
     RunExecutor,
     RunPayload,
@@ -448,3 +449,45 @@ def test_run_executor_wait_timeout_and_idle(db: Engine, tmp_path):
     release.set()
     assert executor.wait(10) is True
     assert run_status(db, run_id)["status"] == "done"
+
+
+def test_run_executor_concurrent_submits_keep_single_worker(db: Engine, tmp_path, monkeypatch):
+    events: list[tuple[str, int]] = []
+    lock = threading.Lock()
+
+    def runner(run_id: int, spec: dict) -> RunPayload:
+        with lock:
+            events.append(("start", run_id))
+        time.sleep(0.05)
+        with lock:
+            events.append(("end", run_id))
+        return RunPayload(1, [_item()])
+
+    executor = RunExecutor(db, runner=runner, runs_root=str(tmp_path))
+    run_ids = [create_run(db, FILTER, api_version="v1") for _ in range(4)]
+    real_thread = threading.Thread
+    gate = threading.Barrier(len(run_ids))
+
+    class GatedThread(real_thread):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            try:
+                gate.wait(1)
+            except threading.BrokenBarrierError:
+                pass
+
+    monkeypatch.setattr(executor_module.threading, "Thread", GatedThread)
+    submitters = [real_thread(target=executor.submit, args=(run_id,)) for run_id in run_ids]
+    for thread in submitters:
+        thread.start()
+    for thread in submitters:
+        thread.join(10)
+    assert executor.wait(30) is True
+
+    order = [run_id for _, run_id in events]
+    assert sorted(order[::2]) == sorted(run_ids)
+    assert order[::2] == order[1::2]
+    assert all(kind == "start" for kind, _ in events[::2])
+    assert all(kind == "end" for kind, _ in events[1::2])
+    for run_id in run_ids:
+        assert run_status(db, run_id)["status"] == "done"

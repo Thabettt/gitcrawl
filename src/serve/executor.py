@@ -236,12 +236,10 @@ class RunExecutor:
         self._runner = runner
         self._runs_root = runs_root
         self._queue: queue.Queue[int] = queue.Queue()
-        self._thread: threading.Thread | None = None
+        self._thread = threading.Thread(target=self._work, daemon=True)
+        self._thread.start()
 
     def submit(self, run_id: int) -> None:
-        if self._thread is None:
-            self._thread = threading.Thread(target=self._work, daemon=True)
-            self._thread.start()
         self._queue.put(run_id)
 
     def wait(self, timeout: float | None = None) -> bool:
