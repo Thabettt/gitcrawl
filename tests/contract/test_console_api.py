@@ -6,7 +6,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from lib.gh_client import API_VERSION
 from serve.app import create_app
+from serve.executor import RunPayload, RunPayloadItem, create_run, execute_run
 from serve.filter_spec import parse_filter_spec, spec_hash
 
 SPEC = {"gitcrawl_filter": 1, "q": "language:rust", "sort": "stars"}
@@ -27,7 +29,42 @@ def clean(alembic_engine: Engine) -> Engine:
                 "owners, repos, full_name_history RESTART IDENTITY CASCADE"
             )
         )
+        connection.execute(text("INSERT INTO owners (id, login, type) VALUES (1, 'octo', 'User')"))
+        connection.execute(
+            text(
+                "INSERT INTO repos (id, node_id, full_name, owner_id, name, visibility) VALUES "
+                "(1, 'R_1', 'octo/r1', 1, 'r1', 'public'), "
+                "(2, 'R_2', 'octo/r2', 1, 'r2', 'public'), "
+                "(3, 'R_3', 'octo/r3', 1, 'r3', 'public')"
+            )
+        )
     return alembic_engine
+
+
+def run_item(repo_id: int, **overrides) -> RunPayloadItem:
+    values: dict[str, object] = {
+        "repo_id": repo_id,
+        "full_name": f"octo/r{repo_id}",
+        "stargazers": 10,
+        "pushed_at": "2026-01-01T00:00:00Z",
+        "archived": False,
+        "language": "Rust",
+        "license_spdx": "MIT",
+        "country_iso": "DE",
+        "geo_confidence": "name",
+        "virtuals": {},
+    }
+    values.update(overrides)
+    return RunPayloadItem(**values)
+
+
+def seed_run(engine: Engine, tmp_path, items: list[RunPayloadItem]) -> int:
+    run_id = create_run(engine, SPEC, api_version=API_VERSION)
+    payload = RunPayload(total_count=len(items), fetched=len(items), items=list(items))
+    execute_run(
+        engine, run_id, runner=lambda _rid, _spec: payload, runs_root=str(tmp_path / "runs")
+    )
+    return run_id
 
 
 @pytest.fixture()
@@ -202,3 +239,66 @@ def test_filter_json_api_does_not_require_csrf(clean: Engine, tmp_path):
     response = bare.post("/filters", json={"name": "local-only", "spec": SPEC})
 
     assert response.status_code == 201
+
+
+def test_diff_endpoint_happy_path(client: TestClient, clean: Engine, tmp_path):
+    run_a = seed_run(clean, tmp_path, [run_item(1), run_item(2)])
+    run_b = seed_run(clean, tmp_path, [run_item(1, stargazers=20), run_item(3)])
+
+    response = client.get(f"/api/runs/{run_b}/diff", params={"against": run_a})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"run_a", "run_b", "added", "removed", "changed", "summary"}
+    assert body["run_a"] == run_a
+    assert body["run_b"] == run_b
+    assert body["added"] == [{"repo_id": 3, "full_name": "octo/r3"}]
+    assert body["removed"] == [{"repo_id": 2, "full_name": "octo/r2"}]
+    assert body["changed"] == [
+        {"repo_id": 1, "full_name": "octo/r1", "field": "stargazers", "from": 10, "to": 20}
+    ]
+    assert body["summary"] == {
+        "added": 1,
+        "removed": 1,
+        "changed_repos": 1,
+        "changed_fields": 1,
+    }
+
+
+def test_diff_endpoint_identical_runs_is_empty(client: TestClient, clean: Engine, tmp_path):
+    run_a = seed_run(clean, tmp_path, [run_item(1)])
+    run_b = seed_run(clean, tmp_path, [run_item(1)])
+
+    response = client.get(f"/api/runs/{run_b}/diff", params={"against": run_a})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert body["changed"] == []
+    assert body["summary"] == {
+        "added": 0,
+        "removed": 0,
+        "changed_repos": 0,
+        "changed_fields": 0,
+    }
+
+
+def test_diff_endpoint_unknown_runs_are_404(client: TestClient):
+    path_unknown = client.get("/api/runs/424242/diff", params={"against": 1})
+    against_unknown = client.get("/api/runs/1/diff", params={"against": 424242})
+
+    assert path_unknown.status_code == 404
+    assert path_unknown.json()["error"] == "run_not_found"
+    assert against_unknown.status_code == 404
+    assert against_unknown.json()["error"] == "run_not_found"
+
+
+def test_diff_endpoint_requires_against(client: TestClient):
+    missing = client.get("/api/runs/1/diff")
+    malformed = client.get("/api/runs/1/diff", params={"against": "abc"})
+
+    assert missing.status_code == 400
+    assert missing.json()["param"] == "against"
+    assert malformed.status_code == 400
+    assert malformed.json()["param"] == "against"

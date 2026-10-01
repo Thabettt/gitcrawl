@@ -15,6 +15,7 @@ from sqlalchemy.engine import Engine
 
 from discover.search_shards import RequestFailed
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
+from serve.diff import diff_runs
 from serve.executor import Runner, RunPayload, RunPayloadItem, create_run, execute_run
 from serve.filter_spec import (
     FILTER_SPEC_VERSION,
@@ -569,6 +570,44 @@ def create_app(
         except LibraryError as exc:
             return _library_error_response(exc)
         return Response(status_code=204)
+
+    @application.get("/api/runs/{run_id}/diff")
+    def diff_route(run_id: int, against: str | None = None):
+        if against is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_param",
+                    "param": "against",
+                    "hint": "against must be an existing run id",
+                },
+            )
+        try:
+            against_id = int(against)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_param",
+                    "param": "against",
+                    "hint": "against must be an existing run id",
+                },
+            )
+        try:
+            result = diff_runs(engine_for(), against_id, run_id)
+        except KeyError as exc:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "run_not_found", "run_id": exc.args[0]},
+            )
+        return {
+            "run_a": result.run_a,
+            "run_b": result.run_b,
+            "added": list(result.added),
+            "removed": list(result.removed),
+            "changed": list(result.changed),
+            "summary": result.summary,
+        }
 
     register_pages(
         application,
