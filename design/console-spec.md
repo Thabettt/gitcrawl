@@ -86,8 +86,8 @@ CREATE TABLE saved_filters (
 | POST | `/filters` / POST `/filters/{id}/delete` | Save / delete (rename optional) |
 | GET | `/partials/runs/{id}/status` | htmx poll: status banner + counts (stops at terminal state) |
 | GET | `/partials/runs/{id}/table?sort=&dir=&page=` | htmx results table fragment |
-| GET | `/partials/runs/{id}/clone-estimate?limit=&mode=` | disk estimate preview |
-| POST | `/runs/{id}/clone` / GET `/partials/runs/{id}/clone-progress` | clone start / progress |
+| GET | `/runs/{id}/clone-estimate?limit=&mode=` | disk estimate preview (R54) |
+| POST | `/runs/{id}/clone` / GET `/partials/runs/{id}/clone-progress` | clone start / progress (R54) |
 
 ## UX requirements
 
