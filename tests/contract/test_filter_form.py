@@ -585,6 +585,7 @@ def test_run_page_renders_banner_rows_and_links(clean: Engine, tmp_path):
     assert f"/vsearch/runs/{filter_hash}/export?format=json" in html
     assert f"/vsearch/runs/{filter_hash}/export?format=csv" in html
     assert f'action="/runs/{run_id}/replay"' in html
+    assert re.search(rf'<span id="run-hash"[^>]*>{filter_hash[:8]}</span>', html)
 
 
 def test_run_page_unknown_is_404(clean: Engine, tmp_path):

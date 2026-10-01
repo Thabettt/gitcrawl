@@ -351,6 +351,7 @@ def register_pages(
             )
         summary = {
             **dict(row),
+            "hash_short": row["filter_hash"][:8],
             "duration": _duration(row["started_at"], row["finished_at"]),
             "ran_at": _relative_time(row["finished_at"] or row["started_at"] or row["created_at"]),
         }

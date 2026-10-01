@@ -14,7 +14,7 @@
     <span class="pill {{ run.status }}">{{ run.status }}</span>
   </div>
   <div class="run-meta">
-    <span class="mono">{{ run.hash_short }}</span>
+    <span id="run-hash" class="mono">{{ run.hash_short }}</span>
     <span>total {{ run.total_count if run.total_count is not none else '—' }}</span>
     <span>fetched {{ run.fetched }}</span>
     <span>kept {{ run.inserted }}</span>
