@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import fakeredis
 import httpx
+import pytest
+from alembic import command
 
 from discover.pipeline import Deps, run_search_discovery
 from scheduler.shard_planner import ShardSpec
 from scheduler.state_machine import ShardQueue, ShardStore
+
+
+@pytest.fixture(scope="module", autouse=True)
+def schema(alembic_config):
+    command.upgrade(alembic_config, "head")
 
 
 def handler(request: httpx.Request) -> httpx.Response:
