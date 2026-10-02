@@ -92,6 +92,12 @@ def test_run_statuses_are_plain_words(clean, tmp_path, monkeypatch):
     body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}").text
     assert "Finished" in body
     assert ">partial<" not in body
+
+
+def test_nav_marks_the_current_section(clean, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    body = client.get("/runs").text
+    assert 'href="/runs" aria-current="page"' in body
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -154,7 +160,7 @@ Create `404.html`/`500.html` extending `base.html` with the message and a “Bac
 
 - [ ] **Step 4: Apply the term map**
 
-In `base.html` replace the nav with `Home · Searches · Corpora · Detections · Library · System` (Corpora/Detections link to `/corpora` and `/detections`, which may 404 until their tasks land — acceptable, they are greyed-out-in-copy work items; if preferred, point them at `/` for now and switch in Tasks 2/6). Replace CSRF failure returns in `app.py`/`pages.py` (`"CSRF"`, `"invalid csrf token"`) with `errors.csrf_error_page(request)`.
+In `base.html` replace the nav with `Home · Searches · Corpora · Detections · Library · System`. Mark the current section with `aria-current="page"` (compare `request.url.path` against each href; `/runs` is “Searches”). `Detections` renders as a muted, non-clickable `<span title="Coming soon">` until the detection plan ships; `Corpora` links to `/corpora` (Task 6). Replace CSRF failure returns in `app.py`/`pages.py` (`"CSRF"`, `"invalid csrf token"`) with `errors.csrf_error_page(request)`.
 
 In `pages.py` map status strings: `queued→Waiting`, `running→Running`, `done→Finished`, `partial→Finished — incomplete`, `failed→Failed`; use it in `partials/status.html`, `runs.html`, `dashboard.html`. Replace visible counter labels per the Term map (Found / Saved / Passed filters / Unavailable). Update `tests/contract/test_pages.py` and `test_console_pages.py` expectations that assert old strings (`partial`, `Fetched`, `Inserted`).
 
@@ -404,6 +410,36 @@ def describe_spec(spec: FilterSpec) -> str:
 
 Unit-test it in `tests/unit/test_filter_spec.py` with three representative specs.
 
+Also enforce the `props` coupling server-side here (today the single-`org` rule exists only in the form UI, so uploaded JSON bypasses it). Append to `tests/unit/test_filter_spec.py`:
+
+```python
+def test_props_requires_exactly_one_org():
+    with pytest.raises(FilterSpecError) as excinfo:
+        parse_filter_spec({"gitcrawl_filter": 1, "q": "language:rust props.team:core"})
+    assert any("org" in error for error in excinfo.value.errors)
+
+
+def test_props_with_two_orgs_is_rejected():
+    with pytest.raises(FilterSpecError):
+        parse_filter_spec({"gitcrawl_filter": 1, "q": "org:a org:b props.team:core"})
+
+
+def test_props_with_one_org_is_accepted():
+    spec = parse_filter_spec({"gitcrawl_filter": 1, "q": "org:acme props.team:core"})
+    assert spec.q == "org:acme props.team:core"
+```
+
+Implement in `parse_filter_spec` after the `q` allowlist check (adapt variable names to the function):
+
+```python
+    tokens = tokenize(query)
+    has_props = any(token.startswith("props.") for token in tokens)
+    orgs = [token for token in tokens if token.startswith("org:")]
+    if has_props and len(orgs) != 1:
+        errors.append("`props.` filters require exactly one `org:` in the query")
+        hints.append("add a single `org:NAME` or remove the `props.` filter")
+```
+
 - [ ] **Step 5: Run the suites**
 
 Run: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/contract/test_find_matches.py tests/contract/test_filter_form.py tests/unit/test_filter_spec.py -q`
@@ -469,12 +505,12 @@ git commit -m "feat: full-width results page with page-size selector"
 ## Task 5: Search workspace
 
 **Files:**
-- Modify: `src/serve/templates/run_detail.html`, `src/serve/templates/partials/status.html`, `src/serve/templates/partials/quality.html`, `src/serve/pages.py` (run-detail context), `src/serve/quality.py` (sentence labels)
+- Modify: `src/serve/templates/run_detail.html`, `src/serve/templates/partials/status.html`, `src/serve/templates/partials/quality.html`, `src/serve/templates/partials/clone_modal.html`, `src/serve/pages.py` (run-detail context), `src/serve/quality.py` (sentence labels), `src/serve/runs.py` (run-scoped export helper), `src/serve/app.py` (run-scoped export route)
 - Test: `tests/contract/test_run_detail.py` (update + new)
 
 **Interfaces:**
 - Consumes: `describe_spec`, `results` route.
-- Produces: run detail context keys `sentence`, `counts` (`found/saved/passed/with_file/unavailable` with `label` and `explain` strings), `preview_page_size = 20`, action gating.
+- Produces: run detail context keys `sentence`, `counts` (`found/saved/passed/with_file/unavailable` with `label` and `explain` strings), `preview_page_size = 20`, `clone_root`, action gating; `GET /runs/{run_id}/export?format=json|csv` (exports exactly the viewed run; the hash-scoped route stays for API clients); `serve.runs.export_run(engine, run_id, format, runs_root)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -498,6 +534,28 @@ def test_quality_panel_uses_sentences(clean, tmp_path, monkeypatch):
     ).text
     assert "count_parity" not in body
     assert "counts match" in body.lower()
+
+
+def test_export_links_point_at_this_run(clean, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}").text
+    assert f'href="/runs/{run_id}/export?format=json"' in body
+
+
+def test_run_scoped_export_downloads_this_run(clean, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    response = healthy_client(clean, tmp_path, monkeypatch).get(
+        f"/runs/{run_id}/export?format=json"
+    )
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run_id
+
+
+def test_clone_modal_shows_destination_and_tradeoffs(clean, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}").text
+    assert "Destination:" in body
+    assert "latest snapshot only" in body
 ```
 
 - [ ] **Step 2: Implement**
@@ -513,13 +571,15 @@ WHERE run_id = :run_id AND virtuals->>'has_dockerfile' = 'true'
 
 - `<details><summary>What this search asked for</summary>` shows the sentence and the raw `q`; `<details>Technical details</details>` keeps the old counters.
 - Quality partial: map check names to sentences (`count_parity` → “Result counts match what was stored”, `duplicate_full_names` → “No duplicate repository names”, `missing_*` → “X% missing <field>”, `bundle` → “Export bundle readable”, `incomplete` → “Data completeness”); raw names move under Technical details. Implement the mapping in `quality.py` as `SENTENCES: dict[str, str]`.
+- **Export the viewed search (data-integrity fix).** Extract the existing export serialization from `app.py` `/vsearch/runs/{hash}/export` into `serve/runs.py::export_run(engine, run_id, format, runs_root)`; add `GET /runs/{run_id}/export?format=json|csv` that exports exactly that run, and point the run-detail Export links at it. The hash-scoped route stays for API clients; the regression test above proves the viewed run is the one downloaded.
+- **Clone modal copy.** Pass `clone_root` into the run-detail context; `partials/clone_modal.html` shows `Destination: {{ clone_root }}/<hash>` and one trade-off line per mode: shallow → “latest snapshot only”; file-only → “no history, smallest disk”; windowed → “recent history, largest disk”.
 
 - [ ] **Step 3: Run tests, golden, commit**
 
 Run: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/contract/test_run_detail.py tests/contract/test_quality_pages.py -q` (update old label assertions; never weaken behavior assertions). Regenerate goldens if run-detail HTML changed.
 
 ```bash
-git add src/serve/templates/run_detail.html src/serve/templates/partials/status.html src/serve/templates/partials/quality.html src/serve/pages.py src/serve/quality.py tests/contract/test_run_detail.py tests/contract/test_quality_pages.py tests/golden
+git add src/serve/templates/run_detail.html src/serve/templates/partials/status.html src/serve/templates/partials/quality.html src/serve/templates/partials/clone_modal.html src/serve/pages.py src/serve/quality.py src/serve/runs.py src/serve/app.py tests/contract/test_run_detail.py tests/contract/test_quality_pages.py tests/golden
 git commit -m "feat: readable search workspace with explained counts"
 ```
 

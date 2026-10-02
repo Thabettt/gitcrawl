@@ -192,6 +192,7 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 | Settings page relabeled to §4.9 (plan already exists) | Plan edit | `2026-10-02-console-settings.md` |
 | Detection pages adopt this IA (plan already exists) | Plan edit | `2026-10-02-agent-detection.md` |
 | Progress-stage state + rough ETA | Optional | Nice-to-have; stages can be derived from counters without new storage |
+| Enforce `min_commits`/`min_loc` | Out of scope — needs the commit/LOC history tier | Known gap: runs keep the “incomplete” warning (R44); never remove or weaken it |
 
 ## 8. Suggested implementation order
 
