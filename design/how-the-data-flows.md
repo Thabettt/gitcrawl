@@ -1,6 +1,12 @@
 # How the Data Flows (read this first if you're new)
 
-**Date**: 2026-09-29. Companion to `spec.md`, `contracts/search-api.md`, and `findings/06-exhaustive-parameters.md`. No prior GitHub API knowledge assumed — every concept is introduced where it's first used.
+**Date**: 2026-09-29 (updated 2026-10-02). Companion to `spec.md`, `contracts/search-api.md`, and `findings/06-exhaustive-parameters.md`. No prior GitHub API knowledge assumed — every concept is introduced where it's first used.
+
+**The document set** (read together — what it does, how fast it can go, why it exists, and what else is out there):
+- This document — what gitcrawl does and the stages data passes through.
+- `corpus-building-efficient-engineering.md` — GitHub's rate meters, the math of what is findable vs. savable, the legal limits, and the designed batching engine.
+- `gitcrawl-vs-seart.md` — how gitcrawl compares to SEART GitHub Search, where each wins, and why gitcrawl fits this project's thesis work.
+- `landscape-comparison.md` — the full adjacent-tool landscape, the capability gap that justifies the build, and the `gitcrawl` name collision.
 
 ## The one-paragraph version
 
@@ -39,7 +45,7 @@ Each surviving match gets its full record (1 call each, separate budget). This i
 
 ### Stage 4 — Virtual filters (gitcrawl's own screening room)
 
-Now the filters GitHub can't express run per repo, cheapest first: counts from the hydrated record (`min_commits` via commit count, `min_loc` via size/languages), then file checks (`has_dockerfile` via one file-tree fetch covering all paths — never one call per file), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable. The full cost-order table (free → mirrors → single-call → batched → deep) lives in `research.md` D12; the scheduler behind it segments candidates across tokens survivors-first, so even a stopped-early run stays useful.
+Now the filters GitHub can't express run per repo, cheapest first: counts from the hydrated record (`min_commits` via commit count, `min_loc` via size/languages), then file checks (`has_dockerfile` via one file-tree fetch covering all paths — never one call per file; this same machinery later becomes the agent-detection file channel), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable. The full cost-order table (free → mirrors → single-call → batched → deep) lives in `research.md` D12; the scheduler behind it segments candidates across tokens survivors-first, so even a stopped-early run stays useful.
 
 ### Stage 5 — Enrichment (detail only for survivors)
 
@@ -80,3 +86,6 @@ Filters: `language:rust fork:false pushed:>2024-09-29` + virtual `min_commits: 1
 - Settle behavior: `contracts/search-api.md` (params, translation table, errors).
 - Understand any attribute: `findings/06-exhaustive-parameters.md` (the master matrix).
 - Know the limits: `findings/05-research-gaps.md` (what breaks, audited).
+- Go faster: `corpus-building-efficient-engineering.md` (meters, the touches rule, strategies, GraphQL batching design).
+- Compare tools: `gitcrawl-vs-seart.md` (shared research catalog vs. live evidence-producing instrument).
+- Survey the market: `landscape-comparison.md` (adjacent tools, the capability gap, and the name collision).
