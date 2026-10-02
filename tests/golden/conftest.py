@@ -183,8 +183,10 @@ def enumerate_get_cases(app) -> list[tuple[str, str, dict[str, str]]]:
 
 def canonical_content_type(value: str) -> str:
     # Windows mimetypes maps .js to application/javascript; Linux CPython uses
-    # text/javascript (RFC 9239). Canonicalize so golden headers are OS-deterministic.
-    if value == "application/javascript":
+    # text/javascript (RFC 9239), where Starlette appends a charset. Canonicalize
+    # so golden headers are OS-deterministic.
+    media_type = value.split(";", 1)[0].strip().lower()
+    if media_type in {"application/javascript", "text/javascript"}:
         return "text/javascript"
     return value
 

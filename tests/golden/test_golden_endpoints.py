@@ -3,6 +3,15 @@ from __future__ import annotations
 import difflib
 import json
 
+from .conftest import canonical_content_type
+
+
+def test_javascript_content_type_canonicalization_is_os_independent():
+    assert canonical_content_type("application/javascript") == "text/javascript"
+    assert canonical_content_type("text/javascript; charset=utf-8") == "text/javascript"
+    assert canonical_content_type("text/css; charset=utf-8") == "text/css; charset=utf-8"
+    assert canonical_content_type("text/html; charset=utf-8") == "text/html; charset=utf-8"
+
 
 def test_golden_endpoints_match_snapshots(golden_observations, snapshot_dir):
     problems: list[str] = []

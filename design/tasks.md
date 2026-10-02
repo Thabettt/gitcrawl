@@ -71,7 +71,7 @@
 - [ ] T014 [US1] Implement sharded search discovery (`per_page=100`, `Link: rel="next"` verbatim, `incomplete_results` → narrow-once + mark) in `src/discover/search_shards.py` (depends on T012)
 - [ ] T015 [US1] Implement `since` cursor scan + ID-range sharding + `max(id)` checkpoint in `src/discover/since_scan.py`
 - [ ] T016 [US1] Implement org/user enumeration (`/orgs/{org}/repos`, `/users/{u}/repos`) in `src/discover/org_enum.py`
-- [ ] T017 [US1] Implement batched upserts (`INSERT ... ON CONFLICT (id)` with app-side no-op gating first — `WHERE` still writes WAL+locks — 500–1000/batch, `COPY` bootstrap path (TEXT + `ON_ERROR ignore + REJECT_LIMIT`; PG18 forbids ON_ERROR in BINARY and binary silently truncates out-of-range ints — ruling R23) per-batch `UNLOGGED` staging) in `src/store/upserts.py`
+- [ ] T017 [US1] Implement batched upserts (`INSERT ... ON CONFLICT (id)` with app-side no-op gating first — `WHERE` still writes WAL+locks — 500–1000/batch, `COPY` bootstrap path (TEXT + `ON_ERROR ignore` on PG17+, `REJECT_LIMIT` only on PG18+; PG18 forbids ON_ERROR in BINARY and binary silently truncates out-of-range ints — ruling R23) per-batch `UNLOGGED` staging) in `src/store/upserts.py`
 - [ ] T018 [US1] Wire US1 pipeline + logging (query hash, `total_count`/`incomplete_results`, token fingerprint, latency)
 
 **Checkpoint**: US1 fully functional and testable independently — golden-org parity green

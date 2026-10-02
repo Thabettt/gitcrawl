@@ -491,6 +491,23 @@ def test_batch_size_must_be_positive(clean: Engine):
         upsert_repos(clean, [], batch_size=0)
 
 
+def test_copy_sql_gates_reject_limit_on_postgres_18():
+    with_limit = upserts._copy_sql("stage", reject_limit=True)
+    without_limit = upserts._copy_sql("stage", reject_limit=False)
+    assert "ON_ERROR ignore" in with_limit
+    assert "REJECT_LIMIT 100" in with_limit
+    assert "ON_ERROR ignore" in without_limit
+    assert "REJECT_LIMIT" not in without_limit
+
+
+def test_reject_limit_support_requires_postgres_18():
+    assert upserts._supports_reject_limit((18, 0))
+    assert upserts._supports_reject_limit((19, 2))
+    assert not upserts._supports_reject_limit((17, 6))
+    assert not upserts._supports_reject_limit(None)
+    assert not upserts._supports_reject_limit(("PostgreSQL",))
+
+
 def test_bootstrap_copy_inserts_clean_rows(clean: Engine):
     stats = bootstrap_copy(clean, [repo_item(1), repo_item(2)])
     assert stats.inserted == 2
@@ -509,6 +526,14 @@ def test_bootstrap_copy_rejects_a_dirty_row_without_aborting(clean: Engine):
     assert stats.inserted == 2
     assert stats.skipped == 1
     assert [repo["id"] for repo in dump_repos(clean)] == [1, 3]
+
+
+def test_bootstrap_copy_on_pg17_omits_reject_limit_but_skips_dirty_rows(clean: Engine, monkeypatch):
+    monkeypatch.setattr(clean.dialect, "server_version_info", (17, 6))
+    stats = bootstrap_copy(clean, [repo_item(1), repo_item(2, size="not-a-number")])
+    assert stats.inserted == 1
+    assert stats.skipped == 1
+    assert [repo["id"] for repo in dump_repos(clean)] == [1]
 
 
 def test_bootstrap_copy_skips_dirty_normalized_rows(clean: Engine):

@@ -412,12 +412,17 @@ def upsert_repos(
     return stats
 
 
-def _copy_sql(table_name: str) -> str:
+def _supports_reject_limit(server_version_info: tuple[int | str, ...] | None) -> bool:
+    major = server_version_info[0] if server_version_info else None
+    return isinstance(major, int) and major >= 18
+
+
+def _copy_sql(table_name: str, *, reject_limit: bool) -> str:
     columns = ", ".join(_COPY_FIELDS)
-    return (
-        f"COPY {table_name} ({columns}) FROM STDIN "
-        "WITH (FORMAT TEXT, ON_ERROR ignore, REJECT_LIMIT 100)"
-    )
+    options = "FORMAT TEXT, ON_ERROR ignore"
+    if reject_limit:
+        options += ", REJECT_LIMIT 100"
+    return f"COPY {table_name} ({columns}) FROM STDIN WITH ({options})"
 
 
 def _copy_row(row: dict, indexed_at: datetime) -> tuple:
@@ -482,8 +487,12 @@ def _bootstrap_chunk(
             driver = connection.connection.driver_connection
             if driver is None:
                 raise RuntimeError("database driver does not expose a DBAPI connection")
+            copy_sql = _copy_sql(
+                table_name,
+                reject_limit=_supports_reject_limit(connection.dialect.server_version_info),
+            )
             with driver.cursor() as cursor:
-                with cursor.copy(_copy_sql(table_name)) as copy:
+                with cursor.copy(copy_sql) as copy:
                     for row in normalized:
                         copy.write_row(_copy_row(row, indexed_at))
             staged = int(connection.scalar(text(f"SELECT count(*) FROM {table_name}")) or 0)
