@@ -78,19 +78,35 @@ class CachedStaticFiles(StaticFiles):
         return response
 
 
-def _bounded(check: Callable[[], object], timeout: float = HEALTH_TIMEOUT_SECONDS) -> bool:
-    result: list[bool] = []
+class _Probe:
+    def __init__(self, *, timeout: float = HEALTH_TIMEOUT_SECONDS) -> None:
+        self._timeout = timeout
+        self._lock = threading.Lock()
+        self._event: threading.Event | None = None
+        self._value = False
 
-    def target() -> None:
+    def run(self, check: Callable[[], object]) -> bool:
+        with self._lock:
+            event = self._event
+            if event is None:
+                event = threading.Event()
+                self._event = event
+                threading.Thread(target=self._execute, args=(check, event), daemon=True).start()
+        if not event.wait(self._timeout):
+            return False
+        with self._lock:
+            if self._event is event:
+                self._event = None
+        return self._value
+
+    def _execute(self, check: Callable[[], object], event: threading.Event) -> None:
         try:
-            result.append(bool(check()))
+            value = bool(check())
         except Exception:
-            result.append(False)
-
-    worker = threading.Thread(target=target, daemon=True)
-    worker.start()
-    worker.join(timeout)
-    return result[0] if result else False
+            value = False
+        with self._lock:
+            self._value = value
+        event.set()
 
 
 def _default_redis_ping() -> bool:
@@ -530,17 +546,23 @@ def register_pages(
     if _STATIC_DIR.is_dir():
         app.mount("/static", CachedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
+    db_probe = _Probe()
+    redis_probe = _Probe()
+
     def database_ok() -> bool:
         try:
             engine = engine_factory()
             with engine.connect() as connection:
+                connection.execute(
+                    text(f"SET LOCAL statement_timeout = {int(HEALTH_TIMEOUT_SECONDS * 1000)}")
+                )
                 connection.execute(text("SELECT 1"))
             return True
         except Exception:
             return False
 
     def redis_ok() -> bool:
-        return _bounded(redis_ping or _default_redis_ping)
+        return redis_probe.run(redis_ping or _default_redis_ping)
 
     def token_ok() -> bool:
         if token_present is None:
@@ -562,7 +584,7 @@ def register_pages(
             ):
                 return dict(cached)
         value = {
-            "database": _bounded(database_ok),
+            "database": db_probe.run(database_ok),
             "redis": redis_ok(),
             "github_token_present": token_ok(),
         }

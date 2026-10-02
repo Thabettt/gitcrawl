@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 from alembic import command
@@ -346,3 +347,23 @@ def test_health_omits_degraded_redis_without_a_configured_url(clean: Engine, tmp
     body = client.get("/health").json()
 
     assert body == {"database": True, "redis": False, "github_token_present": False}
+
+
+def test_health_returns_false_quickly_for_a_hung_database(clean: Engine, tmp_path):
+    release = threading.Event()
+
+    class HangingEngine:
+        def connect(self):
+            release.wait(30)
+            raise RuntimeError("unreachable")
+
+    client = make_client(HangingEngine(), tmp_path)
+    started = time.monotonic()
+    try:
+        response = client.get("/health")
+    finally:
+        release.set()
+
+    assert response.status_code == 200
+    assert response.json()["database"] is False
+    assert time.monotonic() - started < 2.0
