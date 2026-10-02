@@ -25,7 +25,10 @@ _FIELDS = """    databaseId
     pushedAt
     updatedAt
     createdAt
-    defaultBranchRef { name }
+    defaultBranchRef {
+      name
+      target { ... on Commit { history(first: 1) { totalCount } } }
+    }
     primaryLanguage { name }
     licenseInfo { spdxId }
     repositoryTopics(first: 100) { nodes { topic { name } } }
@@ -44,6 +47,7 @@ class RepoDetails:
     node_id: str
     full_name: str
     payload: dict
+    commit_count: int | None = None
 
 
 def _as_int(value: object) -> int | None:
@@ -113,6 +117,18 @@ def _branch(node: dict) -> str | None:
         return None
     name = raw.get("name")
     return name if isinstance(name, str) else None
+
+
+def _commit_count(node: dict) -> int | None:
+    branch = node.get("defaultBranchRef")
+    if branch is None:
+        return 0
+    if not isinstance(branch, dict):
+        return None
+    target = branch.get("target")
+    history = target.get("history") if isinstance(target, dict) else None
+    total = history.get("totalCount") if isinstance(history, dict) else None
+    return total if isinstance(total, int) and not isinstance(total, bool) else None
 
 
 def _parent(node: dict) -> str | None:
@@ -214,6 +230,7 @@ class RepoDetailsAdapter:
                     node_id=str(node.get("id") or ""),
                     full_name=str(node.get("nameWithOwner") or ""),
                     payload=_payload(repo_id, node),
+                    commit_count=_commit_count(node),
                 )
             except ValueError as exc:
                 failures[key] = str(exc)

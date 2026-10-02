@@ -108,3 +108,19 @@ def test_adapter_end_to_end_with_batch_core():
     adapter = RepoDetailsAdapter({"911": "octo/alpha"})
     outcome = fetch_batch(adapter, ["911"], client=client)
     assert outcome.values["911"].payload["id"] == 911
+
+
+def test_parse_reads_default_branch_commit_count():
+    adapter = RepoDetailsAdapter({"911": "octo/alpha"})
+    node = dict(NODE)
+    node["defaultBranchRef"] = {"name": "main", "target": {"history": {"totalCount": 42}}}
+    parsed = adapter.parse({"data": {"n0": node}}, {"n0": "911"})
+    assert parsed.values["911"].commit_count == 42
+
+
+def test_parse_empty_repository_reports_zero_commits():
+    adapter = RepoDetailsAdapter({"911": "octo/alpha"})
+    node = dict(NODE)
+    node["defaultBranchRef"] = None
+    parsed = adapter.parse({"data": {"n0": node}}, {"n0": "911"})
+    assert parsed.values["911"].commit_count == 0

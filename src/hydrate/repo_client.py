@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 import httpx
 
@@ -107,3 +107,44 @@ def hydrate_repo(
             etag=response.headers.get("etag"),
             not_modified=False,
         )
+
+
+def fetch_commit_count(
+    client: httpx.Client,
+    full_name: str,
+    *,
+    limiter: BucketLimiter | None = None,
+    token_id: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.time,
+    jitter: Callable[[], float] | None = None,
+    on_response: Callable[[httpx.Response, float], None] | None = None,
+) -> int | None:
+    response = request_with_retry(
+        client,
+        "GET",
+        f"{API_BASE}/repos/{full_name}/commits?per_page=1",
+        limiter=limiter,
+        token_id=token_id,
+        sleep=sleep,
+        now=now,
+        jitter=jitter,
+        on_response=on_response,
+    )
+    if response.status_code != 200:
+        return None
+    for part in (response.headers.get("link") or "").split(","):
+        segments = part.split(";")
+        url_part = segments[0].strip()
+        if not (url_part.startswith("<") and url_part.endswith(">")):
+            continue
+        if any('rel="last"' in segment for segment in segments[1:]):
+            params = dict(parse_qsl(urlparse(url_part[1:-1]).query))
+            page = params.get("page")
+            if page and page.isdigit():
+                return int(page)
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return len(payload) if isinstance(payload, list) else None

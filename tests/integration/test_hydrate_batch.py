@@ -65,7 +65,10 @@ def graphql_node(repo_id: int) -> dict:
         "pushedAt": "2026-01-01T00:00:00Z",
         "updatedAt": "2026-01-01T00:00:00Z",
         "createdAt": "2024-01-01T00:00:00Z",
-        "defaultBranchRef": {"name": "main"},
+        "defaultBranchRef": {
+            "name": "main",
+            "target": {"history": {"totalCount": repo_id * 10}},
+        },
         "primaryLanguage": {"name": "Rust"},
         "licenseInfo": None,
         "repositoryTopics": {"nodes": []},
@@ -109,6 +112,7 @@ def test_batched_hydration_saves_every_repo_in_one_request(clean_db):
     stats = refresh_repos_batched(engine, client, rows_for(25))
     assert stats.refreshed == 25
     assert stats.unresolved == {}
+    assert stats.commit_counts == {str(repo_id): repo_id * 10 for repo_id in range(1, 26)}
     assert seen == ["/graphql", "/graphql"]  # 20 + 5
     with engine.connect() as connection:
         count = connection.scalar(text("SELECT count(*) FROM repos WHERE stargazers IS NOT NULL"))
@@ -144,6 +148,8 @@ def test_one_bad_repo_falls_back_to_rest_without_touching_its_neighbours(clean_d
                 },
                 headers={"etag": 'W/"abc"'},
             )
+        if path == "/repos/octo/repo2/commits":
+            return httpx.Response(200, json=[{}])
         raise AssertionError(f"unexpected path {path}")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -155,6 +161,73 @@ def test_one_bad_repo_falls_back_to_rest_without_touching_its_neighbours(clean_d
         row = connection.execute(text("SELECT stargazers, etag FROM repos WHERE id = 2")).one()
     assert row.stargazers == 2
     assert row.etag == 'W/"abc"'
+
+
+def rest_repo_payload(repo_id: int) -> dict:
+    return {
+        "id": repo_id,
+        "node_id": f"R_{repo_id}",
+        "full_name": f"octo/repo{repo_id}",
+        "name": f"repo{repo_id}",
+        "owner": {"id": 901, "login": "octo", "type": "User"},
+        "private": False,
+        "topics": [],
+        "stargazers_count": repo_id,
+        "forks_count": 0,
+        "watchers_count": 0,
+        "open_issues_count": 0,
+        "default_branch": "main",
+        "pushed_at": "2026-01-01T00:00:00Z",
+    }
+
+
+def test_rest_fallback_reads_commit_count_from_the_last_page_link(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/graphql":
+            return graphql_handler([], bad_repos=frozenset({2}))(request)
+        if path == "/repos/octo/repo2":
+            return httpx.Response(200, json=rest_repo_payload(2))
+        if path == "/repos/octo/repo2/commits":
+            return httpx.Response(
+                200,
+                json=[{}],
+                headers={
+                    "Link": (
+                        "<https://api.github.com/repositories/2/commits?"
+                        'per_page=1&page=77>; rel="last"'
+                    )
+                },
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    stats = refresh_repos_batched(engine, client, rows_for(2))
+    assert stats.fallbacks == 1
+    assert stats.commit_counts["2"] == 77
+
+
+def test_rest_fallback_counts_returned_items_without_a_link_header(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/graphql":
+            return graphql_handler([], bad_repos=frozenset({2}))(request)
+        if path == "/repos/octo/repo2":
+            return httpx.Response(200, json=rest_repo_payload(2))
+        if path == "/repos/octo/repo2/commits":
+            return httpx.Response(200, json=[{}, {}])
+        raise AssertionError(f"unexpected path {path}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    stats = refresh_repos_batched(engine, client, rows_for(2))
+    assert stats.fallbacks == 1
+    assert stats.commit_counts["2"] == 2
 
 
 def test_unresolved_repo_is_reported_not_swallowed(clean_db):

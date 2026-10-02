@@ -10,7 +10,7 @@ from sqlalchemy.engine import Engine
 
 from discover.search_shards import RequestFailed
 from hydrate.graphql_repo import RepoDetailsAdapter
-from hydrate.repo_client import HydratedRepo, RepoNotFound, hydrate_repo
+from hydrate.repo_client import HydratedRepo, RepoNotFound, fetch_commit_count, hydrate_repo
 from lib.batching import chunked
 from lib.deadlines import Deadline
 from lib.gh_client import PartialResultsError, ThrottledError
@@ -32,6 +32,7 @@ class RefreshStats:
     fallbacks: int = 0
     unresolved: dict[str, str] = field(default_factory=dict)
     batch: dict = field(default_factory=dict)
+    commit_counts: dict[str, int] = field(default_factory=dict)
 
 
 def _stored_etags(
@@ -149,6 +150,18 @@ def refresh_repos_batched(
         stats.fallbacks += 1
         if outcome.renamed_from is not None:
             stats.renamed += 1
+        count = fetch_commit_count(
+            client,
+            full_name,
+            limiter=limiter,
+            token_id=token_id,
+            sleep=sleep,
+            now=now,
+            jitter=jitter,
+            on_response=on_response,
+        )
+        if count is not None:
+            stats.commit_counts[str(hydrated.id)] = count
         return None
 
     outcome = fetch_batch(
@@ -177,6 +190,8 @@ def refresh_repos_batched(
         stats.refreshed += 1
         if result.renamed_from is not None:
             stats.renamed += 1
+        if details.commit_count is not None:
+            stats.commit_counts[key] = details.commit_count
     stats.unresolved = {full_name_by_key[key]: reason for key, reason in outcome.unresolved.items()}
     stats.batch = outcome.stats.as_dict()
     return stats

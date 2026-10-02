@@ -73,8 +73,11 @@ GRAPHQL_REPO_ALIAS_RE = re.compile(r'(n\d+): repository\(owner: "([^"]+)", name:
 FILE_ALIAS_RE = re.compile(r'(n\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')
 
 
-def rest_item_to_graphql_node(item: dict) -> dict:
+def rest_item_to_graphql_node(item: dict, *, commit_count: int | None = None) -> dict:
     owner = item.get("owner") or {}
+    default_branch_ref: dict = {"name": item.get("default_branch") or "main"}
+    if commit_count is not None:
+        default_branch_ref["target"] = {"history": {"totalCount": commit_count}}
     return {
         "databaseId": item.get("id"),
         "id": item.get("node_id"),
@@ -95,7 +98,7 @@ def rest_item_to_graphql_node(item: dict) -> dict:
         "pushedAt": item.get("pushed_at"),
         "updatedAt": item.get("updated_at") or item.get("pushed_at"),
         "createdAt": item.get("created_at") or item.get("pushed_at"),
-        "defaultBranchRef": {"name": item.get("default_branch") or "main"},
+        "defaultBranchRef": default_branch_ref,
         "primaryLanguage": {"name": item.get("language")} if item.get("language") else None,
         "licenseInfo": (
             {"spdxId": (item.get("license") or {}).get("spdx_id")} if item.get("license") else None
@@ -118,9 +121,13 @@ def rest_item_to_graphql_node(item: dict) -> dict:
 
 
 def graphql_batch_response(
-    request: httpx.Request, items_by_full_name: dict[str, dict]
+    request: httpx.Request,
+    items_by_full_name: dict[str, dict],
+    *,
+    commit_counts: dict[int, int] | None = None,
 ) -> httpx.Response:
     body = json.loads(request.content)
+    counts = commit_counts or {}
     data: dict[str, object] = {}
     errors: list[dict] = []
     for alias, owner, name in GRAPHQL_REPO_ALIAS_RE.findall(body["query"]):
@@ -129,7 +136,9 @@ def graphql_batch_response(
             data[alias] = None
             errors.append({"message": "Could not resolve to a Repository", "path": [alias]})
         else:
-            data[alias] = rest_item_to_graphql_node(item)
+            item_id = item.get("id")
+            count = counts.get(item_id) if isinstance(item_id, int) else None
+            data[alias] = rest_item_to_graphql_node(item, commit_count=count)
     payload: dict[str, object] = {"data": data}
     if errors:
         payload["errors"] = errors
@@ -511,7 +520,9 @@ def test_run_filter_records_r44_warnings_and_marks_incomplete(clean: Engine):
                 return count_response(1)
             return page_response([repo_item(1)])
         if path == "/graphql":
-            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+            return graphql_batch_response(
+                request, {"owner1/repo1": repo_item(1)}, commit_counts={1: 500}
+            )
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
@@ -524,10 +535,59 @@ def test_run_filter_records_r44_warnings_and_marks_incomplete(clean: Engine):
     )
 
     assert payload.incomplete is True
-    assert len(payload.warnings) == 2
-    assert any("min_commits" in warning for warning in payload.warnings)
-    assert any("min_loc" in warning for warning in payload.warnings)
+    assert payload.warnings == [
+        "`min_loc` is recorded but unenforceable in this run; results are incomplete"
+    ]
+    assert not any("min_commits" in warning for warning in payload.warnings)
     assert [item.repo_id for item in payload.items] == [1]
+
+
+def test_run_filter_enforces_min_and_max_commits(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(index) for index in (1, 2, 3)])
+        if path == "/graphql":
+            return graphql_batch_response(
+                request,
+                {f"owner{i}/repo{i}": repo_item(i) for i in (1, 2, 3)},
+                commit_counts={1: 500, 2: 50, 3: 5000},
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"min_commits": 100, "max_commits": 1000}),
+    )
+    assert [item.repo_id for item in payload.items] == [1]
+    assert not any("min_commits" in warning for warning in payload.warnings)
+    assert payload.items[0].virtuals["commit_count"] == 500
+
+
+def test_run_filter_warns_when_commit_counts_are_missing(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"min_commits": 100}),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert payload.items == []
+    assert (
+        "1 repo(s) could not be checked for commit count; results are incomplete"
+        in payload.warnings
+    )
 
 
 def test_run_filter_tolerates_hydration_failures(clean: Engine):

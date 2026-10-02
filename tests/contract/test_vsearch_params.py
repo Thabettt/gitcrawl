@@ -53,7 +53,7 @@ def test_allowed_top_level_is_the_documented_allowlist():
     }
 
 
-def test_virtual_table_has_exactly_the_seven_virtuals():
+def test_virtual_table_has_exactly_the_nine_virtuals():
     assert set(VIRTUAL_FILTERS) == {
         "min_stars",
         "team_topic",
@@ -61,7 +61,9 @@ def test_virtual_table_has_exactly_the_seven_virtuals():
         "owner_country",
         "min_geo_confidence",
         "min_commits",
+        "max_commits",
         "min_loc",
+        "max_loc",
     }
 
 
@@ -73,7 +75,9 @@ def test_virtual_table_declares_the_documented_kinds():
         "owner_country": "iso2",
         "min_geo_confidence": "enum",
         "min_commits": "int",
+        "max_commits": "int",
         "min_loc": "int",
+        "max_loc": "int",
     }
 
 
@@ -137,13 +141,13 @@ def test_translate_virtuals_normalizes_values():
     assert translate_virtuals({"team_topic": "Machine-Learning"}) == ["topic:machine-learning"]
 
 
-@pytest.mark.parametrize("name", ["min_stars", "min_commits", "min_loc"])
+@pytest.mark.parametrize("name", ["min_stars", "min_commits", "max_commits", "min_loc", "max_loc"])
 def test_int_virtuals_accept_zero_and_positive_ints(name):
     assert validate_virtual(name, 0) == 0
     assert validate_virtual(name, 42) == 42
 
 
-@pytest.mark.parametrize("name", ["min_stars", "min_commits", "min_loc"])
+@pytest.mark.parametrize("name", ["min_stars", "min_commits", "max_commits", "min_loc", "max_loc"])
 @pytest.mark.parametrize("value", [-1, 1.5, "5", True, False, [], {}])
 def test_int_virtuals_reject_non_nonnegative_ints(name, value):
     with pytest.raises(VirtualFilterError) as excinfo:
@@ -199,7 +203,16 @@ def test_owner_country_rejects_unknown_or_malformed_codes(value):
 
 @pytest.mark.parametrize(
     "name",
-    ["min_stars", "team_topic", "has_dockerfile", "owner_country", "min_commits", "min_loc"],
+    [
+        "min_stars",
+        "team_topic",
+        "has_dockerfile",
+        "owner_country",
+        "min_commits",
+        "max_commits",
+        "min_loc",
+        "max_loc",
+    ],
 )
 def test_null_virtual_values_mean_unset(name):
     assert validate_virtual(name, None) is None

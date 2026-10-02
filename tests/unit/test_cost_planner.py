@@ -23,7 +23,9 @@ D12_TABLE = {
     "ci": 4,
     "loc": 4,
     "min_loc": 4,
-    "min_commits": 4,
+    "max_loc": 4,
+    "min_commits": 2,
+    "max_commits": 2,
 }
 
 

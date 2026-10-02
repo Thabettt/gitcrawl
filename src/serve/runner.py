@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlparse
@@ -42,7 +42,7 @@ from serve.virtual_params import GEO_CONFIDENCE_ORDER
 from store.models import Owner, Repo
 
 _INT_PARAMS = ("page", "per_page", "since")
-_R44_VIRTUALS = ("min_commits", "min_loc")
+_R44_VIRTUALS = ("min_loc", "max_loc")
 _DOCKERFILE_PATH = "Dockerfile"
 _ID_BATCH = 5000
 
@@ -471,6 +471,32 @@ def _record_handler(rows_by_id: dict[int, dict], field: str, virtual: dict):
     return handler
 
 
+def _commit_handler(
+    rows_by_id: dict[int, dict],
+    virtual: dict,
+    commit_counts: Mapping[str, int],
+    skipped: dict,
+):
+    def handler(ids):
+        kept = []
+        for repo_id in ids:
+            count = commit_counts.get(str(repo_id))
+            if count is None:
+                skipped["commits"] += 1
+                continue
+            rows_by_id[repo_id]["commit_count"] = count
+            low = virtual.get("min_commits")
+            high = virtual.get("max_commits")
+            if isinstance(low, int) and count < low:
+                continue
+            if isinstance(high, int) and count > high:
+                continue
+            kept.append(repo_id)
+        return kept, 0
+
+    return handler
+
+
 def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped, report):
     def handler(ids):
         rows = [rows_by_id[repo_id] for repo_id in ids]
@@ -503,6 +529,7 @@ def _enrich_handlers(
     hook: Callable[[httpx.Response, float], None],
     skipped: dict,
     report: dict,
+    commit_counts: Mapping[str, int] | None = None,
     *,
     depth: str = "page",
 ) -> tuple[dict, list[str]]:
@@ -510,9 +537,16 @@ def _enrich_handlers(
     handlers: dict = {}
     unsupported: list[str] = []
     geo_claimed = False
+    commits_claimed = False
     for step in plan_enrichment(list(virtual), depth=depth).steps:
         if step.field in ("min_stars", "team_topic"):
             handlers[step.field] = _record_handler(rows_by_id, step.field, virtual)
+        elif step.field in ("min_commits", "max_commits"):
+            if not commits_claimed:
+                handlers[step.field] = _commit_handler(
+                    rows_by_id, virtual, commit_counts or {}, skipped
+                )
+                commits_claimed = True
         elif step.field in ("owner_country", "min_geo_confidence"):
             if not geo_claimed:
                 handlers[step.field] = _geo_handler(
@@ -532,6 +566,8 @@ def _payload_item(row: dict, virtual: dict) -> RunPayloadItem:
     badges = dict(virtual)
     if "has_dockerfile" in row:
         badges["has_dockerfile"] = row["has_dockerfile"]
+    if "commit_count" in row:
+        badges["commit_count"] = row["commit_count"]
     return RunPayloadItem(
         repo_id=row["id"],
         full_name=row["full_name"],
@@ -641,9 +677,9 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         )
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
     budget = {"remaining": cfg.max_enrich}
-    skipped = {"geo": 0, "dockerfile": 0}
+    skipped = {"geo": 0, "dockerfile": 0, "commits": 0}
     handlers, unsupported = _enrich_handlers(
-        deps, rows, virtual, budget, hook, skipped, graphql_report
+        deps, rows, virtual, budget, hook, skipped, graphql_report, hydration.commit_counts
     )
     for field in unsupported:
         warnings.append(
@@ -663,6 +699,11 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         warnings.append(
             f"{skipped['dockerfile']} repo(s) skipped because Dockerfile presence could not be "
             "checked; results are incomplete"
+        )
+    if skipped["commits"] > 0:
+        warnings.append(
+            f"{skipped['commits']} repo(s) could not be checked for commit count; "
+            "results are incomplete"
         )
     if spec.sort == "help-wanted-issues":
         warnings.append(

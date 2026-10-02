@@ -280,7 +280,7 @@ def test_run_page_reports_updated_unchanged_and_skipped(clean: Engine, tmp_path)
 
 
 def test_run_page_shows_r44_and_failed_flags(clean: Engine, tmp_path):
-    r44_spec = {**FILTER, "virtual": {"min_commits": 10, "min_loc": 500}}
+    r44_spec = {**FILTER, "virtual": {"min_loc": 500}}
     r44_run = seed_run(clean, tmp_path, spec=r44_spec, incomplete=True)
     failed_run = seed_run(clean, tmp_path, error=RuntimeError("upstream exploded"))
     client = make_client(clean, tmp_path)
@@ -288,7 +288,6 @@ def test_run_page_shows_r44_and_failed_flags(clean: Engine, tmp_path):
     r44_html = client.get(f"/runs/{r44_run}").text
     failed_html = client.get(f"/runs/{failed_run}").text
 
-    assert "min_commits" in r44_html
     assert "min_loc" in r44_html
     assert "unenforceable" in r44_html
     assert 'data-flag="r44"' in r44_html
@@ -432,7 +431,7 @@ def test_table_fragment_empty_state(clean: Engine, tmp_path):
 
 def test_table_fragment_badges_and_geo(clean: Engine, tmp_path):
     items = [
-        payload_item(101, "octo/alpha", 30, virtuals={"min_commits": 5}),
+        payload_item(101, "octo/alpha", 30, virtuals={"min_loc": 5}),
         payload_item(103, "octo/gamma", 10, archived=True),
     ]
     run_id = seed_run(clean, tmp_path, items=items)

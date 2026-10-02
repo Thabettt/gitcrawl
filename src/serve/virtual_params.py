@@ -79,11 +79,23 @@ VIRTUAL_FILTERS: Mapping[str, VirtualRule] = {
         to_query=None,
         post="commit count >= min_commits",
     ),
+    "max_commits": VirtualRule(
+        name="max_commits",
+        kind="int",
+        to_query=None,
+        post="commit count <= max_commits",
+    ),
     "min_loc": VirtualRule(
         name="min_loc",
         kind="int",
         to_query=None,
         post="lines of code >= min_loc",
+    ),
+    "max_loc": VirtualRule(
+        name="max_loc",
+        kind="int",
+        to_query=None,
+        post="lines of code <= max_loc",
     ),
 }
 
