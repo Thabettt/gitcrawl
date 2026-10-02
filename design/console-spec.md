@@ -1,6 +1,6 @@
 # Console Spec (US4) — gitcrawl Operator Console
 
-**Status**: Approved-for-overnight v1 (scope approved in conversation 2026-10-01; written review deferred per operator's overnight instruction). Parents: `spec.md` (Frozen v2), `tasks.md` (T019–T037, T051), `contracts/search-api.md`, `data-model.md`. Plan of record: `console-plan.md`.
+**Status**: Approved-for-overnight v1 (scope approved in conversation 2026-10-01; written review deferred per operator's overnight instruction). **UX flow revised 2026-10-02** — see `console-ux-redesign.md`; this spec remains authoritative for the backend and route contract. Parents: `spec.md` (Frozen v2), `tasks.md` (T019–T037, T051), `contracts/search-api.md`, `data-model.md`. Plan of record: `console-plan.md`.
 
 ## Goal
 
