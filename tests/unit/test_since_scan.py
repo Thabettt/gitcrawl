@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from itertools import pairwise
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -11,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from discover.search_shards import RequestFailed
-from discover.since_scan import SincePage, iter_since_pages, plan_id_ranges, save_checkpoint
+from discover.since_scan import SincePage, iter_since_pages, save_checkpoint
 from lib.gh_client import API_BASE
 
 NEXT_URL = "https://api.github.com/repositories?since=98765&per_page=100&odd=keep%2Bme"
@@ -148,33 +147,6 @@ def test_response_reaction_hook_receives_every_response():
         )
     )
     assert recorded == [200]
-
-
-def test_plan_single_worker_covers_the_whole_window():
-    assert plan_id_ranges(workers=1, min_id=1, max_id=100) == [(1, 100)]
-
-
-def test_plan_partitions_evenly_and_contiguously():
-    ranges = plan_id_ranges(workers=3, min_id=0, max_id=10)
-    assert ranges == [(0, 4), (4, 7), (7, 10)]
-    for left, right in pairwise(ranges):
-        assert left[1] == right[0]
-
-
-def test_plan_oversized_workers_yields_one_range_per_id():
-    assert plan_id_ranges(workers=10, min_id=0, max_id=3) == [(0, 1), (1, 2), (2, 3)]
-
-
-def test_plan_empty_or_inverted_window_is_empty():
-    assert plan_id_ranges(workers=4, min_id=10, max_id=10) == []
-    assert plan_id_ranges(workers=4, min_id=10, max_id=5) == []
-
-
-def test_plan_rejects_non_positive_workers():
-    with pytest.raises(ValueError):
-        plan_id_ranges(workers=0, max_id=10)
-    with pytest.raises(ValueError):
-        plan_id_ranges(workers=-1, max_id=10)
 
 
 @pytest.fixture(scope="module", autouse=True)

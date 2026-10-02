@@ -23,23 +23,6 @@ class SincePage:
     next_since: int | None
 
 
-def plan_id_ranges(*, workers: int, min_id: int = 1, max_id: int) -> list[tuple[int, int]]:
-    if workers < 1:
-        raise ValueError("workers must be >= 1")
-    span = max_id - min_id
-    if span <= 0:
-        return []
-    count = min(workers, span)
-    base, remainder = divmod(span, count)
-    ranges: list[tuple[int, int]] = []
-    start = min_id
-    for index in range(count):
-        end = start + base + (1 if index < remainder else 0)
-        ranges.append((start, end))
-        start = end
-    return ranges
-
-
 def _since_param(url: str) -> int | None:
     for key, value in parse_qsl(urlparse(url).query):
         if key == "since":

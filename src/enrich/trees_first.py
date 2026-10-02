@@ -13,11 +13,6 @@ from lib import audit
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
 
-METAFILES_BASE_URL = "https://repos.ecosyste.ms/api/v1/hosts/GitHub/repositories"
-
-_METAFILE_KEYS = ("manifests", "metafiles")
-_METAFILE_NAME_KEYS = ("filename", "path", "name")
-
 _LITERAL_CHARS = frozenset("*?[")
 
 
@@ -126,75 +121,4 @@ def fetch_tree(
         paths=paths,
         truncated=bool(payload.get("truncated")),
         source="tree",
-    )
-
-
-def _entry_names(entry: object) -> list[str]:
-    if isinstance(entry, str):
-        return [entry]
-    if isinstance(entry, dict):
-        for key in _METAFILE_NAME_KEYS:
-            value = entry.get(key)
-            if isinstance(value, str):
-                return [value]
-    return []
-
-
-def _paths_from_value(value: object) -> set[str]:
-    if isinstance(value, list):
-        paths: set[str] = set()
-        for item in value:
-            paths.update(_entry_names(item))
-        return paths
-    if isinstance(value, dict):
-        single = _entry_names(value)
-        if single:
-            return set(single)
-        paths = set()
-        for key, item in value.items():
-            if isinstance(item, list):
-                paths.update(_paths_from_value(item))
-            elif isinstance(key, str):
-                paths.add(key)
-        return paths
-    return set()
-
-
-def fetch_metafiles(
-    client: httpx.Client,
-    full_name: str,
-    *,
-    names: Sequence[str],
-    base_url: str = METAFILES_BASE_URL,
-    limiter: BucketLimiter | None = None,
-    token_id: str | None = None,
-    sleep: Callable[[float], None] = time.sleep,
-    now: Callable[[], float] = time.time,
-    jitter: Callable[[], float] | None = None,
-    on_response: Callable[[httpx.Response, float], None] | None = None,
-) -> FilePresence:
-    payload = _require_json(
-        request_with_retry(
-            client,
-            "GET",
-            f"{base_url}/{full_name}",
-            auth=False,
-            limiter=limiter,
-            token_id=token_id,
-            sleep=sleep,
-            now=now,
-            jitter=jitter,
-            on_response=on_response,
-        )
-    )
-    found: set[str] = set()
-    for key in _METAFILE_KEYS:
-        if key in payload:
-            found.update(_paths_from_value(payload[key]))
-    requested = set(names)
-    return FilePresence(
-        repo_full_name=full_name,
-        paths=frozenset(found & requested),
-        truncated=False,
-        source="metafiles",
     )

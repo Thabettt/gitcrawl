@@ -1,19 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
-from scheduler.shard_planner import ShardSpec
-
-
-def order_shards(specs: list[ShardSpec]) -> list[ShardSpec]:
-    return sorted(
-        specs,
-        key=lambda spec: (
-            spec.range_start is not None,
-            spec.range_start or datetime.min.replace(tzinfo=UTC),
-        ),
-    )
-
 
 def _stars(item: dict) -> float:
     value = item.get("stargazers")

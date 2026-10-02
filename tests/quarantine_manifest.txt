@@ -1,15 +1,6 @@
-# Intentionally unwired surface (spec 5.9 / ruling R24 + R57).
+# Intentionally unwired surface (spec 5.9 / ruling R58, superseding R24 + R57).
 # Every entry must keep at least one test; see tests/unit/test_quarantine_manifest.py.
-limiter.retry
-enrich.mirrors
-enrich.graphql_batch
-skeleton
 discover.pipeline.run_since_scan
-discover.since_scan.plan_id_ranges
-enrich.trees_first.fetch_metafiles
 scheduler.state_machine.pel_size
-scheduler.state_machine.reclaim_stale
-scheduler.state_machine.retry_or_dlq
-scheduler.tiering.order_shards
 store.lifecycle.purge_tombstones
 store.upserts.bootstrap_copy

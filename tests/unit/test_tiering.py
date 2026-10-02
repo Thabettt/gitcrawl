@@ -1,18 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
-from scheduler.shard_planner import ShardSpec
-from scheduler.tiering import order_repos, order_shards
-
-
-def spec(query, range_start=None, range_end=None, total_count=10):
-    return ShardSpec(
-        query=query,
-        range_start=range_start,
-        range_end=range_end,
-        total_count=total_count,
-    )
+from scheduler.tiering import order_repos
 
 
 def repo(name, *, stargazers=None, pushed_at=None):
@@ -22,26 +10,6 @@ def repo(name, *, stargazers=None, pushed_at=None):
     if pushed_at is not None:
         item["pushed_at"] = pushed_at
     return item
-
-
-def test_order_shards_puts_unbounded_first_then_chronological():
-    late = spec("late", datetime(2024, 3, 1, tzinfo=UTC), datetime(2024, 3, 2, tzinfo=UTC))
-    early = spec("early", datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 2, tzinfo=UTC))
-    unbounded = spec("unbounded")
-    assert order_shards([late, unbounded, early]) == [unbounded, early, late]
-
-
-def test_order_shards_is_stable_for_ties_and_unbounded_entries():
-    first = spec("first", datetime(2024, 1, 1, tzinfo=UTC))
-    second = spec("second", datetime(2024, 1, 1, tzinfo=UTC))
-    unbounded_a = spec("unbounded-a")
-    unbounded_b = spec("unbounded-b")
-    assert order_shards([first, second, unbounded_a, unbounded_b]) == [
-        unbounded_a,
-        unbounded_b,
-        first,
-        second,
-    ]
 
 
 def test_order_repos_sorts_by_stars_then_pushed_at():

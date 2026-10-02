@@ -32,8 +32,6 @@ FIXTURE_PATHS = (
     "README.md",
 )
 
-METAFILES_BASE_URL = "https://repos.ecosyste.ms/api/v1/hosts/GitHub/repositories"
-
 
 def client_from(responses, recorder=None):
     iterator = iter(responses)
@@ -257,105 +255,6 @@ def test_match_still_supports_globs():
     }
 
 
-def test_fetch_metafiles_parses_list_of_dicts_and_filters_requested_names():
-    from enrich.trees_first import fetch_metafiles
-
-    captured = []
-    payload = {
-        "manifests": [
-            {"filename": "Dockerfile"},
-            {"path": ".github/workflows/ci.yml"},
-            {"filename": "package.json"},
-            "README.md",
-        ]
-    }
-    client = client_from([httpx.Response(200, json=payload)], captured)
-    presence = fetch_metafiles(
-        client,
-        "octo/hello",
-        names=("Dockerfile", ".github/workflows/ci.yml", "README.md"),
-    )
-    assert presence.paths == frozenset({"Dockerfile", ".github/workflows/ci.yml", "README.md"})
-    assert presence.repo_full_name == "octo/hello"
-    assert presence.truncated is False
-    assert presence.source == "metafiles"
-    assert str(captured[0].url) == f"{METAFILES_BASE_URL}/octo/hello"
-
-
-def test_fetch_metafiles_parses_mapping_dict_shape():
-    from enrich.trees_first import fetch_metafiles
-
-    payload = {"metafiles": {"Dockerfile": {"size": 10}, "package.json": {}}}
-    client = client_from([httpx.Response(200, json=payload)])
-    presence = fetch_metafiles(
-        client, "octo/hello", names=("Dockerfile", "package.json", "missing")
-    )
-    assert presence.paths == frozenset({"Dockerfile", "package.json"})
-
-
-def test_fetch_metafiles_parses_single_entry_dict_shape():
-    from enrich.trees_first import fetch_metafiles
-
-    payload = {"metafiles": {"path": "Dockerfile", "size": 12}}
-    client = client_from([httpx.Response(200, json=payload)])
-    presence = fetch_metafiles(client, "octo/hello", names=("Dockerfile",))
-    assert presence.paths == frozenset({"Dockerfile"})
-
-
-def test_fetch_metafiles_reads_both_keys_and_nested_lists():
-    from enrich.trees_first import fetch_metafiles
-
-    payload = {
-        "manifests": [{"filename": "Dockerfile"}],
-        "metafiles": {"files": [{"path": "FUNDING.yml"}]},
-    }
-    client = client_from([httpx.Response(200, json=payload)])
-    presence = fetch_metafiles(client, "octo/hello", names=("Dockerfile", "FUNDING.yml"))
-    assert presence.paths == frozenset({"Dockerfile", "FUNDING.yml"})
-
-
-def test_fetch_metafiles_produces_no_paths_for_empty_payload():
-    from enrich.trees_first import fetch_metafiles
-
-    client = client_from([httpx.Response(200, json={"full_name": "octo/hello"})])
-    presence = fetch_metafiles(client, "octo/hello", names=("Dockerfile",))
-    assert presence.paths == frozenset()
-    assert presence.source == "metafiles"
-
-
-def test_fetch_metafiles_honors_custom_base_url():
-    from enrich.trees_first import fetch_metafiles
-
-    captured = []
-    client = client_from([httpx.Response(200, json={"manifests": []})], captured)
-    fetch_metafiles(
-        client,
-        "octo/hello",
-        names=("Dockerfile",),
-        base_url="https://mirror.test/repos",
-    )
-    assert str(captured[0].url) == "https://mirror.test/repos/octo/hello"
-
-
-def test_fetch_metafiles_404_raises_request_failed():
-    from enrich.trees_first import fetch_metafiles
-
-    client = client_from([httpx.Response(404, json={"message": "Not Found"})])
-    with pytest.raises(RequestFailed) as excinfo:
-        fetch_metafiles(client, "octo/missing", names=("Dockerfile",))
-    assert excinfo.value.status == 404
-    assert excinfo.value.message == "Not Found"
-
-
-def test_fetch_metafiles_malformed_body_raises_request_failed():
-    from enrich.trees_first import fetch_metafiles
-
-    client = client_from([httpx.Response(200, text="<html>not json</html>")])
-    with pytest.raises(RequestFailed) as excinfo:
-        fetch_metafiles(client, "octo/hello", names=("Dockerfile",))
-    assert excinfo.value.status == 200
-
-
 def test_fetch_tree_reuses_the_audit_cached_body():
     from enrich.trees_first import fetch_tree
     from lib.audit import record_from_response
@@ -378,24 +277,3 @@ def test_fetch_tree_reuses_the_audit_cached_body():
 
     assert presence.paths == TREE_BLOB_PATHS
     assert parses == [1]
-
-
-def test_fetch_metafiles_never_forwards_the_client_authorization_header():
-    from enrich.trees_first import fetch_metafiles
-
-    captured: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return httpx.Response(200, json={"manifests": [{"filename": "Dockerfile"}]})
-
-    client = httpx.Client(
-        headers={"Authorization": "Bearer super-secret"},
-        transport=httpx.MockTransport(handler),
-    )
-
-    presence = fetch_metafiles(client, "octo/hello", names=("Dockerfile",))
-
-    assert presence.paths == frozenset({"Dockerfile"})
-    assert len(captured) == 1
-    assert "authorization" not in captured[0].headers
