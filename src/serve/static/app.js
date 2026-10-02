@@ -84,23 +84,50 @@
     }
   }
 
+  var activeModal = null;
+  var restoreFocusTo = null;
+
+  function focusableElements(modal) {
+    var selector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return Array.prototype.slice.call(modal.querySelectorAll(selector)).filter(function (element) {
+      return element.getClientRects().length > 0;
+    });
+  }
+
   function openModal(id) {
     var modal = document.getElementById(id);
     if (!modal) {
       return;
     }
+    if (activeModal && activeModal !== modal) {
+      closeModal(activeModal.id);
+    }
+    restoreFocusTo =
+      document.activeElement && document.activeElement !== document.body
+        ? document.activeElement
+        : null;
+    activeModal = modal;
     modal.hidden = false;
-    var focusable = modal.querySelector("input, button");
-    if (focusable) {
-      focusable.focus();
+    var focusable = focusableElements(modal);
+    if (focusable.length) {
+      focusable[0].focus();
     }
   }
 
   function closeModal(id) {
     var modal = document.getElementById(id);
-    if (modal) {
-      modal.hidden = true;
+    if (!modal) {
+      return;
     }
+    modal.hidden = true;
+    if (activeModal === modal) {
+      activeModal = null;
+    }
+    if (restoreFocusTo && typeof restoreFocusTo.focus === "function") {
+      restoreFocusTo.focus();
+    }
+    restoreFocusTo = null;
   }
 
   function toggleShortcutsModal() {
@@ -108,16 +135,40 @@
     if (!modal) {
       return;
     }
-    modal.hidden = !modal.hidden;
+    if (modal.hidden) {
+      openModal("shortcuts-modal");
+    } else {
+      closeModal("shortcuts-modal");
+    }
   }
 
   function closeOpenModal() {
     var open = document.querySelector(".modal:not([hidden])");
     if (open) {
-      open.hidden = true;
+      closeModal(open.id);
       return true;
     }
     return false;
+  }
+
+  function trapTab(event) {
+    if (!activeModal) {
+      return false;
+    }
+    var focusable = focusableElements(activeModal);
+    if (!focusable.length) {
+      event.preventDefault();
+      return true;
+    }
+    var current = focusable.indexOf(document.activeElement);
+    var next = window.gitcrawlModalFocus.nextFocusIndex(
+      current,
+      focusable.length,
+      event.shiftKey
+    );
+    event.preventDefault();
+    focusable[next].focus();
+    return true;
   }
 
   var rowCache = applib.createRowCache();
@@ -188,6 +239,9 @@
     if (event.key === "Escape") {
       clearPendingG();
       closeOpenModal();
+      return;
+    }
+    if (event.key === "Tab" && trapTab(event)) {
       return;
     }
     if (applib.isEditableTarget(event.target)) {

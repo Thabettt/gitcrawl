@@ -680,3 +680,13 @@ def test_shortcuts_help_has_a_visible_opener(client: TestClient):
     assert html.index('id="shortcuts-open"') < html.index('id="theme-toggle"')
     assert script.index("isEditableTarget(event.target)") < script.index('event.key === "?"')
     assert script.index("event.ctrlKey") < script.index('event.key === "?"')
+
+
+def test_modal_focus_trap_is_wired(client: TestClient):
+    script = client.get("/static/app.js").text
+    helper = client.get("/static/modalfocus.js")
+
+    assert helper.status_code == 200
+    assert "gitcrawlModalFocus" in helper.text
+    for marker in ("trapTab", "restoreFocusTo", "nextFocusIndex", "activeModal"):
+        assert marker in script
