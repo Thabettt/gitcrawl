@@ -15,12 +15,37 @@
 - Python `>=3.12`; line length 100; ruff (`E,F,I,UP,B`) + black clean; coverage floor `fail_under = 93`.
 - DB tests require `TEST_DATABASE_URL` ending in `_test` (or `GITCRAWL_REQUIRE_TEST_DB=1`); use `tests/conftest.py` fixtures.
 - Run tests with: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest <path> -q` (Windows PowerShell).
-- Migration `0008` (down_revision `0007`) is claimed here; the deferred agent-detection plan renumbers to `0009` when/if executed — record this in `docs/development-log.md`.
+- Migration `0008` (down_revision `0007`) is claimed here. Numbers after this plan: the UX redesign's corpora work takes `0009`; the deferred agent-detection plan renumbers to `0010` when/if executed — record this in `docs/development-log.md`.
 - Resolution precedence per field: **environment override → database row → built-in default.** Defaults equal today's values (`10/500/200/100`, deadline `3600`, batching on, batch size `20`, concurrency `10`), so nothing changes until an operator edits.
 - Settings apply to **new** runs only: values are read once at submit; a running run is never mutated.
 - Tokens are never stored, accepted, or rendered: the page shows a present/absent badge only (`docs/legal-gates.md`).
 - Validation bounds: `max_shards` 1–10,000; `max_candidates`/`max_hydrate`/`max_enrich` 1–1,000,000; `request_deadline_seconds` 60–86,400; `graphql_batch_size` 1–20; `limiter_max_concurrent` 1–100; `max_hydrate ≤ max_candidates`.
 - All commits: conventional prefixes (`migration:`, `feat:`, `test:`, `docs:`).
+
+---
+
+## AMENDMENTS (2026-10-02 UX alignment — apply while executing; these supersede conflicting steps below)
+
+The UX redesign is approved (`design/console-ux-redesign.md`). Settings becomes **System → Limits** and its labels become plain language. Apply:
+
+1. **Nav (Task 3 Step 5):** do NOT add a "Settings" nav link. Add `<a href="/settings">System</a>` in `base.html` instead. The UX plan later replaces it with `/system`; `/settings` survives as the Limits page behind it. Contract tests assert the page is reachable and titled plainly; they should not assert a "Settings" nav label.
+2. **Page heading and labels (Task 3 Step 4):** the page is titled **“Limits”** with the subtitle “Run limits for new searches. Part of System.” Replace raw field-name labels with:
+
+   | field (`name` attribute unchanged) | label | help line under the input |
+   |---|---|---|
+   | `max_shards` | Search breadth (slices) | How many slices a live search may be split into. Broader = longer. |
+   | `max_candidates` | Repos to keep per search | How many matching repos the search holds on to. |
+   | `max_hydrate` | Repos to save details for | How many of those get current details fetched (uses your allowance). Cannot exceed “Repos to keep”. |
+   | `max_enrich` | Extra rules to check | How many repos get file and country checks. |
+   | `request_deadline_seconds` | Stop a search after (seconds) | Long searches abort past this; raise it for corpus builds. |
+   | `graphql_batch` | Batch repo lookups | Faster saving with fewer requests. Off = one request per repo. |
+   | `graphql_batch_size` | Repos per batch | Keep at 20 or below; GitHub cuts off large batches. |
+   | `limiter_max_concurrent` | Simultaneous requests | How many requests run at once. Keep well under GitHub’s ceiling of 100. |
+
+   Section headings become **“Search limits”**, **“Faster saving (batching)”**, **“Request pacing”**. All `name` attributes, ids, and validation stay exactly as the plan specifies.
+3. **Contract tests (Task 3 Step 1):** additionally assert the plain labels (`"Search breadth (slices)"`, `"Repos to save details for"`) and the help text `"keep well under GitHub’s ceiling"` appear; keep every existing behavioral assertion.
+4. **Docs (Task 5):** refer to “System → Limits (the `/settings` page)” instead of “Settings page”. The env table stays.
+5. **Migration note (Task 1/5):** settings is `0008`; UX corpora is `0009`; detection is `0010`.
 
 ---
 
