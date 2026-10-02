@@ -375,6 +375,7 @@ def test_main_module_reads_env_overrides_without_starting_a_server(monkeypatch):
     monkeypatch.setattr(uvicorn, "run", fake_run)
     monkeypatch.setenv("GITCRAWL_HOST", "0.0.0.0")
     monkeypatch.setenv("GITCRAWL_PORT", "9123")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     entry.main()
 
@@ -391,6 +392,7 @@ def test_main_module_defaults_to_localhost_8000(monkeypatch):
     monkeypatch.setattr(uvicorn, "run", fake_run)
     monkeypatch.delenv("GITCRAWL_HOST", raising=False)
     monkeypatch.delenv("GITCRAWL_PORT", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     entry.main()
 
