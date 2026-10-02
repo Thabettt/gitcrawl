@@ -163,6 +163,28 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
 - Keyboard/JS behavior is markup-tested only; first browser pass recommended.
 - `runs.error` can carry ≤300 chars of upstream body (escaped everywhere it renders).
 
+## Quality hardening program (2026-10-01)
+
+**Entry points:** `docs/superpowers/specs/2026-10-01-quality-hardening-design.md` (freeze contract, phases, acceptance), with plans `2026-10-01-ci-and-regression-harness.md` (Phase 0), `2026-10-01-zero-behavior-fixes.md` (Phase 1a), `2026-10-01-test-and-tooling-hardening.md` (Phase 1b), `2026-10-01-adversarial-hardening.md` (Phase 2), `2026-10-01-ux-polish.md` (Phase 3).
+
+**Gates added by Phase 1b:**
+
+- Fixtures: 20 `clean` fixtures plus `test_executor.py::db` (21 fixtures across 21 files, including `test_clone_registry.py`) now call the `clean_db` factory in `tests/conftest.py`; two in-test truncates in `test_upserts.py` were adapted to call `clean_db()` directly. `tests/unit/test_fixture_centralization.py` rejects raw `TRUNCATE TABLE` outside the factory and three allowlisted single-purpose fixtures.
+- CWD: `tests/conftest.py::repo_root` anchors asset paths; `tests/unit/test_cwd_independence.py` runs representative tests from a foreign directory and rejects relative `Path("…")` literals.
+- Flakes: no wall-clock assertions remain; ordering tests use threads events/barriers and an append-operation counter (`test_id_accumulation.py`, `test_executor.py`, `test_cloner.py`, `test_filter_form.py`).
+- JS: pure helpers live in `src/serve/static/applib.js`; `tests/js/applib.test.mjs` + `tests/unit/test_applib_js.py` cover the row cache, clone-start guard, clone limit parsing, editable-target detection, and toast messages.
+- Quarantine: `tests/quarantine_manifest.txt` lists every intentionally-unwired module/function (13 entries); `tests/unit/test_quarantine_manifest.py` fails when a `src` module loses test coverage or a manifest entry loses its test.
+- Types: `mypy` (pinned in `requirements-dev.txt`; config in `pyproject.toml`) gates `src/lib`, `src/limiter`, `src/store`, `src/scheduler` with `disallow_untyped_defs` for `limiter.buckets`/`limiter.classifier`; ratchet policy in the config comments; `Deps.token_id` renamed to `Deps.token_fp`.
+- Layering: `src/lib/audit.py` (was `src/serve/audit.py`) is core's telemetry dependency; `tests/unit/test_import_boundaries.py` enforces core-never-imports-`serve` and breaks the `store`↔`hydrate` runtime cycle.
+
+**Run the gates:**
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m mypy
+node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
+```
+
 ## Repo/git facts
 
 - `main` holds the frozen baseline (`717c9b3`); all work happens on `001-gitcrawl`.
