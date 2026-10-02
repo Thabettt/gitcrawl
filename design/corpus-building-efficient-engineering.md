@@ -2,7 +2,7 @@
 
 **Date**: 2026-10-02. Companion to `how-the-data-flows.md`, `gitcrawl-vs-seart.md`, `spec.md`, and `research.md`. You need no prior GitHub API knowledge — every term is introduced where it is first used. All GitHub numbers were verified against GitHub's official documentation on 2026-10-02.
 
-**Purpose of this document**: explain, from scratch, how we can build the largest and freshest repository corpus possible with **one GitHub account**, as fast as GitHub's rules permit, without ever losing work and without breaking a single term of service. It records the math, the strategies, the legal boundaries, and the design decisions we reached — including one not-yet-built feature (GraphQL batching) that changes the speed by roughly 25x.
+**Purpose of this document**: explain, from scratch, how we can build the largest and freshest repository corpus possible with **one GitHub account**, as fast as GitHub's rules permit, without ever losing work and without breaking a single term of service. It records the math, the strategies, the legal boundaries, and the design decisions we reached — including the GraphQL batching engine, now built, that changes the speed by roughly 25x.
 
 ---
 
@@ -145,7 +145,7 @@ The spec's Rust frame is on the order of 128,000 repos. With two touches per rep
 | + 1 app installation | ~26 hours |
 | + 2 app installations | ~17 hours |
 | + 3 app installations | ~13 hours |
-| With GraphQL batching (§9, not built yet) | hours, not days |
+| With GraphQL batching (§9, built) | hours, not days |
 
 ---
 
@@ -242,7 +242,7 @@ A single app installation is not always stuck at 5,000/hour: installations with 
 
 Ordered from highest leverage to lowest.
 
-1. **GraphQL batching (the big one — not built yet).** Fetches ~20–100 repos per call on its own meter. Turns "one touch per repo" into "one touch per box of repos." Full explanation in §9.
+1. **GraphQL batching (the big one — built).** Fetches ~20–100 repos per call on its own meter. Turns "one touch per repo" into "one touch per box of repos." Full explanation in §9.
 2. **Use free "nothing changed" replies.** Store each repo's ETag; refresh an unchanged corpus at zero primary cost.
 3. **Never fetch twice.** The database upserts by immutable repo id, so overlapping search pages, reruns, and multi-device runs dedupe instead of re-spending.
 4. **Filter cheap-first, drop early, and stop paying for dead repos.** Stars/topic/language checks are free; owner country costs one call *per owner* (owners repeat across repos); file checks cost one call per surviving repo (and those same file checks are the future agent-detection file channel). Every repo dropped early is a future touch saved.
@@ -261,7 +261,7 @@ Ordered from highest leverage to lowest.
 ### 9.1 REST versus GraphQL
 
 - **REST (today)**: one request = one repo. Ordering 50 repo details is 50 phone calls.
-- **GraphQL (planned)**: one request can carry a *shopping list* ("details for these 50 repos"), and the answer contains all 50. One phone call, 50 items.
+- **GraphQL (batching, built)**: one request can carry a *shopping list* ("details for these 50 repos"), and the answer contains all 50. One phone call, 50 items.
 
 GraphQL is on **its own meter** (5,000 points/hour) and its price is in **points**, not requests. The cost formula is roughly **1 point per 100 items requested** (minimum 1 point per query). A batch of 20–50 repos therefore costs about **1 point**.
 
@@ -283,9 +283,11 @@ Both meters work at once, so batching also frees the main meter for the things G
 
 ---
 
-## 10. The batching engine: agreed design (not built yet)
+## 10. The batching engine: agreed design (built)
 
-This section records the design we settled on. It answers one worry: **one bad repo must never cut off the thousands behind it, and nothing may stall or fail silently.**
+This section records the design we settled on and built. It answers one worry: **one bad repo must never cut off the thousands behind it, and nothing may stall or fail silently.**
+
+Status: built (see `docs/superpowers/plans/2026-10-02-graphql-batch-engine.md`); REST paths remain as fallbacks.
 
 ### 10.1 Shape
 
