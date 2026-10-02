@@ -51,6 +51,10 @@
     <h1>Find</h1>
     <p class="muted">Pick filters or upload a filter-spec JSON; both doors build the same spec.</p>
   </div>
+  <div id="recent-filters" class="recent-filters" hidden>
+    <span class="field-label" id="recent-filters-label">Recent filters</span>
+    <ul id="recent-filters-list" aria-labelledby="recent-filters-label"></ul>
+  </div>
   {% if state.errors %}
   <div id="filter-errors" class="empty-state error-state" role="alert">
     {% for error in state.errors %}

@@ -680,3 +680,19 @@ def test_replay_requires_csrf_and_rejects_unknown_runs(clean: Engine, tmp_path):
 
     assert without.status_code == 403
     assert unknown.status_code == 404
+
+
+def test_recent_filters_quick_pick_is_opt_in_and_empty_by_default(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+    html = client.get("/find").text
+
+    assert 'id="recent-filters"' in html
+    assert re.search(r'<div id="recent-filters"[^>]* hidden', html)
+    assert 'id="recent-filters-list"' in html
+    assert "gc-recent-filters" not in html
+
+    script = client.get("/static/app.js").text
+    assert "gc-recent-filters" in script
+    assert "renderRecentFilters" in script
+    helper = client.get("/static/recentfilters.js")
+    assert helper.status_code == 200

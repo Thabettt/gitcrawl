@@ -426,6 +426,19 @@ textarea {
   gap: 1rem;
 }
 
+.recent-filters {
+  margin: 0 0 0.75rem;
+}
+
+.recent-filters ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+
 .filter-section {
   border: 1px solid var(--gc-border);
   border-radius: var(--gc-radius);

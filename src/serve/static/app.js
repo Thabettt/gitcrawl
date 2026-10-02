@@ -263,6 +263,81 @@
     });
   }
 
+  var RECENT_FILTERS_KEY = "gc-recent-filters";
+
+  function storedRecentFilters() {
+    try {
+      return window.gitcrawlRecentFilters.parse(
+        window.localStorage.getItem(RECENT_FILTERS_KEY)
+      );
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function saveRecentFilters(entries) {
+    try {
+      window.localStorage.setItem(RECENT_FILTERS_KEY, JSON.stringify(entries));
+    } catch (error) {
+      window.console.debug("recent filters persistence unavailable", error);
+    }
+  }
+
+  function formFieldPairs(form) {
+    var pairs = [];
+    new window.FormData(form).forEach(function (value, name) {
+      if (typeof value !== "string" || !value) {
+        return;
+      }
+      if (name === "csrf" || name === "action" || name === "spec_file") {
+        return;
+      }
+      pairs.push({ name: name, value: value });
+    });
+    return pairs;
+  }
+
+  function recordRecentFilter(form) {
+    if (!window.gitcrawlRecentFilters) {
+      return;
+    }
+    var fields = formFieldPairs(form);
+    if (!fields.length) {
+      return;
+    }
+    saveRecentFilters(
+      window.gitcrawlRecentFilters.push(storedRecentFilters(), {
+        label: window.gitcrawlRecentFilters.label(fields),
+        fields: fields
+      })
+    );
+  }
+
+  function renderRecentFilters() {
+    var container = document.getElementById("recent-filters");
+    var list = document.getElementById("recent-filters-list");
+    if (!container || !list || !window.gitcrawlRecentFilters) {
+      return;
+    }
+    var entries = storedRecentFilters();
+    if (!entries.length) {
+      container.hidden = true;
+      return;
+    }
+    list.textContent = "";
+    entries.forEach(function (entry) {
+      var item = document.createElement("li");
+      var link = document.createElement("a");
+      link.className = "button ghost";
+      link.setAttribute("data-recent-filter", "true");
+      link.href = "/find?" + window.gitcrawlRecentFilters.toQuery(entry.fields);
+      link.textContent = entry.label;
+      item.appendChild(link);
+      list.appendChild(item);
+    });
+    container.hidden = false;
+  }
+
   function copyHash() {
     var button = document.getElementById("copy-hash");
     if (!button) {
@@ -376,7 +451,14 @@
     }
     syncCloneLimit();
     copyHash();
+    renderRecentFilters();
     document.addEventListener("submit", markBusy);
+    document.addEventListener("submit", function (event) {
+      var form = event.target;
+      if (form && form.id === "find-form") {
+        recordRecentFilter(form);
+      }
+    });
     window.addEventListener("pageshow", clearBusy);
     var start = document.getElementById("clone-start");
     if (start) {
