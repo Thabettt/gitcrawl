@@ -3,14 +3,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
-from hydrate.repo_client import HydratedRepo
 from store.models import FullNameHistory, Repo
 from store.upserts import upsert_repos
+
+if TYPE_CHECKING:
+    from hydrate.repo_client import HydratedRepo
 
 
 @dataclass(frozen=True)
@@ -77,7 +80,7 @@ def apply_hydration(
         raise ValueError("hydrated payload is required for a 200 response")
     etags = {payload["id"]: hydrated.etag} if hydrated.etag is not None else None
     upsert_repos(engine, [payload], etags=etags)
-    repo_id = payload.get("id")
+    repo_id = cast(int, payload.get("id"))
     renamed_from = None
     history_added = False
     if payload.get("full_name") != requested_full_name:

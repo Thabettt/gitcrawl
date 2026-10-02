@@ -55,7 +55,7 @@ def _search_ids(deps: Deps) -> set[int]:
         deps.client,
         SEARCH_QUERY,
         limiter=deps.limiter,
-        token_id=deps.token_id,
+        token_id=deps.token_fp,
         per_page=100,
         max_pages=10,
     ):
@@ -85,7 +85,7 @@ def deps(alembic_engine: Engine, schema) -> Iterator[Deps]:
         engine=alembic_engine,
         redis=redis_client,
         limiter=BucketLimiter(redis_client),
-        token_id=token_fingerprint(token),
+        token_fp=token_fingerprint(token),
     )
     client.close()
 
@@ -132,7 +132,7 @@ def test_since_page_returns_ids_after_cursor(deps: Deps, golden: dict) -> None:
             since=since,
             max_pages=1,
             limiter=deps.limiter,
-            token_id=deps.token_id,
+            token_id=deps.token_fp,
         )
     )
     assert pages

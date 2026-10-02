@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 RESOURCE_SPECS: dict[str, tuple[int, float]] = {
     "search": (30, 60.0),
@@ -88,13 +89,13 @@ class AcquireResult:
     retry_after: float | None
 
 
-def _as_text(value) -> str:
+def _as_text(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode()
     return str(value)
 
 
-def _parse_int(value) -> int | None:
+def _parse_int(value: object) -> int | None:
     if value is None:
         return None
     try:
@@ -103,7 +104,7 @@ def _parse_int(value) -> int | None:
         return None
 
 
-def _parse_float(value) -> float | None:
+def _parse_float(value: object) -> float | None:
     if value is None:
         return None
     try:
@@ -115,7 +116,7 @@ def _parse_float(value) -> float | None:
 class BucketLimiter:
     def __init__(
         self,
-        redis,
+        redis: Any,
         *,
         specs: dict[str, tuple[int, float]] = RESOURCE_SPECS,
         max_concurrent: int = 10,

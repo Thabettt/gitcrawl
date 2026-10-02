@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypeGuard
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -92,7 +93,7 @@ def _coerce_count(value: object) -> int | None:
     return None
 
 
-def _valid_id(value: object) -> bool:
+def _valid_id(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -479,6 +480,8 @@ def _bootstrap_chunk(
             _rename_stale_full_names(connection, normalized, stats)
             connection.execute(text(f"TRUNCATE {table_name}"))
             driver = connection.connection.driver_connection
+            if driver is None:
+                raise RuntimeError("database driver does not expose a DBAPI connection")
             with driver.cursor() as cursor:
                 with cursor.copy(_copy_sql(table_name)) as copy:
                     for row in normalized:

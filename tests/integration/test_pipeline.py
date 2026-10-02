@@ -114,8 +114,8 @@ def scripted_client(
     return httpx.Client(transport=httpx.MockTransport(wrapped))
 
 
-def make_deps(engine: Engine, client: httpx.Client, redis=None, token_id: str = "test-fp") -> Deps:
-    return Deps(client=client, engine=engine, redis=redis, limiter=None, token_id=token_id)
+def make_deps(engine: Engine, client: httpx.Client, redis=None, token_fp: str = "test-fp") -> Deps:
+    return Deps(client=client, engine=engine, redis=redis, limiter=None, token_fp=token_fp)
 
 
 def shard_state(engine: Engine, shard_id: int) -> tuple[str, bool]:
@@ -538,7 +538,7 @@ def test_deps_defaults(clean: Engine):
     deps = Deps(client=client, engine=clean)
     assert deps.redis is None
     assert deps.limiter is None
-    assert deps.token_id == "anonymous"
+    assert deps.token_fp == "anonymous"
     assert deps.audit_buffer is None
 
 

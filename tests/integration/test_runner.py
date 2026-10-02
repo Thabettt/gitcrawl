@@ -107,7 +107,7 @@ def scripted(handler):
 def make_deps(engine: Engine, client: httpx.Client) -> Deps:
     redis = fakeredis.FakeRedis()
     return Deps(
-        client=client, engine=engine, redis=redis, limiter=BucketLimiter(redis), token_id="test-fp"
+        client=client, engine=engine, redis=redis, limiter=BucketLimiter(redis), token_fp="test-fp"
     )
 
 
@@ -672,7 +672,7 @@ def test_build_deps_fingerprints_the_token_and_wires_the_stack(clean: Engine):
     redis = fakeredis.FakeRedis()
     deps = build_deps(clean, token="sekret", redis_client=redis, client=client)
 
-    assert deps.token_id == token_fingerprint("sekret")
+    assert deps.token_fp == token_fingerprint("sekret")
     assert deps.client is client
     assert deps.redis is redis
     assert deps.limiter is not None

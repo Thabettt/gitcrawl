@@ -20,6 +20,24 @@ line-length = 100
 target-version = ["py312"]
 extend-exclude = 'src/skeleton\.py'
 
+[tool.mypy]
+python_version = "3.12"
+files = ["src/lib", "src/limiter", "src/store", "src/scheduler"]
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = true
+
+# Ratchet policy: expand "files" one package at a time only after the current
+# scope is green in CI; never add a bare "# type: ignore"; overrides only tighten.
+# Next packages: discover, hydrate, enrich, serve. The end state deletes
+# follow_imports = "silent" so every imported module is gated.
+
+[[tool.mypy.overrides]]
+module = ["limiter.buckets", "limiter.classifier"]
+disallow_untyped_defs = true
+
 [tool.coverage.run]
 source = ["src"]
 

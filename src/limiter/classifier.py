@@ -24,14 +24,14 @@ class Decision:
     reason: str
 
 
-def _header(headers: Mapping[str, str], name: str):
+def _header(headers: Mapping[str, str], name: str) -> str | None:
     for key, value in headers.items():
         if str(key).lower() == name:
             return value
     return None
 
 
-def _parse_number(value) -> float | None:
+def _parse_number(value: object) -> float | None:
     if value is None:
         return None
     try:

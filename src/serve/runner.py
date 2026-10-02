@@ -89,7 +89,7 @@ def build_deps(
         engine=engine,
         redis=redis_client,
         limiter=BucketLimiter(redis_client) if redis_client is not None else None,
-        token_id=token_fingerprint(token),
+        token_fp=token_fingerprint(token),
         audit_buffer=audit.AuditBuffer(engine),
     )
 
@@ -119,7 +119,7 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
         record = audit.record_from_response(
             params,
             response,
-            token_fp=deps.token_id,
+            token_fp=deps.token_fp,
             latency_ms=latency_ms,
         )
         if deps.audit_buffer is not None:
@@ -189,7 +189,7 @@ def _hydrate(
         deps.client,
         names,
         limiter=deps.limiter,
-        token_id=deps.token_id,
+        token_id=deps.token_fp,
         on_response=hook,
     )
 
@@ -243,7 +243,7 @@ def _fetch_owner_location(
             "GET",
             f"{API_BASE}/users/{login}",
             limiter=deps.limiter,
-            token_id=deps.token_id,
+            token_id=deps.token_fp,
             on_response=hook,
         )
     except PartialResultsError:
@@ -373,7 +373,7 @@ def _apply_dockerfile(
                 row["full_name"],
                 ref=row["default_branch"] or None,
                 limiter=deps.limiter,
-                token_id=deps.token_id,
+                token_id=deps.token_fp,
                 on_response=hook,
             )
         except (RequestFailed, ThrottledError, PartialResultsError):

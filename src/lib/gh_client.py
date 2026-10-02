@@ -125,16 +125,19 @@ def request_with_retry(
         request_kwargs["json"] = json_body
     if extra_headers is not None:
         request_kwargs["headers"] = dict(extra_headers)
+    if limiter is not None and token_id is None:
+        raise ValueError("token_id is required when a limiter is configured")
+    limiter_key = token_id or ""
     denials = 0
     attempt = 0
     while True:
         if limiter is not None:
-            acquired = limiter.acquire(resource, token_id, now=now())
+            acquired = limiter.acquire(resource, limiter_key, now=now())
             if not acquired.allowed:
                 denials += 1
                 if denials >= max_attempts:
-                    raise ThrottledError(acquired.retry_after)
-                sleep(acquired.retry_after)
+                    raise ThrottledError(acquired.retry_after or 0.0)
+                sleep(acquired.retry_after or 0.0)
                 continue
             denials = 0
         try:
@@ -148,7 +151,7 @@ def request_with_retry(
                     response = client.send(request)
             finally:
                 if limiter is not None:
-                    limiter.release(resource, token_id)
+                    limiter.release(resource, limiter_key)
         except httpx.TransportError:
             extra = {} if jitter is None else {"jitter": jitter}
             decision = classify_transport(attempt, **extra)
@@ -161,7 +164,7 @@ def request_with_retry(
         if on_response is not None:
             on_response(response, latency_ms)
         if limiter is not None:
-            limiter.update_from_headers(resource, token_id, response.headers, now=now())
+            limiter.update_from_headers(resource, limiter_key, response.headers, now=now())
         if _sso_partial_results(response.headers):
             raise PartialResultsError(response)
         if response.status_code not in _TRIAGE_STATUSES:
@@ -181,6 +184,6 @@ def request_with_retry(
             attempt += 1
             if attempt >= max_attempts:
                 return response
-            sleep(decision.sleep_seconds)
+            sleep(decision.sleep_seconds or 0.0)
             continue
         return response

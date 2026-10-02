@@ -39,7 +39,7 @@ class Deps:
     engine: sqlalchemy.Engine
     redis: object | None = None
     limiter: BucketLimiter | None = None
-    token_id: str = "anonymous"
+    token_fp: str = "anonymous"
     audit_buffer: audit.AuditBuffer | None = None
 
 
@@ -76,7 +76,7 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
         record = audit.record_from_response(
             _request_params(response),
             response,
-            token_fp=deps.token_id,
+            token_fp=deps.token_fp,
             latency_ms=latency_ms,
         )
         if deps.audit_buffer is not None:
@@ -144,7 +144,7 @@ def count_total(
         "GET",
         url,
         limiter=deps.limiter,
-        token_id=deps.token_id,
+        token_id=deps.token_fp,
         on_response=on_response,
         sleep=sleep,
         now=now,
@@ -257,7 +257,7 @@ def run_search_discovery(
                 deps.client,
                 row.query,
                 limiter=deps.limiter,
-                token_id=deps.token_id,
+                token_id=deps.token_fp,
                 per_page=per_page,
                 max_pages=max_pages,
                 sleep=sleep,
@@ -349,7 +349,7 @@ def run_since_scan(
         per_page=per_page,
         max_pages=max_pages,
         limiter=deps.limiter,
-        token_id=deps.token_id,
+        token_id=deps.token_fp,
         sleep=sleep,
         now=now,
         jitter=jitter,
@@ -389,7 +389,7 @@ def run_org_enum(
             per_page=per_page,
             max_pages=max_pages,
             limiter=deps.limiter,
-            token_id=deps.token_id,
+            token_id=deps.token_fp,
             sleep=sleep,
             now=now,
             jitter=jitter,
@@ -403,7 +403,7 @@ def run_org_enum(
             per_page=per_page,
             max_pages=max_pages,
             limiter=deps.limiter,
-            token_id=deps.token_id,
+            token_id=deps.token_fp,
             sleep=sleep,
             now=now,
             jitter=jitter,
