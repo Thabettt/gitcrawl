@@ -156,6 +156,7 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
 | R55 | Final fix-wave scope (C1 truncation, I1 executor, I2 replay status, auth strip, FK migration 0004, minors) | larger wave |
 | R56 | API paths execute via FIFO executor with per-run wait; browser POSTs enqueue+303 | latency/loop semantics |
 | R57 | GraphQL/mirrors/full-depth remain built-but-unwired (like R24); clamp + warning | missing enrichment fields |
+| R58 | Supersedes the R24/R57 quarantine policy: unwired surface is triaged, not preserved. Wiring: `reclaim_stale` (crash reclaim), `pel_size` (SLO metric). Deletions: `RetryQueue`, `order_shards`, `plan_id_ranges`, `mirrors`, `graphql_batch`, `fetch_metafiles`, `skeleton.py`. Parked minors closed: metafiles auth (fixed), executor future eviction (fixed). Rationale: dead code is a trap; deleted work is recoverable from git. | lost work if an exploration later claims a deleted module (re-add is a fresh request) |
 
 **Parked residuals (non-blocking, for the morning):**
 - `trees_first.fetch_metafiles` still sends the GitHub `Authorization` header by default (fixed for `mirrors.py`; metafiles is unwired). One-line `auth=False` when wired — parked (ruling under R55).
