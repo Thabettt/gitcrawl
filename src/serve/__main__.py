@@ -6,6 +6,19 @@ import os
 def main() -> None:
     import uvicorn
 
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        from sqlalchemy import create_engine
+
+        from serve.executor import recover_orphaned_runs
+
+        engine = create_engine(url)
+        try:
+            recovered = recover_orphaned_runs(engine)
+            if recovered:
+                print(f"recovered {recovered} orphaned run(s)")
+        finally:
+            engine.dispose()
     host = os.environ.get("GITCRAWL_HOST", "127.0.0.1")
     port = int(os.environ.get("GITCRAWL_PORT", "8000"))
     uvicorn.run("serve.app:app", host=host, port=port)

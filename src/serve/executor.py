@@ -240,6 +240,20 @@ def execute_run(
             )
 
 
+def recover_orphaned_runs(engine: Engine) -> int:
+    with engine.begin() as connection:
+        result = connection.execute(
+            update(Runs)
+            .where(Runs.status.in_(("queued", "running")))
+            .values(
+                status="failed",
+                error="orphaned: process restarted",
+                finished_at=func.now(),
+            )
+        )
+    return int(result.rowcount or 0)
+
+
 class RunExecutor:
     def __init__(
         self,
