@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -66,6 +67,7 @@ _templates = Jinja2Templates(
     )
 )
 _redis_client = None
+logger = logging.getLogger("gitcrawl.serve")
 
 
 class CachedStaticFiles(StaticFiles):
@@ -106,7 +108,8 @@ def _default_redis_ping() -> bool:
         )
     try:
         return bool(_redis_client.ping())
-    except Exception:
+    except Exception as exc:
+        logger.warning("redis health probe failed (%s: %s)", type(exc).__name__, exc)
         return False
 
 
@@ -563,6 +566,8 @@ def register_pages(
             "redis": redis_ok(),
             "github_token_present": token_ok(),
         }
+        if os.environ.get("REDIS_URL") and not value["redis"]:
+            value["redis_degraded"] = True
         with health_lock:
             health_cache["at"] = time.monotonic()
             health_cache["value"] = dict(value)

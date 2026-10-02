@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -42,6 +43,12 @@ _R44_VIRTUALS = ("min_commits", "min_loc")
 _DOCKERFILE_PATH = "Dockerfile"
 _ID_BATCH = 5000
 
+logger = logging.getLogger("gitcrawl.serve")
+
+
+class RedisUnavailable(RuntimeError):
+    pass
+
 
 @dataclass
 class RunnerConfig:
@@ -60,8 +67,13 @@ def _redis_or_fake():
             client = redis_module.Redis.from_url(url)
             client.ping()
             return client
-        except Exception:
-            pass
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            if os.environ.get("GITCRAWL_REDIS_STRICT") == "1":
+                raise RedisUnavailable(reason) from exc
+            logger.warning(
+                "REDIS_URL is set but unreachable (%s); falling back to fakeredis", reason
+            )
     try:
         import fakeredis
 

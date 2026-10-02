@@ -268,6 +268,7 @@ def test_dashboard_memoizes_health_checks_between_requests(clean: Engine, tmp_pa
 
 
 def test_health_reports_booleans_for_unhealthy_clients(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKENS", raising=False)
     client = make_client(

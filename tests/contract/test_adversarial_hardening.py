@@ -310,3 +310,39 @@ def test_deadline_env_does_not_affect_a_fast_run(clean: Engine, tmp_path):
 
     assert response.status_code == 200
     assert len(calls) == 1
+
+
+def test_health_reports_degraded_redis_when_the_url_is_unreachable(
+    clean: Engine, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6390/0")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKENS", raising=False)
+    client = make_client(clean, tmp_path, redis_ping=lambda: False)
+
+    body = client.get("/health").json()
+
+    assert body["redis"] is False
+    assert body["redis_degraded"] is True
+
+
+def test_health_omits_degraded_redis_when_redis_is_healthy(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6390/0")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKENS", raising=False)
+    client = make_client(clean, tmp_path, redis_ping=lambda: True)
+
+    body = client.get("/health").json()
+
+    assert body == {"database": True, "redis": True, "github_token_present": False}
+
+
+def test_health_omits_degraded_redis_without_a_configured_url(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKENS", raising=False)
+    client = make_client(clean, tmp_path, redis_ping=lambda: False)
+
+    body = client.get("/health").json()
+
+    assert body == {"database": True, "redis": False, "github_token_present": False}
