@@ -264,7 +264,7 @@ def _fetch_owner_location(
             token_id=deps.token_fp,
             on_response=hook,
         )
-    except PartialResultsError:
+    except (PartialResultsError, ThrottledError, httpx.HTTPError):
         return False, None
     if response.status_code != 200:
         return False, None

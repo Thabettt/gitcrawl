@@ -15,7 +15,7 @@ from sqlalchemy.engine import Engine
 
 from discover import pipeline
 from discover.pipeline import Deps, run_search_discovery
-from lib.gh_client import token_fingerprint
+from lib.gh_client import ThrottledError, token_fingerprint
 from limiter.buckets import BucketLimiter
 from serve import runner as runner_module
 from serve.executor import create_run, execute_run, run_status
@@ -877,6 +877,20 @@ def test_run_filter_geo_batches_and_falls_back_per_owner(clean: Engine):
     owners_stats = payload.field_stats["graphql"]["owners"]
     assert owners_stats["values"] == 2
     assert owners_stats["fallbacks"] == 1
+
+
+@pytest.mark.parametrize("error", [ThrottledError(1.0), httpx.ConnectError("network down")])
+def test_fetch_owner_location_returns_failure_when_request_raises(
+    clean: Engine, monkeypatch, error
+):
+    def boom(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(runner_module, "request_with_retry", boom)
+    client, _ = scripted(lambda request: httpx.Response(200))
+    deps = make_deps(clean, client)
+
+    assert runner_module._fetch_owner_location(deps, "alice", lambda *args: None) == (False, None)
 
 
 def test_run_filter_persists_confirmed_no_location_owners_as_unmatched(clean: Engine):
