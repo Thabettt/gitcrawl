@@ -605,3 +605,18 @@ def test_table_fragment_empty_state_offers_guidance(clean: Engine, tmp_path):
     assert "No results" in response.text
     assert 'href="/find"' in response.text
     assert "Start a new find" in response.text
+
+
+def test_run_page_offers_copy_link(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    client = make_client(clean, tmp_path)
+
+    html = client.get(f"/runs/{run_id}").text
+    script = client.get("/static/app.js").text
+
+    assert 'id="copy-link"' in html
+    assert 'data-copy-url="true"' in html
+    assert html.index('id="copy-hash"') < html.index('id="copy-link"')
+    assert "data-copy-url" in script
+    assert "Link copied" in script
+    assert "window.location.href" in script

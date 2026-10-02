@@ -338,26 +338,34 @@
     container.hidden = false;
   }
 
-  function copyHash() {
-    var button = document.getElementById("copy-hash");
-    if (!button) {
-      return;
+  function copyText(text, okMessage) {
+    if (window.navigator.clipboard && window.navigator.clipboard.writeText) {
+      window.navigator.clipboard.writeText(text).then(
+        function () {
+          showToast(okMessage);
+        },
+        function () {
+          showToast("Copy failed");
+        }
+      );
+    } else {
+      showToast("Copy failed");
     }
-    button.addEventListener("click", function () {
-      var text = button.getAttribute("data-copy") || "";
-      if (window.navigator.clipboard && window.navigator.clipboard.writeText) {
-        window.navigator.clipboard.writeText(text).then(
-          function () {
-            showToast("Hash copied");
-          },
-          function () {
-            showToast("Copy failed");
-          }
-        );
-      } else {
-        showToast("Copy failed");
-      }
-    });
+  }
+
+  function copyButtons() {
+    var hashButton = document.getElementById("copy-hash");
+    if (hashButton) {
+      hashButton.addEventListener("click", function () {
+        copyText(hashButton.getAttribute("data-copy") || "", "Hash copied");
+      });
+    }
+    var linkButton = document.querySelector("[data-copy-url]");
+    if (linkButton) {
+      linkButton.addEventListener("click", function () {
+        copyText(window.location.href, "Link copied");
+      });
+    }
   }
 
   function selectedMode() {
@@ -450,7 +458,7 @@
       document.body.addEventListener("htmx:afterRequest", clearBusy);
     }
     syncCloneLimit();
-    copyHash();
+    copyButtons();
     renderRecentFilters();
     document.addEventListener("submit", markBusy);
     document.addEventListener("submit", function (event) {
