@@ -86,3 +86,28 @@ def test_metrics_payload_reads_paused_buckets_and_pel(clean_db, monkeypatch):
     paused = payload["limiter"]["paused"]
     assert paused == [{"resource": "search", "token_fp": "abcdef123456", "seconds": 1000.0}]
     assert payload["queue"]["pel"] is not None  # wired by triage Task 2; value may be 0
+
+
+def test_metrics_payload_tolerates_malformed_rl_keys(clean_db, monkeypatch):
+    engine = clean_db()
+    redis = fakeredis.FakeRedis()
+    redis.hset("gitcrawl:rl:search:abcdef123456", mapping={"paused_until": 10_000})
+    redis.hset("gitcrawl:rl:oops", mapping={"paused_until": 10_000})
+    redis.hset("gitcrawl:rl:core:badvalue", mapping={"paused_until": "not-a-number"})
+    monkeypatch.setattr("serve.metrics.time", lambda: 9_000.0)
+    payload = metrics_payload(engine, redis_client=redis)
+    assert payload["limiter"]["paused"] == [
+        {"resource": "search", "token_fp": "abcdef123456", "seconds": 1000.0}
+    ]
+
+
+def test_metrics_payload_marks_queue_degraded_when_pel_fails(clean_db, monkeypatch):
+    engine = clean_db()
+    redis = fakeredis.FakeRedis()
+
+    def boom(self, lane=None):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr("scheduler.state_machine.ShardQueue.pel_size", boom)
+    payload = metrics_payload(engine, redis_client=redis)
+    assert payload["queue"] == {"pel": None, "degraded": True}

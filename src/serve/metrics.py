@@ -37,14 +37,21 @@ def _paused(redis_client) -> list[dict]:
     if redis_client is None:
         return []
     now = time()
+    try:
+        keys = list(redis_client.scan_iter(match=f"{_PREFIX}*", count=100))[:100]
+    except Exception:
+        return []
     paused: list[dict] = []
-    for key in list(redis_client.scan_iter(match=f"{_PREFIX}*", count=100))[:100]:
-        name = key.decode() if isinstance(key, bytes) else str(key)
-        _, _, resource, token_fp = name.split(":", 3)
-        raw = redis_client.hget(key, "paused_until")
-        if raw is None:
+    for key in keys:
+        try:
+            name = key.decode() if isinstance(key, bytes) else str(key)
+            _, _, resource, token_fp = name.split(":", 3)
+            raw = redis_client.hget(key, "paused_until")
+            if raw is None:
+                continue
+            until = float(raw.decode() if isinstance(raw, bytes) else raw)
+        except Exception:
             continue
-        until = float(raw.decode() if isinstance(raw, bytes) else raw)
         if until > now:
             paused.append(
                 {"resource": resource, "token_fp": token_fp, "seconds": round(until - now, 1)}
@@ -75,9 +82,10 @@ def _runs_by_status(engine: Engine) -> dict[str, int]:
 
 def metrics_payload(engine: Engine, *, redis_client=None, window: int = 1000) -> dict:
     slo = asdict(slo_snapshot(engine, window=window))
+    pel = _queue_pel(redis_client)
     return {
         "slo": slo,
         "runs": _runs_by_status(engine),
         "limiter": {"paused": _paused(redis_client), "degraded": redis_client is None},
-        "queue": {"pel": _queue_pel(redis_client), "degraded": redis_client is None},
+        "queue": {"pel": pel, "degraded": redis_client is None or pel is None},
     }
