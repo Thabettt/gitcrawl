@@ -657,3 +657,16 @@ def test_cancel_button_only_renders_while_running(clean: Engine, tmp_path):
     script = fresh.get("/static/app.js").text
     assert "data-cancel-clone" in script
     assert 'method: "DELETE"' in script
+
+
+def test_table_fragment_shows_a_visible_row_count(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path, items=ORDER_ITEMS)
+    client = make_client(clean, tmp_path)
+
+    response = client.get(f"/partials/runs/{run_id}/table")
+
+    html = response.text
+    assert 'id="run-table-count"' in html
+    assert 'data-shown="3"' in html
+    assert 'data-total="3"' in html
+    assert html.index('id="run-table-count"') < html.index('class="table-wrap"')

@@ -326,6 +326,22 @@ textarea {
   overflow-x: auto;
 }
 
+#run-table .table-wrap {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+#run-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--gc-surface);
+  z-index: 2;
+}
+
+#run-table-count {
+  margin: 0 0 0.5rem;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;

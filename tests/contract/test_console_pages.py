@@ -690,3 +690,9 @@ def test_modal_focus_trap_is_wired(client: TestClient):
     assert "gitcrawlModalFocus" in helper.text
     for marker in ("trapTab", "restoreFocusTo", "nextFocusIndex", "activeModal"):
         assert marker in script
+
+
+def test_run_table_header_is_sticky(repo_root: Path):
+    css = (repo_root / "src/serve/static/app.css").read_text(encoding="utf-8")
+    assert "#run-table thead th" in css
+    assert "position: sticky" in css

@@ -5,6 +5,7 @@
    hx-get="/partials/runs/{{ run_id }}/table?sort={{ key }}&dir={{ next_dir }}&page=1"
    hx-target="#run-table" hx-indicator="#table-loading" hx-push-url="false">{{ label }}</a>
 {% endmacro %}
+<p id="run-table-count" class="muted" data-total="{{ total }}" data-shown="{{ rows|length }}">Showing {{ rows|length }} of {{ total }} rows</p>
 <div class="table-wrap">
   <table id="run-items" class="data-table">
     <thead>
