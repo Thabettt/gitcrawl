@@ -7,7 +7,7 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from serve.audit import AuditRecord, SloSnapshot, query_hash, record_audit, slo_snapshot
+from lib.audit import AuditRecord, SloSnapshot, query_hash, record_audit, slo_snapshot
 
 START = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
@@ -109,7 +109,7 @@ def _audit_count(engine: Engine) -> int:
 def test_audit_buffer_batches_inserts(clean: Engine):
     from sqlalchemy import event
 
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     statements: list[str] = []
 
@@ -129,7 +129,7 @@ def test_audit_buffer_batches_inserts(clean: Engine):
 
 
 def test_audit_buffer_flush_persists_remaining_records_and_clears(clean: Engine):
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     buffer = AuditBuffer(clean, batch_size=10)
     for index in range(3):
@@ -141,7 +141,7 @@ def test_audit_buffer_flush_persists_remaining_records_and_clears(clean: Engine)
 
 
 def test_audit_buffer_rejects_non_positive_batch_size(clean: Engine):
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     with pytest.raises(ValueError):
         AuditBuffer(clean, batch_size=0)

@@ -13,7 +13,7 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-import serve.audit as audit_module
+import lib.audit as audit_module
 from discover.pipeline import (
     Deps,
     DiscoveryStats,
@@ -543,7 +543,7 @@ def test_deps_defaults(clean: Engine):
 
 
 def test_audit_buffer_defers_record_audit_until_run_end(clean: Engine, monkeypatch):
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     def boom(engine, record):
         raise RuntimeError("record_audit should not run while a buffer is wired")

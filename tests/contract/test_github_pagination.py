@@ -281,7 +281,7 @@ def test_scalar_json_200_body_raises_request_failed():
 
 
 def test_audit_cached_body_is_reused_for_the_page_parse():
-    from serve.audit import record_from_response
+    from lib.audit import record_from_response
 
     parses: list[int] = []
     response = search_page()

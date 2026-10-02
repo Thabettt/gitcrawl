@@ -636,7 +636,7 @@ def test_refresh_repos_counts_throttled_failures_and_continues(clean: Engine, mo
 
 def test_hydrate_repo_reuses_the_audit_cached_body():
     from hydrate.repo_client import hydrate_repo
-    from serve.audit import record_from_response
+    from lib.audit import record_from_response
 
     parses: list[int] = []
     body = payload(1, full_name="octo/one")

@@ -18,6 +18,7 @@ from enrich.geo_resolver import GeoCache, _cache_key, resolve_many
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import refresh_repos
+from lib import audit
 from lib.batching import chunked
 from lib.gh_client import (
     API_BASE,
@@ -30,7 +31,6 @@ from lib.gh_client import (
 )
 from limiter.buckets import BucketLimiter
 from scheduler.tiering import order_repos
-from serve import audit
 from serve.executor import Runner, RunPayload, RunPayloadItem
 from serve.filter_spec import FilterSpec, parse_filter_spec, spec_to_query
 from serve.virtual_params import GEO_CONFIDENCE_ORDER

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from serve.audit import AuditRecord, query_hash, record_from_response
+from lib.audit import AuditRecord, query_hash, record_from_response
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
@@ -182,7 +182,7 @@ def test_audit_record_is_frozen():
 
 
 def test_record_from_response_caches_parsed_body():
-    from serve.audit import cached_json
+    from lib.audit import cached_json
 
     response = _response(200, json={"total_count": 7, "incomplete_results": False})
     body = response.json()
@@ -192,7 +192,7 @@ def test_record_from_response_caches_parsed_body():
 
 
 def test_record_from_response_parses_and_caches_the_body():
-    from serve.audit import cached_json
+    from lib.audit import cached_json
 
     body = {"total_count": 7, "incomplete_results": False}
     response = _response(200, json=body)
@@ -202,7 +202,7 @@ def test_record_from_response_parses_and_caches_the_body():
 
 
 def test_record_from_response_caches_a_malformed_body_as_none():
-    from serve.audit import cached_json
+    from lib.audit import cached_json
 
     response = _response(200, text="<html>nope</html>")
     record = record_from_response({}, response, token_fp="fp", latency_ms=1, now=NOW)
@@ -211,7 +211,7 @@ def test_record_from_response_caches_a_malformed_body_as_none():
 
 
 def test_record_from_response_accepts_preparsed_body():
-    from serve.audit import cached_json, record_from_response
+    from lib.audit import cached_json, record_from_response
 
     body = {"total_count": 9}
     response = _response(200)

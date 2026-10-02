@@ -9,9 +9,9 @@ from fnmatch import translate
 import httpx
 
 from discover.search_shards import RequestFailed, _short_message
+from lib import audit
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
-from serve import audit
 
 METAFILES_BASE_URL = "https://repos.ecosyste.ms/api/v1/hosts/GitHub/repositories"
 

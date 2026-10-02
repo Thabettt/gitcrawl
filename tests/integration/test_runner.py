@@ -666,7 +666,7 @@ def test_build_deps_requires_a_token(clean: Engine, monkeypatch):
 
 
 def test_build_deps_fingerprints_the_token_and_wires_the_stack(clean: Engine):
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
     redis = fakeredis.FakeRedis()
@@ -680,7 +680,7 @@ def test_build_deps_fingerprints_the_token_and_wires_the_stack(clean: Engine):
 
 
 def test_run_filter_flushes_the_audit_buffer_at_run_end(clean: Engine, monkeypatch):
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     def boom(engine, record):
         raise RuntimeError("record_audit should not run while a buffer is wired")
@@ -699,7 +699,7 @@ def test_run_filter_flushes_the_audit_buffer_at_run_end(clean: Engine, monkeypat
 
 
 def test_run_filter_flushes_the_audit_buffer_when_the_run_fails(clean: Engine, monkeypatch):
-    from serve.audit import AuditBuffer
+    from lib.audit import AuditBuffer
 
     def boom(engine, record):
         raise RuntimeError("record_audit should not run while a buffer is wired")

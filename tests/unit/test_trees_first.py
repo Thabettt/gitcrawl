@@ -358,7 +358,7 @@ def test_fetch_metafiles_malformed_body_raises_request_failed():
 
 def test_fetch_tree_reuses_the_audit_cached_body():
     from enrich.trees_first import fetch_tree
-    from serve.audit import record_from_response
+    from lib.audit import record_from_response
 
     parses: list[int] = []
     response = httpx.Response(200, json=TREE_RESPONSE)

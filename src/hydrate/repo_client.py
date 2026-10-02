@@ -8,9 +8,9 @@ from urllib.parse import urljoin
 import httpx
 
 from discover.search_shards import RequestFailed, _short_message
+from lib import audit
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
-from serve import audit
 
 _REDIRECT_STATUSES = frozenset({301, 302})
 _MAX_REDIRECTS = 3

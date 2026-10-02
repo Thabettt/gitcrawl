@@ -21,11 +21,11 @@ from discover.search_shards import (
     iter_shard_pages,
 )
 from discover.since_scan import iter_since_pages, save_checkpoint
+from lib import audit
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
 from scheduler.shard_planner import ShardPlanner, ShardSpec
 from scheduler.state_machine import QueuedShard, ShardQueue, ShardRow, ShardState, ShardStore
-from serve import audit
 from store.upserts import UpsertStats, dedupe_items, upsert_repos
 
 logger = logging.getLogger("gitcrawl.discover")

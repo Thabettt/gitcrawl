@@ -7,9 +7,9 @@ from urllib.parse import urlencode
 import httpx
 import pytest
 
+from lib import audit
 from lib.gh_client import API_BASE, build_headers, request_with_retry, token_fingerprint
 from lib.qualify import delta_narrows
-from serve import audit
 
 BASE_QUERY = "language:python"
 NARROW_QUERY = "language:python stars:>1000"

@@ -7,9 +7,9 @@ from urllib.parse import urlencode
 
 import httpx
 
+from lib import audit
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
-from serve import audit
 
 _CAP_MESSAGE = "only the first 1000"
 _BODY_FALLBACK_CHARS = 300
