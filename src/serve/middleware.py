@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -50,3 +52,66 @@ class OriginCsrfMiddleware:
             await response(scope, receive, send)
             return
         await self.app(scope, receive, send)
+
+
+JSON_BODY_LIMIT_BYTES = 1024 * 1024
+UPLOAD_BODY_LIMIT_BYTES = 10 * 1024 * 1024
+
+
+class BodyLimitMiddleware:
+    """Cap state-changing request bodies before the route reads them."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        default_limit: int,
+        path_limits: Mapping[str, int] | None = None,
+    ) -> None:
+        self.app = app
+        self.default_limit = default_limit
+        self.path_limits = dict(path_limits or {})
+
+    def limit_for(self, path: str) -> int:
+        return self.path_limits.get(path, self.default_limit)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] not in STATE_CHANGING_METHODS:
+            await self.app(scope, receive, send)
+            return
+        limit = self.limit_for(scope["path"])
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > limit:
+                    await self._reject(scope, receive, send, limit)
+                    return
+            except ValueError:
+                pass
+        buffered: list[dict] = []
+        received = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            received += len(message.get("body", b""))
+            if received > limit:
+                await self._reject(scope, receive, send, limit)
+                return
+            buffered.append(message)
+            if not message.get("more_body", False):
+                break
+        iterator = iter(buffered)
+
+        async def replay() -> dict:
+            try:
+                return next(iterator)
+            except StopIteration:
+                return {"type": "http.disconnect"}
+
+        await self.app(scope, replay, send)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send, limit: int) -> None:
+        body = json.dumps({"error": "payload_too_large", "limit": limit}).encode()
+        response = Response(body, status_code=413, media_type="application/json")
+        await response(scope, receive, send)

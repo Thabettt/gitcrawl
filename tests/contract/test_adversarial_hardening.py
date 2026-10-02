@@ -8,7 +8,12 @@ from starlette.datastructures import URL
 
 from serve.app import create_app
 from serve.executor import RunPayload, RunPayloadItem
-from serve.middleware import STATE_CHANGING_METHODS, _same_origin
+from serve.middleware import (
+    JSON_BODY_LIMIT_BYTES,
+    STATE_CHANGING_METHODS,
+    UPLOAD_BODY_LIMIT_BYTES,
+    _same_origin,
+)
 
 FILTER = {"gitcrawl_filter": 1, "q": "language:rust"}
 
@@ -191,3 +196,65 @@ def test_allowed_hosts_env_extends_the_allowlist(clean: Engine, tmp_path, monkey
 
     assert allowed.get("/health").status_code == 200
     assert replaced.get("/health").status_code == 400
+
+
+@pytest.mark.parametrize("size", [JSON_BODY_LIMIT_BYTES - 1, JSON_BODY_LIMIT_BYTES])
+def test_json_body_at_or_below_the_cap_is_parsed_not_rejected(clean: Engine, tmp_path, size):
+    client = make_client(clean, tmp_path)
+
+    response = client.post(
+        "/vsearch/run",
+        content=b"x" * size,
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_param"
+
+
+def test_json_body_above_the_cap_is_413(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+
+    response = client.post(
+        "/vsearch/run",
+        content=b"x" * (JSON_BODY_LIMIT_BYTES + 1),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "error": "payload_too_large",
+        "limit": JSON_BODY_LIMIT_BYTES,
+    }
+
+
+@pytest.mark.parametrize("size", [UPLOAD_BODY_LIMIT_BYTES - 1, UPLOAD_BODY_LIMIT_BYTES])
+def test_find_upload_at_or_below_the_cap_is_not_413(clean: Engine, tmp_path, size):
+    client = make_client(clean, tmp_path)
+
+    response = client.post("/find", content=b"x" * size)
+
+    assert response.status_code == 403  # CSRF check, i.e. the cap did not trigger
+
+
+def test_find_upload_above_the_cap_is_413(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+
+    response = client.post("/find", content=b"x" * (UPLOAD_BODY_LIMIT_BYTES + 1))
+
+    assert response.status_code == 413
+
+
+def test_chunked_body_without_content_length_is_capped(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+
+    def chunks():
+        yield b"x" * (JSON_BODY_LIMIT_BYTES // 2)
+        yield b"x" * (JSON_BODY_LIMIT_BYTES // 2)
+        yield b"x"
+
+    response = client.post(
+        "/vsearch/run", content=chunks(), headers={"content-type": "application/json"}
+    )
+
+    assert response.status_code == 413

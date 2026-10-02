@@ -36,7 +36,12 @@ from serve.library import (
     list_filters,
     rename_filter,
 )
-from serve.middleware import OriginCsrfMiddleware
+from serve.middleware import (
+    JSON_BODY_LIMIT_BYTES,
+    UPLOAD_BODY_LIMIT_BYTES,
+    BodyLimitMiddleware,
+    OriginCsrfMiddleware,
+)
 from serve.pages import (
     FORM_CONTENT_TYPES,
     register_pages,
@@ -325,6 +330,11 @@ def create_app(
         TrustedHostMiddleware,
         allowed_hosts=_allowed_hosts(),
         www_redirect=False,
+    )
+    application.add_middleware(
+        BodyLimitMiddleware,
+        default_limit=JSON_BODY_LIMIT_BYTES,
+        path_limits={"/find": UPLOAD_BODY_LIMIT_BYTES},
     )
 
     def build_engine() -> Engine:
