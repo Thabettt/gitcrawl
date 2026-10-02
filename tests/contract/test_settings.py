@@ -208,6 +208,23 @@ def test_save_writes_an_audit_row(clean, tmp_path, monkeypatch):
     assert params["app_settings"]["before"]["max_shards"] == 10
 
 
+def test_record_settings_change_writes_before_and_after(clean):
+    from serve.settings import record_settings_change
+
+    record_settings_change(clean, {"max_shards": 10}, {"max_shards": 25})
+    with clean.connect() as connection:
+        params = connection.scalar(
+            text(
+                "SELECT params FROM audit_log WHERE token_fp = 'settings' "
+                "ORDER BY id DESC LIMIT 1"
+            )
+        )
+    assert params["app_settings"] == {
+        "before": {"max_shards": 10},
+        "after": {"max_shards": 25},
+    }
+
+
 def test_reset_restores_defaults(clean, tmp_path, monkeypatch):
     update_run_settings(clean, {"max_shards": 50, "max_candidates": 5000, "max_hydrate": 4000})
     client = healthy_client(clean, tmp_path, monkeypatch)
