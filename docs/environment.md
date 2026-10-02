@@ -171,6 +171,26 @@ $env:PYTHONPATH = 'src'
 - **Keyboard**: `/` focuses quick search, `g h`/`g f`/`g r`/`g l` navigate, `j`/`k` select table rows, `Enter` opens the selected row, `?` toggles the shortcut help, `Esc` closes dialogs.
 - **Redis keeper session (R34)**: keep the hidden `wsl.exe -u root -- sleep infinity` session alive so WSL2 localhost forwarding stays up; the `gitcrawl-redis` logon task starts Redis plus that keeper. If `/health` shows Redis down, run `wsl -u root -- service redis-server status` and reopen the keeper.
 
+## Corpus-build profile (System → Limits vs environment)
+
+Open **System → Limits (the `/settings` page)** to raise the run limits for corpus builds. The page
+persists to the database and applies to new runs only. Environment variables pin a field (the page
+shows it read-only):
+
+| Field | Environment variable | Default | Corpus-build example |
+|---|---|---|---|
+| Run shards | `GITCRAWL_MAX_SHARDS` | 10 | 10000 |
+| Candidates | `GITCRAWL_MAX_CANDIDATES` | 500 | 100000 |
+| Hydrations | `GITCRAWL_MAX_HYDRATE` | 200 | 100000 |
+| Enrichment checks | `GITCRAWL_MAX_ENRICH` | 100 | 100000 |
+| Request deadline (s) | `GITCRAWL_REQUEST_DEADLINE_SECONDS` | 3600 | 86400 |
+| GraphQL batching | `GITCRAWL_GRAPHQL_BATCH` | on | on |
+| Batch size | `GITCRAWL_GRAPHQL_BATCH_SIZE` | 20 | 20 |
+| Concurrency | `GITCRAWL_MAX_CONCURRENT` | 10 | 10 |
+
+A corpus run occupies the single executor for its whole duration; run it overnight, and note that
+progress is not checkpointed inside a run (resume re-fetches from the start).
+
 ## Migrations
 
 ### Migration locking
