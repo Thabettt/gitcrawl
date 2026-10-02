@@ -871,7 +871,10 @@ def create_app(
 
     def metrics_redis_client() -> object | None:
         if metrics_redis is not None:
-            return metrics_redis()
+            try:
+                return metrics_redis()
+            except Exception:
+                return None
         url = os.environ.get("REDIS_URL")
         if not url:
             return None

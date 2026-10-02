@@ -140,7 +140,9 @@ def run_quality(
     if bundle is None:
         checks.append(Check("bundle", "warn", "bundle.json missing or unreadable"))
     else:
-        bundle_items = bundle.get("items") or []
+        bundle_items = bundle.get("items")
+        if not isinstance(bundle_items, list):
+            bundle_items = []
         consistent = len(bundle_items) == item_count
         checks.append(
             Check(
@@ -149,7 +151,9 @@ def run_quality(
                 f"bundle items={len(bundle_items)} run_items={item_count}",
             )
         )
-        field_stats = bundle.get("field_stats") or {}
+        field_stats = bundle.get("field_stats")
+        if not isinstance(field_stats, dict):
+            field_stats = {}
         empty_fields = [name for name, stats in field_stats.items() if not stats]
         checks.append(
             Check(

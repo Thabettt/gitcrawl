@@ -54,12 +54,14 @@ def make_client(
     redis_ping=None,
     token_present=None,
     runs_root="runs",
+    metrics_redis=None,
 ) -> TestClient:
     application = create_app(
         engine=engine,
         runs_root=str(runs_root),
         redis_ping=redis_ping,
         token_present=token_present,
+        metrics_redis=metrics_redis,
     )
     return TestClient(application, raise_server_exceptions=False)
 
@@ -103,7 +105,7 @@ def test_metrics_page_renders_cards(clean, tmp_path, monkeypatch):
 
 
 def test_metrics_partial_degrades_without_redis(clean, tmp_path, monkeypatch):
-    client = healthy_client(clean, tmp_path, monkeypatch)
+    client = healthy_client(clean, tmp_path, monkeypatch, metrics_redis=lambda: None)
     response = client.get("/partials/metrics")
     assert response.status_code == 200
     assert "degraded" in response.text.lower() or "n/a" in response.text.lower()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import text
 
@@ -100,6 +102,20 @@ def test_missing_bundle_warns(clean_db, tmp_path):
     report = run_quality(engine, run_id, runs_root=str(tmp_path))
     check = next(c for c in report.checks if c.name == "bundle")
     assert check.status == "warn"
+
+
+def test_malformed_bundle_shapes_warn_without_crashing(clean_db, tmp_path):
+    engine, run_id = seed_run(clean_db, tmp_path)
+    bundle_path = next(tmp_path.rglob("bundle.json"))
+    bundle_path.write_text(
+        json.dumps({"items": 5, "field_stats": []}),
+        encoding="utf-8",
+    )
+    report = run_quality(engine, run_id, runs_root=str(tmp_path))
+    bundle_check = next(c for c in report.checks if c.name == "bundle")
+    assert bundle_check.status == "warn"
+    coverage_check = next(c for c in report.checks if c.name == "field_coverage")
+    assert coverage_check.status == "ok"
 
 
 def test_partial_status_is_flagged(clean_db, tmp_path):

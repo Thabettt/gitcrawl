@@ -65,6 +65,24 @@ def test_metrics_payload_includes_all_slo_keys(clean_db):
     assert payload["queue"]["pel"] is None
 
 
+def test_slo_snapshot_keys_match_thresholds_and_labels():
+    from dataclasses import asdict
+
+    from lib.audit import SloSnapshot
+    from serve.metrics import LABELS, THRESHOLDS
+
+    snapshot = SloSnapshot(
+        search_remaining=None,
+        incomplete_results_ratio=None,
+        rate_422=None,
+        rate_403_429=None,
+        p95_latency_ms=None,
+        shard_coverage=None,
+        geo_unmatched_rate=None,
+    )
+    assert set(asdict(snapshot)) == set(THRESHOLDS) == set(LABELS)
+
+
 def test_severity_thresholds():
     from serve.metrics import severity
 
@@ -89,8 +107,6 @@ def test_metrics_payload_reads_paused_buckets_and_pel(clean_db, monkeypatch):
 
 
 def test_queue_pel_reflects_delivered_unacked(clean_db):
-    import fakeredis
-
     from scheduler.state_machine import ShardQueue
 
     engine = clean_db()
