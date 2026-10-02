@@ -637,3 +637,19 @@ def test_busy_feedback_is_wired(client: TestClient, clean, tmp_path):
     assert 'html[data-busy="true"] .nav-progress' in css
     for marker in ("data-busy", "htmx:beforeRequest", "htmx:afterRequest", "pageshow"):
         assert marker in script
+
+
+def test_actionable_clone_errors_are_wired(client: TestClient):
+    script = client.get("/static/app.js").text
+    helper = client.get("/static/errors.js")
+
+    assert helper.status_code == 200
+    assert "gitcrawlErrors" in helper.text
+    assert "apiErrorText" in helper.text
+    for marker in (
+        "apiErrorText",
+        "data-toast-retry",
+        "data-toast-dismiss",
+        "Clone request failed",
+    ):
+        assert marker in script

@@ -416,6 +416,10 @@ textarea {
   z-index: 30;
 }
 
+.toast .button {
+  margin-left: 0.35rem;
+}
+
 .filter-form {
   display: flex;
   flex-direction: column;

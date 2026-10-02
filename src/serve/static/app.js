@@ -40,17 +40,48 @@
     }
   }
 
-  function showToast(message) {
+  var toastTimer = null;
+
+  function hideToast() {
+    var toast = document.getElementById("toast");
+    if (toast) {
+      toast.hidden = true;
+    }
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+
+  function showToast(message, retry) {
     var toast = document.getElementById("toast");
     if (!toast) {
       return;
     }
     toast.textContent = message;
     toast.hidden = false;
-    window.clearTimeout(showToast.timer);
-    showToast.timer = window.setTimeout(function () {
-      toast.hidden = true;
-    }, applib.TOAST_DURATION_MS);
+    window.clearTimeout(toastTimer);
+    if (retry) {
+      var retryButton = document.createElement("button");
+      retryButton.type = "button";
+      retryButton.className = "button";
+      retryButton.setAttribute("data-toast-retry", "true");
+      retryButton.textContent = "Retry";
+      retryButton.addEventListener("click", function () {
+        hideToast();
+        retry();
+      });
+      var dismissButton = document.createElement("button");
+      dismissButton.type = "button";
+      dismissButton.className = "button ghost";
+      dismissButton.setAttribute("data-toast-dismiss", "true");
+      dismissButton.setAttribute("aria-label", "Dismiss message");
+      dismissButton.textContent = "Dismiss";
+      dismissButton.addEventListener("click", hideToast);
+      toast.appendChild(retryButton);
+      toast.appendChild(dismissButton);
+      toastTimer = window.setTimeout(hideToast, 12000);
+    } else {
+      toastTimer = window.setTimeout(hideToast, 6000);
+    }
   }
 
   function openModal(id) {
@@ -285,19 +316,36 @@
         body: JSON.stringify({ limit: limit, mode: selectedMode() })
       })
       .then(function (response) {
-        if (!response.ok) {
-          throw new Error("clone request failed");
-        }
-        showToast(applib.cloneStartedMessage());
-        if (window.htmx && window.htmx.ajax) {
-          window.htmx.ajax("GET", "/partials/runs/" + runId + "/clone-progress", {
-            target: "#clone-progress",
-            swap: "outerHTML"
+        return response
+          .json()
+          .catch(function () {
+            return null;
+          })
+          .then(function (body) {
+            if (!response.ok) {
+              var failure = new Error("clone request failed");
+              failure.status = response.status;
+              failure.body = body;
+              throw failure;
+            }
+            showToast("Clone started");
+            if (window.htmx && window.htmx.ajax) {
+              window.htmx.ajax("GET", "/partials/runs/" + runId + "/clone-progress", {
+                target: "#clone-progress",
+                swap: "outerHTML"
+              });
+            }
           });
-        }
       })
-      .catch(function () {
-        showToast(applib.cloneErrorMessage());
+      .catch(function (error) {
+        var status = error && typeof error.status === "number" ? error.status : 0;
+        var body = error && error.body ? error.body : null;
+        showToast(
+          window.gitcrawlErrors.apiErrorText(status, body, "Clone request failed"),
+          function () {
+            startClone(button);
+          }
+        );
       })
       .finally(function () {
         button.disabled = false;
