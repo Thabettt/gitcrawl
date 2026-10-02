@@ -5,8 +5,11 @@ import re
 from collections.abc import Mapping
 
 import httpx
+import pytest
 
-from lib.graphql_batch import ParsedBatch, fetch_batch
+from lib.deadlines import Deadline
+from lib.gh_client import PartialResultsError
+from lib.graphql_batch import GraphQLAuthError, ParsedBatch, fetch_batch
 
 ALIAS_RE = re.compile(r"(n\d+): field")
 
@@ -120,3 +123,119 @@ def test_fetch_batch_without_keys_makes_no_request():
     outcome = fetch_batch(DictAdapter(), [], client=client)
     assert outcome.values == {}
     assert outcome.stats.as_dict()["keys"] == 0
+
+
+class KeyAdapter(DictAdapter):
+    def build_query(self, aliases: Mapping[str, str]) -> str:
+        pairs = " ".join(f"{alias}: field_{key}" for alias, key in aliases.items())
+        return f"query {{ {pairs} }}"
+
+
+def keys_in(request: httpx.Request) -> list[str]:
+    query = json.loads(request.content)["query"]
+    return re.findall(r"n\d+: field_(\d+)", query)
+
+
+def test_transient_batch_error_splits_and_only_failing_keys_are_resent():
+    requests: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys = keys_in(request)
+        requests.append(keys)
+        if len(keys) > 1:
+            return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+        if keys == ["2"]:
+            return httpx.Response(200, json={"data": {"n0": "value-2"}})
+        return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(KeyAdapter(), ["1", "2", "3", "4"], client=client)
+    assert outcome.values == {"2": "value-2"}
+    assert set(outcome.unresolved) == {"1", "3", "4"}
+    assert all("timeout" in reason for reason in outcome.unresolved.values())
+    assert outcome.stats.requeues >= 2
+    assert requests[0] == ["1", "2", "3", "4"]
+    assert all(len(batch) <= 2 for batch in requests[1:])
+    assert ["2"] in requests
+
+
+def test_single_key_transient_failure_goes_to_fallback_after_attempts():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(DictAdapter(), ["1"], client=client, fallback=lambda key: f"rest-{key}")
+    assert outcome.values == {"1": "rest-1"}
+    assert calls["n"] == 3  # max_attempts
+    assert outcome.stats.fallbacks == 1
+
+
+def test_non_transient_batch_error_skips_splitting_and_uses_fallback():
+    requests: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(len(keys_in(request)))
+        return httpx.Response(
+            200, json={"data": None, "errors": [{"message": "Field 'x' doesn't exist"}]}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        KeyAdapter(), ["1", "2", "3"], client=client, fallback=lambda key: f"rest-{key}"
+    )
+    assert requests == [3]
+    assert outcome.values == {"1": "rest-1", "2": "rest-2", "3": "rest-3"}
+
+
+def test_fallback_failure_is_recorded_as_unresolved_with_reason():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": None, "errors": [{"message": "timeout"}]})
+
+    def fallback(key: str) -> object:
+        raise RuntimeError("rest is down")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(DictAdapter(), ["7"], client=client, fallback=fallback)
+    assert outcome.values == {}
+    assert "RuntimeError" in outcome.unresolved["7"]
+    assert outcome.stats.unresolved == 1
+
+
+def test_deadline_expiry_stops_requests_and_marks_remaining_unresolved():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request expected after deadline")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    deadline = Deadline(0.0)
+    outcome = fetch_batch(DictAdapter(), ["1", "2"], client=client, deadline=deadline)
+    assert outcome.values == {}
+    assert outcome.unresolved == {"1": "run deadline exceeded", "2": "run deadline exceeded"}
+    assert outcome.stats.deadline_hit is True
+    assert outcome.stats.requests == 0
+
+
+def test_http_401_aborts_loudly():
+    client = client_from([httpx.Response(401, json={"message": "Bad credentials"})])
+    with pytest.raises(GraphQLAuthError):
+        fetch_batch(DictAdapter(), ["1"], client=client)
+
+
+def test_malformed_json_is_treated_as_a_transient_batch_failure():
+    client = client_from([httpx.Response(200, text="<html>nope</html>")])
+    outcome = fetch_batch(DictAdapter(), ["1"], client=client, fallback=lambda key: f"rest-{key}")
+    assert outcome.values == {"1": "rest-1"}
+    assert outcome.stats.fallbacks == 1
+
+
+def test_sso_partial_results_propagates():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"data": {}}, headers={"x-github-sso": "partial-results; ..."}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(PartialResultsError):
+        fetch_batch(DictAdapter(), ["1"], client=client)

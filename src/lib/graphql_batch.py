@@ -186,7 +186,7 @@ def fetch_batch(
     unresolved: dict[str, str] = {}
     if not unique:
         return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
-    attempts = dict.fromkeys(unique, 0)
+    attempts = dict.fromkeys(unique, 1)
     queue: deque[list[str]] = deque(_chunks(unique, size))
 
     def fall_back(key: str, reason: str) -> None:
