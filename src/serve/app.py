@@ -18,7 +18,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -27,7 +27,14 @@ from discover.search_shards import RequestFailed
 from lib.deadlines import DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve.diff import diff_runs
-from serve.executor import RunExecutor, Runner, RunPayload, RunPayloadItem, create_run
+from serve.executor import (
+    RunExecutor,
+    Runner,
+    RunPayload,
+    RunPayloadItem,
+    create_run,
+    reset_run_artifacts,
+)
 from serve.filter_spec import (
     FILTER_SPEC_VERSION,
     FilterSpecError,
@@ -768,6 +775,25 @@ def create_app(
             "changed": list(result.changed),
             "summary": result.summary,
         }
+
+    @application.post("/runs/{run_id}/resume")
+    async def resume_run(request: Request, run_id: int):
+        if not await validate_csrf(request):
+            return HTMLResponse("CSRF", status_code=403)
+        engine = engine_for()
+        with engine.connect() as connection:
+            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+        if row is None:
+            return HTMLResponse("run not found", status_code=404)
+        if row["status"] != "failed":
+            return HTMLResponse("only failed runs can be resumed", status_code=400)
+        reset_run_artifacts(engine, run_id)
+        with engine.begin() as connection:
+            connection.execute(
+                update(Runs).where(Runs.id == run_id).values(status="queued", error=None)
+            )
+        executor_for().submit(run_id, runner_for())
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @application.get("/runs/{run_id}/quality")
     def run_quality_json(run_id: int):

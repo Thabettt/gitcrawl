@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.engine import Engine
 
 from store.models import RunItem, Runs
@@ -252,6 +252,16 @@ def recover_orphaned_runs(engine: Engine) -> int:
             )
         )
     return int(result.rowcount or 0)
+
+
+def reset_run_artifacts(engine: Engine, run_id: int) -> None:
+    with engine.begin() as connection:
+        connection.execute(delete(RunItem).where(RunItem.run_id == run_id))
+        if connection.scalar(text("SELECT to_regclass('detection_evidence')")) is not None:
+            connection.execute(
+                text("DELETE FROM detection_evidence WHERE run_id = :run_id"),
+                {"run_id": run_id},
+            )
 
 
 class RunExecutor:
