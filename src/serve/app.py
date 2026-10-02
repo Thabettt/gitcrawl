@@ -781,17 +781,30 @@ def create_app(
         if not await validate_csrf(request):
             return HTMLResponse("CSRF", status_code=403)
         engine = engine_for()
-        with engine.connect() as connection:
-            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+
+        def load_run() -> dict | None:
+            with engine.connect() as connection:
+                row = (
+                    connection.execute(select(Runs).where(Runs.id == run_id))
+                    .mappings()
+                    .one_or_none()
+                )
+            return dict(row) if row is not None else None
+
+        row = await run_in_threadpool(load_run)
         if row is None:
             return HTMLResponse("run not found", status_code=404)
         if row["status"] != "failed":
             return HTMLResponse("only failed runs can be resumed", status_code=400)
-        reset_run_artifacts(engine, run_id)
-        with engine.begin() as connection:
-            connection.execute(
-                update(Runs).where(Runs.id == run_id).values(status="queued", error=None)
-            )
+
+        def reset_and_queue() -> None:
+            reset_run_artifacts(engine, run_id)
+            with engine.begin() as connection:
+                connection.execute(
+                    update(Runs).where(Runs.id == run_id).values(status="queued", error=None)
+                )
+
+        await run_in_threadpool(reset_and_queue)
         executor_for().submit(run_id, runner_for())
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 

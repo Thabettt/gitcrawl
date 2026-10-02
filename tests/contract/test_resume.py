@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import fakeredis
 import pytest
 from alembic import command
@@ -140,16 +142,49 @@ def test_resume_failed_run_requeues_and_clears_items(clean, tmp_path, monkeypatc
             ),
             {"id": run_id},
         )
-    client = make_client(clean, tmp_path, runner_factory=fake_runner_factory)
+    observed: list[int] = []
+
+    def recording_factory(engine):
+        def runner(run_id: int, spec: dict) -> RunPayload:
+            with engine.connect() as connection:
+                count = connection.scalar(
+                    text("SELECT count(*) FROM run_items WHERE run_id = :id"), {"id": run_id}
+                )
+            observed.append(int(count))
+            return RunPayload(
+                total_count=1,
+                fetched=1,
+                items=[
+                    RunPayloadItem(
+                        repo_id=1296269, full_name="octo/hello", stargazers=10, virtuals={}
+                    )
+                ],
+            )
+
+        return runner
+
+    client = make_client(clean, tmp_path, runner_factory=recording_factory)
     token = csrf_token(client)
     response = client.post(
         f"/runs/{run_id}/resume", headers={"x-csrf-token": token}, follow_redirects=False
     )
     assert response.status_code == 303
     assert response.headers["location"] == f"/runs/{run_id}"
+    deadline = time.monotonic() + 5
+    while True:
+        with clean.connect() as connection:
+            status = connection.scalar(text("SELECT status FROM runs WHERE id=:id"), {"id": run_id})
+        if status in {"done", "failed", "partial"} or time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+    assert observed == [0], f"runner saw {observed} run_items; resume did not reset first"
     with clean.connect() as connection:
-        row = connection.execute(text("SELECT status FROM runs WHERE id=:id"), {"id": run_id}).one()
-    assert row.status in {"queued", "running", "done"}
+        stale = connection.scalar(
+            text("SELECT count(*) FROM run_items WHERE run_id=:id AND full_name='octo/world'"),
+            {"id": run_id},
+        )
+    assert stale == 0
+    assert status in {"queued", "running", "done"}
 
 
 def test_resume_done_run_is_400(clean, tmp_path, monkeypatch):
