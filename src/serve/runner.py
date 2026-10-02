@@ -393,12 +393,10 @@ def _apply_dockerfile(
                 on_response=hook,
             )
         except (RequestFailed, ThrottledError, PartialResultsError):
-            skipped["n"] += 1
             return None
         return presence.has(_DOCKERFILE_PATH)
 
     rows_by_key = {str(row["id"]): row for row in selected}
-    skipped = {"n": 0}
     outcome = fetch_batch(
         FilePresenceAdapter(
             _DOCKERFILE_PATH, {key: row["full_name"] for key, row in rows_by_key.items()}
@@ -413,7 +411,7 @@ def _apply_dockerfile(
     )
     report["files"] = outcome.stats.as_dict()
     kept: list[dict] = []
-    skipped_count = len(leftover) + skipped["n"]
+    skipped_count = len(leftover)
     used = 0
     for key, row in rows_by_key.items():
         value = outcome.values.get(key)

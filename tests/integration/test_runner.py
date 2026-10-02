@@ -760,6 +760,10 @@ def test_run_filter_tolerates_tree_fetch_failure(clean: Engine, monkeypatch):
     assert any(
         "Dockerfile presence could not be checked" in warning for warning in payload.warnings
     )
+    assert (
+        "1 repo(s) skipped because Dockerfile presence could not be checked; "
+        "results are incomplete" in payload.warnings
+    )
     file_requests = [
         request for request in requests if request.url.path == "/graphql" and is_file_query(request)
     ]
