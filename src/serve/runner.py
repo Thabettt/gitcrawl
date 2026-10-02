@@ -310,6 +310,7 @@ def _apply_geo(
     rows_by_login = {login: owner_id for owner_id, login in lookups}
     owner_types = {login: owners[owner_id]["type"] for owner_id, login in lookups}
     used = {"n": 0}
+    answered: set[int] = set()
 
     def fallback(login: str) -> object | None:
         ok, location = _fetch_owner_location(deps, login, hook)
@@ -317,6 +318,7 @@ def _apply_geo(
             used["n"] += 1
         if not ok:
             return None
+        answered.add(rows_by_login[login])
         owners[rows_by_login[login]]["location_raw"] = location
         return location
 
@@ -335,12 +337,13 @@ def _apply_geo(
         if login not in outcome.values:
             continue
         used["n"] += 1
+        answered.add(owner_id)
         owners[owner_id]["location_raw"] = outcome.values[login]
     used_count = used["n"]
     pending = [
         (owner_id, owners[owner_id]["location_raw"])
         for owner_id, _login in pending_owners
-        if owners[owner_id]["location_raw"] is not None
+        if owners[owner_id]["location_raw"] is not None or owner_id in answered
     ]
     resolved = resolve_many(deps.engine, [raw for _, raw in pending], cache=cache)
     updates: list[dict] = []

@@ -879,6 +879,66 @@ def test_run_filter_geo_batches_and_falls_back_per_owner(clean: Engine):
     assert owners_stats["fallbacks"] == 1
 
 
+def test_run_filter_persists_confirmed_no_location_owners_as_unmatched(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(1, login="alice")])
+        if path == "/graphql":
+            if is_owner_query(request):
+                return graphql_owner_response(request, {"alice": None})
+            return graphql_batch_response(request, {"alice/repo1": repo_item(1, login="alice")})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"owner_country": "DE"}),
+    )
+    assert payload.items == []
+    owner_requests = [
+        request
+        for request in requests
+        if path_of(request) == "/graphql" and is_owner_query(request)
+    ]
+    assert len(owner_requests) == 1
+    with clean.connect() as connection:
+        stored = (
+            connection.execute(
+                text(
+                    "SELECT location_raw, country_iso, geo_confidence FROM owners "
+                    "WHERE login = 'alice'"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert stored["location_raw"] is None
+    assert stored["country_iso"] is None
+    assert stored["geo_confidence"] == "unmatched"
+
+    def cached_handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(1, login="alice")])
+        if path == "/graphql":
+            if is_owner_query(request):
+                raise AssertionError("cached unmatched owner must not be re-fetched")
+            return graphql_batch_response(request, {"alice/repo1": repo_item(1, login="alice")})
+        raise AssertionError(f"unexpected path {path}")
+
+    cached_client, cached_requests = scripted(cached_handler)
+    cached_payload = run_filter(
+        make_deps(clean, cached_client),
+        spec_for(q="language:python", virtual={"owner_country": "DE"}),
+    )
+    assert cached_payload.items == []
+    assert not any(
+        path_of(request) == "/graphql" and is_owner_query(request) for request in cached_requests
+    )
+    assert not any(path_of(request) == "/users/alice" for request in cached_requests)
+
+
 def test_build_deps_requires_a_token(clean: Engine, monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKENS", raising=False)
