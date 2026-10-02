@@ -56,6 +56,8 @@ def resource_for_url(url: str) -> str:
         return "search"
     if path == "/search/code":
         return "code_search"
+    if path == "/graphql":
+        return "graphql"
     return "core"
 
 

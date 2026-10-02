@@ -19,6 +19,7 @@ def test_resource_specs_are_exact():
         "search": (30, 60.0),
         "core": (5000, 3600.0),
         "code_search": (10, 60.0),
+        "graphql": (5000, 3600.0),
     }
 
 
@@ -222,3 +223,9 @@ def test_acquire_uses_hash_key_with_ttl(redis, limiter):
     assert redis.hget(key, "count") == b"1"
     assert redis.hget(key, "slots") == b"1"
     assert redis.hget(key, "window") == b"0"
+
+
+def test_graphql_bucket_spec():
+    from limiter.buckets import RESOURCE_SPECS
+
+    assert RESOURCE_SPECS["graphql"] == (5000, 3600.0)

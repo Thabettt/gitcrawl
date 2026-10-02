@@ -10,6 +10,7 @@ RESOURCE_SPECS: dict[str, tuple[int, float]] = {
     "search": (30, 60.0),
     "core": (5000, 3600.0),
     "code_search": (10, 60.0),
+    "graphql": (5000, 3600.0),
 }
 
 _KEY_PREFIX = "gitcrawl:rl"

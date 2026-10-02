@@ -676,3 +676,9 @@ def test_limiter_without_a_deadline_sleeps_exactly_as_before():
         )
 
     assert sleeps == [20.0]
+
+
+def test_resource_for_graphql():
+    from lib.gh_client import resource_for_url
+
+    assert resource_for_url("https://api.github.com/graphql") == "graphql"
