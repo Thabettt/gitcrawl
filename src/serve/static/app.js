@@ -436,6 +436,60 @@
       });
   }
 
+  function refreshCloneProgress(runId) {
+    if (window.htmx && window.htmx.ajax) {
+      window.htmx.ajax("GET", "/partials/runs/" + runId + "/clone-progress", {
+        target: "#clone-progress",
+        swap: "outerHTML"
+      });
+    }
+  }
+
+  function cancelClone(button) {
+    if (button.disabled) {
+      return;
+    }
+    button.disabled = true;
+    var runId = button.getAttribute("data-run-id") || "";
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    var headers = {};
+    if (meta) {
+      headers["x-csrf-token"] = meta.getAttribute("content") || "";
+    }
+    window
+      .fetch("/runs/" + runId + "/clone", { method: "DELETE", headers: headers })
+      .then(function (response) {
+        return response
+          .json()
+          .catch(function () {
+            return null;
+          })
+          .then(function (body) {
+            if (!response.ok) {
+              var failure = new Error("cancel request failed");
+              failure.status = response.status;
+              failure.body = body;
+              throw failure;
+            }
+            showToast("Clone cancel requested");
+            refreshCloneProgress(runId);
+          });
+      })
+      .catch(function (error) {
+        var status = error && typeof error.status === "number" ? error.status : 0;
+        var body = error && error.body ? error.body : null;
+        showToast(
+          window.gitcrawlErrors.apiErrorText(status, body, "Cancel request failed"),
+          function () {
+            cancelClone(button);
+          }
+        );
+      })
+      .finally(function () {
+        button.disabled = false;
+      });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     var toggle = document.getElementById("theme-toggle");
     syncToggle(toggle);
@@ -490,6 +544,11 @@
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!target || !target.closest) {
+      return;
+    }
+    var cancel = target.closest("[data-cancel-clone]");
+    if (cancel) {
+      cancelClone(cancel);
       return;
     }
     var opener = target.closest("[data-open]");

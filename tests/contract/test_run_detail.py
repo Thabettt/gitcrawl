@@ -620,3 +620,40 @@ def test_run_page_offers_copy_link(clean: Engine, tmp_path):
     assert "data-copy-url" in script
     assert "Link copied" in script
     assert "window.location.href" in script
+
+
+def test_cancel_button_only_renders_while_running(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    client = make_client(clean, tmp_path)
+
+    idle = client.get(f"/partials/runs/{run_id}/clone-progress", headers=HX)
+    assert 'id="clone-progress-cancel"' not in idle.text
+
+    with clean.connect() as connection:
+        filter_hash = connection.scalar(
+            text("SELECT filter_hash FROM runs WHERE id = :id"), {"id": run_id}
+        )
+    progress_path = tmp_path / "runs" / str(filter_hash) / str(run_id) / "clone-progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "total": 5,
+                "completed": 1,
+                "failed": 0,
+                "current": "octo/hello",
+                "errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    fresh = make_client(clean, tmp_path)
+    running = fresh.get(f"/partials/runs/{run_id}/clone-progress", headers=HX)
+
+    assert 'id="clone-progress-cancel"' in running.text
+    assert 'data-cancel-clone="true"' in running.text
+    assert f'data-run-id="{run_id}"' in running.text
+    script = fresh.get("/static/app.js").text
+    assert "data-cancel-clone" in script
+    assert 'method: "DELETE"' in script
