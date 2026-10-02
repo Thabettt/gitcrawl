@@ -342,8 +342,8 @@ def test_execute_run_failure_is_sanitized_and_does_not_propagate(db: Engine, tmp
     assert execute_run(db, run_id, runner=failing, runs_root=str(tmp_path)) is None
     status = run_status(db, run_id)
     assert status["status"] == "failed"
-    assert status["error"] == ("RuntimeError: " + body)[:300]
-    assert len(status["error"]) == 300
+    assert status["error"] == "RuntimeError"
+    assert "upstream body" not in status["error"]
     assert status["finished_at"] is not None
     assert status["started_at"] is not None
     with db.connect() as connection:

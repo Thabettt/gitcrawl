@@ -63,6 +63,16 @@ def test_error_message_is_class_prefixed_and_truncated():
     assert message.startswith("ValueError: ")
 
 
+def test_error_message_strips_upstream_body():
+    from serve.executor import _error_message
+
+    message = _error_message(
+        ValueError("422: Validation Failed: {'message': 'upstream body secret'}")
+    )
+    assert "upstream body secret" not in message
+    assert message.startswith("ValueError")
+
+
 def test_bundle_item_prefers_raw_and_falls_back_to_snapshot():
     raw = {"id": 1, "full_name": "octo/hello", "extra": True}
     assert executor._bundle_item(RunPayloadItem(repo_id=1, full_name="octo/hello", raw=raw)) == raw

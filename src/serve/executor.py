@@ -71,7 +71,13 @@ def _default_runner(run_id: int, filter_spec: dict) -> RunPayload:
 
 
 def _error_message(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {exc}"[:300]
+    text = f"{type(exc).__name__}: {exc}"
+    text = text.split("\n", 1)[0]
+    for marker in ("{", "Validation Failed", "upstream"):
+        index = text.find(marker)
+        if index > 0:
+            text = text[:index].rstrip(" :")
+    return text[:300]
 
 
 def _snapshot_item(item: RunPayloadItem) -> dict:

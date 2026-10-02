@@ -293,7 +293,8 @@ def test_run_page_shows_r44_and_failed_flags(clean: Engine, tmp_path):
     assert "unenforceable" in r44_html
     assert 'data-flag="r44"' in r44_html
     assert 'data-flag="error"' in failed_html
-    assert "RuntimeError: upstream exploded" in failed_html
+    assert "RuntimeError" in failed_html
+    assert "upstream exploded" not in failed_html
     assert 'data-status="failed"' in failed_html
 
 

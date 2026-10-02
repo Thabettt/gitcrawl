@@ -158,11 +158,13 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
 | R57 | GraphQL/mirrors/full-depth remain built-but-unwired (like R24); clamp + warning | missing enrichment fields |
 | R58 | Supersedes the R24/R57 quarantine policy: unwired surface is triaged, not preserved. Wiring: `reclaim_stale` (crash reclaim), `pel_size` (SLO metric). Deletions: `RetryQueue`, `order_shards`, `plan_id_ranges`, `mirrors`, `graphql_batch`, `fetch_metafiles`, `skeleton.py`. Parked minors closed: metafiles auth (fixed), executor future eviction (fixed). Rationale: dead code is a trap; deleted work is recoverable from git. | lost work if an exploration later claims a deleted module (re-add is a fresh request) |
 
-**Parked residuals (non-blocking, for the morning):**
-- `trees_first.fetch_metafiles` still sends the GitHub `Authorization` header by default (fixed for `mirrors.py`; metafiles is unwired). One-line `auth=False` when wired — parked (ruling under R55).
-- Executor `_futures` never evicts; `/vsearch/repos` cache-miss shares the FIFO queue; 0004 downgrade is lossy for NULL `repo_id` rows; lazy executor/runner init is unsynchronized. All minor/local.
-- Keyboard/JS behavior is markup-tested only; first browser pass recommended.
-- `runs.error` can carry ≤300 chars of upstream body (escaped everywhere it renders).
+**Parked residuals (closed 2026-10-02; kept as a closure record):**
+- `trees_first.fetch_metafiles` auth: fixed in `00692a0` (token kept off the metafiles host); the module itself was deleted under R58 in `5fafdca`.
+- Executor `_futures` eviction: fixed — done futures are pruned on `submit` (`src/serve/executor.py`). `/vsearch/repos` cache-misses still share the FIFO queue (unchanged, local/minor).
+- Lazy executor/runner init: serialized in `def016b` (row 13); concurrency regression at `tests/unit/test_app_singletons.py::test_lazy_loader_constructs_once_under_concurrency`.
+- 0004 downgrade lossiness for NULL `repo_id` rows: documented in the migration's `downgrade` docstring (export those rows before downgrading).
+- Keyboard/JS behavior: markup-tested plus a manual console pass checklist in `docs/environment.md`.
+- `runs.error`: sanitized to exception type + status text (≤300 chars, no upstream bodies) in `src/serve/executor.py::_error_message`.
 
 ## Quality hardening program (2026-10-01)
 

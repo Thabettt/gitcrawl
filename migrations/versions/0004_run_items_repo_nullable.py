@@ -35,6 +35,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Downgrade restores NOT NULL and therefore drops rows whose repo_id is NULL.
+
+    Lossy by design; export those rows before downgrading (see ruling R55).
+    """
     op.drop_constraint("run_items_run_repo_key", "run_items", type_="unique")
     op.drop_constraint("run_items_repo_id_fkey", "run_items", type_="foreignkey")
     op.execute("DELETE FROM run_items WHERE repo_id IS NULL")
