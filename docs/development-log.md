@@ -169,7 +169,7 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
 
 **Gates added by Phase 1b:**
 
-- Fixtures: 20 `clean` fixtures plus `test_executor.py::db` (21 fixtures across 21 files, including `test_clone_registry.py`) now call the `clean_db` factory in `tests/conftest.py`; two in-test truncates in `test_upserts.py` were adapted to call `clean_db()` directly. `tests/unit/test_fixture_centralization.py` rejects raw `TRUNCATE TABLE` outside the factory and three allowlisted single-purpose fixtures.
+- Fixtures: 21 `clean` fixtures plus `test_executor.py::db` (22 fixtures across 22 files, including `test_clone_registry.py` and the Phase 2 `tests/contract/test_adversarial_hardening.py`) now call the `clean_db` factory in `tests/conftest.py`; two in-test truncates in `test_upserts.py` were adapted to call `clean_db()` directly. `tests/unit/test_fixture_centralization.py` rejects raw `TRUNCATE TABLE` outside the factory and three allowlisted single-purpose fixtures.
 - CWD: `tests/conftest.py::repo_root` anchors asset paths; `tests/unit/test_cwd_independence.py` runs representative tests from a foreign directory and rejects relative `Path("…")` literals.
 - Flakes: no wall-clock assertions remain; ordering tests use threads events/barriers and an append-operation counter (`test_id_accumulation.py`, `test_executor.py`, `test_cloner.py`, `test_filter_form.py`).
 - JS: pure helpers live in `src/serve/static/applib.js`; `tests/js/applib.test.mjs` + `tests/unit/test_applib_js.py` cover the row cache, clone-start guard, clone limit parsing, editable-target detection, and toast messages.
@@ -203,3 +203,12 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 | CI | `.github/workflows/ci.yml`: ubuntu-latest `postgres:17` + `redis:7` services; windows-latest native PostgreSQL 17 + Memurai 4.1.8; `GITCRAWL_REQUIRE_TEST_DB=1`; both `Tests` steps now run `pytest -q -rs --cov=src --cov-report=term-missing` |
 | Golden harness | `tests/golden/` snapshots 23 GET-route cases; JSON byte-exact, HTML normalized (CSRF, relative time, disk warning); regenerate with `UPDATE_GOLDEN=1 pytest tests/golden -q` |
 | OpenAPI pin | `tests/golden/snapshots/openapi.sha256` pins canonical `app.openapi()`; a schema change fails CI |
+
+## Quality hardening operations (2026-10-02)
+
+- **Host allowlist** (`src/serve/app.py::_allowed_hosts`): loopback defaults `localhost`, `127.0.0.1`, `[::1]`; `GITCRAWL_ALLOWED_HOSTS` adds comma-separated extras. Behind a TLS-terminating proxy set it to the public hostname and run uvicorn with `--proxy-headers`/`--forwarded-allow-ips` so Origin/scheme checks see the effective base URL.
+- **Deadlines** (`src/lib/deadlines.py`): `GITCRAWL_REQUEST_DEADLINE_SECONDS` (default 3600) bounds API requests; `GITCRAWL_CLONE_TIMEOUT_SECONDS` (default 1800) bounds each clone. A hung request fails with 503 `{"error":"timeout",...}`; a clone that exceeds its timeout is killed and recorded as failed instead of hanging forever. Missing, non-numeric, or non-positive values fall back to the defaults.
+- **Redis strictness** (`src/serve/runner.py::_redis_or_fake`): with `GITCRAWL_REDIS_STRICT=1`, an unreachable `REDIS_URL` refuses the fakeredis fallback; otherwise the outage is logged and `/health` reports `redis_degraded`.
+- **Body caps** (`src/serve/middleware.py`): state-changing request bodies default to 1 MiB; `/find` uploads allow 10 MiB. Oversized requests get 413 `{"error":"payload_too_large",...}`.
+- **Clone git environment** (`src/enrich/cloner.py::_git_env`): clones run with `GIT_TERMINAL_PROMPT=0`, stdin closed, and global/system git config disabled (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` pointed at the null device). A machine that relies on global `http.proxy`/custom CA/`url.*.insteadOf` config must set it per-repo or via environment instead.
+- **Run counters (E1)**: run pages now show real `updated`/`unchanged`/`skipped` counters (`src/serve/templates/partials/status.html`).
