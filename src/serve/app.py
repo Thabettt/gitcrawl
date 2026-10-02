@@ -26,7 +26,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from discover.search_shards import RequestFailed
 from lib.deadlines import DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
-from serve import pages
+from serve import errors, pages
 from serve.diff import diff_runs
 from serve.executor import (
     RunExecutor,
@@ -694,9 +694,7 @@ def create_app(
     async def rename_filter_route(request: Request, filter_id: int):
         if is_form_request(request):
             if not await validate_csrf(request):
-                return Response(
-                    status_code=403, content="invalid csrf token", media_type="text/plain"
-                )
+                return errors.csrf_error_page(request)
             form = await request.form()
             name = form.get("name")
             try:
@@ -737,9 +735,7 @@ def create_app(
     async def delete_filter_route(request: Request, filter_id: int):
         if is_form_request(request):
             if not await validate_csrf(request):
-                return Response(
-                    status_code=403, content="invalid csrf token", media_type="text/plain"
-                )
+                return errors.csrf_error_page(request)
             try:
                 await run_in_threadpool(delete_filter, engine_for(), filter_id)
             except LibraryError as exc:
@@ -799,7 +795,7 @@ def create_app(
     @application.post("/runs/{run_id}/resume")
     async def resume_run(request: Request, run_id: int):
         if not await validate_csrf(request):
-            return HTMLResponse("CSRF", status_code=403)
+            return errors.csrf_error_page(request)
         engine = engine_for()
 
         def load_run() -> dict | None:
@@ -932,6 +928,8 @@ def create_app(
     @application.get("/partials/metrics", response_class=HTMLResponse)
     def metrics_partial(request: Request):
         return _metrics_response(request, "partials/metrics_cards.html")
+
+    errors.register_error_pages(application)
 
     register_settings(
         application,

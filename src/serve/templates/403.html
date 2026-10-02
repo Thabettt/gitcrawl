@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel" id="error-page">
+  <div class="panel-head">
+    <h1>{{ title }}</h1>
+  </div>
+  <p>{{ message }}</p>
+  <p class="empty-actions">
+    <a class="button primary" href="/">Back to Home</a>
+  </p>
+</section>
+{% endblock %}

@@ -197,7 +197,7 @@ def test_dashboard_lists_recent_runs_with_status_and_counts(clean: Engine, tmp_p
     html = response.text
     assert f'id="run-{run_id}"' in html
     assert filter_hash[:8] in html
-    assert ">done<" in html
+    assert ">Finished<" in html
     assert 'id="empty-state"' not in html
     assert 'data-state="ok"' in html
 

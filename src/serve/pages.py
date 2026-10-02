@@ -58,6 +58,19 @@ HISTORY_STATUSES = ("queued", "running", "done", "partial", "failed")
 HISTORY_PAGE_SIZE = 50
 R44_VIRTUALS = ("min_loc", "max_loc")
 SAVE_ERROR_STATUS = {"invalid_name": 400, "invalid_spec": 400, "duplicate_name": 409}
+STATUS_LABELS = {
+    "queued": "Waiting",
+    "running": "Running",
+    "done": "Finished",
+    "partial": "Finished — incomplete",
+    "failed": "Failed",
+}
+
+
+def status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status)
+
+
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 _templates = Jinja2Templates(
@@ -68,6 +81,7 @@ _templates = Jinja2Templates(
     )
 )
 _templates.env.globals["severity"] = severity
+_templates.env.globals["status_label"] = status_label
 _redis_client = None
 logger = logging.getLogger("gitcrawl.serve")
 
@@ -380,24 +394,25 @@ def _run_flags(row, virtual: dict) -> list[dict]:
     if row["error"]:
         flags.append({"kind": "error", "label": f"failed: {row['error']}"})
     if row["status"] == "partial" or row["incomplete_shards"]:
-        shards = row["incomplete_shards"] or 1
+        steps = row["incomplete_shards"] or 1
         flags.append(
             {
                 "kind": "incomplete",
-                "label": f"incomplete: {shards} discovery shard(s) incomplete; results are partial",
+                "label": f"incomplete: {steps} step(s) of finding repos did not finish; "
+                "some results may be missing",
             }
         )
     total = row["total_count"]
     if isinstance(total, int) and row["fetched"] < total:
         flags.append(
-            {"kind": "truncation", "label": f"truncated: fetched {row['fetched']} of ~{total}"}
+            {"kind": "truncation", "label": f"truncated: found {row['fetched']} of ~{total}"}
         )
     for name in R44_VIRTUALS:
         if name in virtual:
             flags.append(
                 {
                     "kind": "r44",
-                    "label": f"`{name}` is recorded but unenforceable in this run; "
+                    "label": f"`{name}` is recorded but unenforceable in this search; "
                     "results are incomplete",
                 }
             )
@@ -692,7 +707,9 @@ def register_pages(
     @app.post("/find")
     async def filter_submit(request: Request):
         if not await validate_csrf(request):
-            return Response(status_code=403, content="invalid csrf token", media_type="text/plain")
+            from serve.errors import csrf_error_page
+
+            return csrf_error_page(request)
         form = await request.form()
         values = _flat_form(form)
         action = values.get("action", "find")
@@ -867,7 +884,9 @@ def register_pages(
     @app.post("/runs/{run_id}/replay")
     async def replay_run(request: Request, run_id: int):
         if not await validate_csrf(request):
-            return Response(status_code=403, content="invalid csrf token", media_type="text/plain")
+            from serve.errors import csrf_error_page
+
+            return csrf_error_page(request)
         engine = engine_factory()
         row = await run_in_threadpool(_run_detail_row, engine, run_id)
         if row is None:

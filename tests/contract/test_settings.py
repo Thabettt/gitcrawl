@@ -113,7 +113,7 @@ def test_settings_page_renders_current_values(clean, tmp_path, monkeypatch):
     assert "Search breadth (slices)" in response.text
     assert "Repos to save details for" in response.text
     assert re.search(r"keep well under GitHub’s ceiling", response.text, re.IGNORECASE)
-    assert '<a href="/settings">System</a>' in response.text
+    assert '<a href="/settings" aria-current="page">System</a>' in response.text
 
 
 def test_settings_page_never_renders_the_token(clean, tmp_path, monkeypatch):

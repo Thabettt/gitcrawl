@@ -255,9 +255,9 @@ def test_run_page_reports_counts_and_export_links(clean: Engine, tmp_path):
     html = response.text
     assert 'data-status="partial"' in html
     assert 'id="run-counts"' in html
-    assert 'data-count="fetched">fetched <strong>3</strong>' in html
-    assert 'data-count="inserted">inserted <strong>1</strong>' in html
-    assert 'data-count="incomplete">incomplete <strong>1</strong>' in html
+    assert 'data-count="fetched">Found <strong>3</strong>' in html
+    assert 'data-count="inserted">Saved <strong>1</strong>' in html
+    assert 'data-count="incomplete">Incomplete <strong>1</strong>' in html
     assert 'id="run-flags"' in html
     assert 'data-flag="incomplete"' in html
     assert 'data-flag="truncation"' in html
@@ -274,9 +274,9 @@ def test_run_page_reports_updated_unchanged_and_skipped(clean: Engine, tmp_path)
 
     html = client.get(f"/runs/{run_id}").text
 
-    assert 'data-count="updated">updated <strong>2</strong>' in html
-    assert 'data-count="unchanged">unchanged <strong>3</strong>' in html
-    assert 'data-count="skipped">skipped <strong>4</strong>' in html
+    assert 'data-count="updated">Saved <strong>2</strong>' in html
+    assert 'data-count="unchanged">Passed filters <strong>3</strong>' in html
+    assert 'data-count="skipped">Unavailable <strong>4</strong>' in html
 
 
 def test_run_page_shows_r44_and_failed_flags(clean: Engine, tmp_path):
@@ -604,7 +604,7 @@ def test_table_fragment_empty_state_offers_guidance(clean: Engine, tmp_path):
     assert 'id="run-table-empty"' in response.text
     assert "No results" in response.text
     assert 'href="/find"' in response.text
-    assert "Start a new find" in response.text
+    assert "Start a new search" in response.text
 
 
 def test_run_page_offers_copy_link(clean: Engine, tmp_path):

@@ -9,7 +9,7 @@ from sqlalchemy.engine import Engine
 
 from lib.audit import query_hash
 from lib.gh_client import load_tokens
-from serve import pages
+from serve import errors, pages
 from serve.settings_spec import SettingsError, parse_settings_form
 from store.models import AuditLog
 from store.settings import (
@@ -88,7 +88,7 @@ def register_settings(
     @application.post("/settings")
     async def settings_save(request: Request):
         if not await pages.validate_csrf(request):
-            return HTMLResponse("CSRF", status_code=403)
+            return errors.csrf_error_page(request)
         engine = engine_factory()
         before = load_run_settings(engine)
         pinned = env_pinned_fields()

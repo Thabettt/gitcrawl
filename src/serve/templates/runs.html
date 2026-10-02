@@ -12,12 +12,12 @@
       <select class="field-input" id="run-filter-status" name="status">
         <option value="" {{ 'selected' if not status }}>any</option>
         {% for name in statuses %}
-        <option value="{{ name }}" {{ 'selected' if name == status }}>{{ name }}</option>
+        <option value="{{ name }}" {{ 'selected' if name == status }}>{{ status_label(name) }}</option>
         {% endfor %}
       </select>
     </label>
     <label class="field" for="run-filter-hash">
-      <span class="field-label">Filter hash (exact or prefix)</span>
+      <span class="field-label">Search ID (exact or prefix)</span>
       <input class="field-input" type="text" id="run-filter-hash" name="hash" value="{{ hash }}">
     </label>
     <div class="form-actions">
@@ -28,7 +28,7 @@
   {% if filter_error %}
   <div id="runs-filter-error" class="empty-state error-state" role="alert">
     <p>{{ filter_error }}</p>
-    <p class="muted">Valid statuses: {{ statuses | join(", ") }}.</p>
+    <p class="muted">Valid statuses: {% for name in statuses %}{{ status_label(name) }}{{ ", " if not loop.last }}{% endfor %}.</p>
   </div>
   {% endif %}
   <div class="table-wrap">
@@ -36,10 +36,10 @@
       <thead>
         <tr>
           <th scope="col">Run</th>
-          <th scope="col">Hash</th>
+          <th scope="col">ID</th>
           <th scope="col">Status</th>
-          <th scope="col">Fetched</th>
-          <th scope="col">Inserted</th>
+          <th scope="col">Found</th>
+          <th scope="col">Saved</th>
           <th scope="col">Duration</th>
           <th scope="col">When</th>
           <th scope="col">Actions</th>
@@ -51,8 +51,8 @@
           <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
           <td class="mono"><a href="/runs/{{ run.id }}" aria-label="Open run {{ run.id }}">{{ run.hash_short }}</a></td>
           <td>
-            <span class="pill {{ run.status }}" data-status="{{ run.status }}">{{ run.status }}</span>
-            {% if run.incomplete %}<span class="badge flag incomplete" data-flag="incomplete" title="Partial or incomplete shards">incomplete</span>{% endif %}
+            <span class="pill {{ run.status }}" data-status="{{ run.status }}">{{ status_label(run.status) }}</span>
+            {% if run.incomplete %}<span class="badge flag incomplete" data-flag="incomplete" title="Finished but incomplete">incomplete</span>{% endif %}
           </td>
           <td data-count="fetched">{{ run.fetched }}</td>
           <td data-count="inserted">{{ run.inserted }}</td>

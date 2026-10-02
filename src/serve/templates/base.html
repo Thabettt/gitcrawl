@@ -32,12 +32,14 @@
 <div id="nav-progress" class="nav-progress" aria-hidden="true"></div>
 <header class="site-header">
   <a class="brand" href="/">gitcrawl</a>
+  {% set path = request.url.path %}
   <nav id="main-nav" class="site-nav" aria-label="Primary">
-    <a href="/">Dashboard</a>
-    <a href="/find">Find</a>
-    <a href="/runs">Runs</a>
-    <a href="/filters">Filters</a>
-    <a href="/settings">System</a>
+    <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Home</a>
+    <a href="/runs"{% if path.startswith("/runs") %} aria-current="page"{% endif %}>Searches</a>
+    <a href="/corpora"{% if path.startswith("/corpora") %} aria-current="page"{% endif %}>Corpora</a>
+    <span class="muted" title="Coming soon">Detections</span>
+    <a href="/filters"{% if path.startswith("/filters") %} aria-current="page"{% endif %}>Library</a>
+    <a href="/settings"{% if path.startswith("/settings") %} aria-current="page"{% endif %}>System</a>
   </nav>
   <button id="shortcuts-open" class="button ghost" type="button" data-open="shortcuts-modal" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   <button id="theme-toggle" class="button ghost" type="button" aria-pressed="false" aria-label="Toggle dark mode" title="Toggle dark mode">Theme</button>

@@ -39,9 +39,9 @@
       <thead>
         <tr>
           <th scope="col">Run</th>
-          <th scope="col">Filter</th>
+          <th scope="col">Search ID</th>
           <th scope="col">Status</th>
-          <th scope="col">Total / kept</th>
+          <th scope="col">Found / Saved</th>
           <th scope="col">Duration</th>
           <th scope="col">When</th>
         </tr>
@@ -51,7 +51,7 @@
         <tr id="run-{{ run.id }}">
           <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
           <td class="mono">{{ run.hash_short }}</td>
-          <td><span class="pill {{ run.status }}">{{ run.status }}</span></td>
+          <td><span class="pill {{ run.status }}">{{ status_label(run.status) }}</span></td>
           <td>{{ run.total_count if run.total_count is not none else '—' }} / {{ run.inserted }}</td>
           <td>{{ run.duration }}</td>
           <td>{{ run.ran_at }}</td>
