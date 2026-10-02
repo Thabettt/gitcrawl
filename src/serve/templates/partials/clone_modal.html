@@ -23,6 +23,7 @@
           hx-get="/runs/{{ run.id }}/clone-estimate"
           hx-trigger="change"
           hx-target="#clone-estimate"
+          hx-indicator="#clone-estimate-loading"
           hx-swap="outerHTML">
       <div class="clone-limit-row">
         <label for="clone-limit">Repos to clone</label>
@@ -36,6 +37,7 @@
         <label><input type="radio" name="mode" value="windowed"> windowed</label>
       </fieldset>
     </form>
+    <span id="clone-estimate-loading" class="htmx-indicator muted" role="status">Updating estimate…</span>
     {{ estimate_block(estimate) }}
     <div class="form-actions">
       <button id="clone-start" class="button primary" type="button" data-run-id="{{ run.id }}">Start clone</button>

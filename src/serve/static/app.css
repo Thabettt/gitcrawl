@@ -766,6 +766,35 @@ kbd {
   display: inline;
 }
 
+.nav-progress {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 50;
+  background: var(--gc-accent);
+  opacity: 0.75;
+}
+
+html[data-busy="true"] .nav-progress {
+  display: block;
+  animation: gc-busy-pulse 1s ease-in-out infinite;
+}
+
+@keyframes gc-busy-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+a.htmx-request,
+.button.htmx-request {
+  cursor: progress;
+  opacity: 0.7;
+}
+
 .shortcuts-table td {
   white-space: normal;
 }

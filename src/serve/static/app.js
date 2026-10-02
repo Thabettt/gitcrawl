@@ -3,6 +3,19 @@
 
   var applib = window.gitcrawlApp;
   var root = document.documentElement;
+  var busyTimer = null;
+
+  function markBusy() {
+    root.setAttribute("data-busy", "true");
+    window.clearTimeout(busyTimer);
+    busyTimer = window.setTimeout(clearBusy, 8000);
+  }
+
+  function clearBusy() {
+    root.setAttribute("data-busy", "false");
+    window.clearTimeout(busyTimer);
+    busyTimer = null;
+  }
 
   function preferredTheme() {
     var current = root.getAttribute("data-theme");
@@ -310,9 +323,13 @@
         showToast("Network error");
       });
       document.body.addEventListener("htmx:afterSwap", invalidateRowCache);
+      document.body.addEventListener("htmx:beforeRequest", markBusy);
+      document.body.addEventListener("htmx:afterRequest", clearBusy);
     }
     syncCloneLimit();
     copyHash();
+    document.addEventListener("submit", markBusy);
+    window.addEventListener("pageshow", clearBusy);
     var start = document.getElementById("clone-start");
     if (start) {
       start.addEventListener("click", function () {
@@ -345,6 +362,35 @@
     var closer = target.closest("[data-close]");
     if (closer) {
       closeModal(closer.getAttribute("data-close"));
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) {
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    var target = event.target;
+    var link = target && target.closest ? target.closest("a[href]") : null;
+    if (
+      !link ||
+      link.target ||
+      link.hasAttribute("download") ||
+      link.hasAttribute("data-close") ||
+      link.hasAttribute("data-open")
+    ) {
+      return;
+    }
+    var url;
+    try {
+      url = new URL(link.href, window.location.href);
+    } catch (error) {
+      return;
+    }
+    if (url.origin === window.location.origin) {
+      markBusy();
     }
   });
 

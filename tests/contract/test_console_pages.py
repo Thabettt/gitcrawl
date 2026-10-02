@@ -622,3 +622,18 @@ def test_app_js_invalidates_the_row_cache_after_htmx_swaps(client: TestClient):
     assert "window.gitcrawlApp" in script
     assert "applib.createRowCache" in script
     assert '"htmx:afterSwap", invalidateRowCache' in script
+
+
+def test_busy_feedback_is_wired(client: TestClient, clean, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    run_html = client.get(f"/runs/{run_id}").text
+    dashboard = client.get("/").text
+    css = client.get("/static/app.css").text
+    script = client.get("/static/app.js").text
+
+    assert 'id="clone-estimate-loading"' in run_html
+    assert 'hx-indicator="#clone-estimate-loading"' in run_html
+    assert 'id="nav-progress"' in dashboard
+    assert 'html[data-busy="true"] .nav-progress' in css
+    for marker in ("data-busy", "htmx:beforeRequest", "htmx:afterRequest", "pageshow"):
+        assert marker in script
