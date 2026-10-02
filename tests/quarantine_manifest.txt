@@ -1,6 +1,5 @@
 # Intentionally unwired surface (spec 5.9 / ruling R58, superseding R24 + R57).
 # Every entry must keep at least one test; see tests/unit/test_quarantine_manifest.py.
 discover.pipeline.run_since_scan
-scheduler.state_machine.pel_size
 store.lifecycle.purge_tombstones
 store.upserts.bootstrap_copy

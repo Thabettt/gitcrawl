@@ -164,7 +164,7 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m serve
 - Lazy executor/runner init: serialized in `def016b` (row 13); concurrency regression at `tests/unit/test_app_singletons.py::test_lazy_loader_constructs_once_under_concurrency`.
 - 0004 downgrade lossiness for NULL `repo_id` rows: documented in the migration's `downgrade` docstring (export those rows before downgrading).
 - Keyboard/JS behavior: markup-tested plus a manual console pass checklist in `docs/environment.md`.
-- `runs.error`: sanitized to exception type + status text (≤300 chars, no upstream bodies) in `src/serve/executor.py::_error_message`.
+- `runs.error`: sanitized to exception type + status text, truncated at common upstream-body markers (`{`, `Validation Failed`, `upstream`) and capped at 300 chars, in `src/serve/executor.py::_error_message`; pre-marker or marker-free text can survive up to the 300-char cap.
 
 ## Quality hardening program (2026-10-01)
 
@@ -221,7 +221,7 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Executed tasks 1–4 of `docs/superpowers/plans/2026-10-02-unwired-debt-triage.md`; ruling R58 recorded (commit 35dbd5a).
 - Wiring: `reclaim_stale` reclaimed before the claim loop in `src/discover/pipeline.py` (225d169, test isolation c8e89c3).
 - Deletions per R58: `RetryQueue`, `order_shards`, `plan_id_ranges`, `mirrors`, `graphql_batch`, `fetch_metafiles`, `skeleton.py` and their tests; quarantine manifest updated (5fafdca).
-- Parked-minor fixes: `_error_message` sanitizes run errors (no upstream bodies), migration 0004 downgrade note, console manual checklist; lazy-loader lock was already fixed in def016b (7951b7e).
+- Parked-minor fixes: `_error_message` truncates run errors at upstream-body markers (`{`, `Validation Failed`, `upstream`) with a 300-char cap, migration 0004 downgrade note, console manual checklist; lazy-loader lock was already fixed in def016b (7951b7e).
 - Verification: full suite 1140 tests collected/passed, coverage 96.12% (floor 93); ruff + black clean.
 
 ## QA reconciliation (2026-10-02)
@@ -249,7 +249,7 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 
 - Metrics payload (`src/serve/metrics.py::metrics_payload`, Task 1) wraps `lib.audit.slo_snapshot` and adds limiter pause state, queue PEL, and run counts by status.
 - Routes: `GET /api/metrics` (JSON), `GET /metrics` (cards page), `GET /partials/metrics` (htmx fragment, refreshes `every 10s`). Redis access is injectable via `create_app(metrics_redis=...)`; when Redis is unavailable the payload degrades (`limiter.degraded`/`queue.degraded`) and cards render `n/a` for missing values instead of failing.
-- Thresholds (`src/serve/metrics.py::THRESHOLDS`) map each SLO to `warn`/`fail` boundaries and card classes; an explicit `LABELS` map supplies display names. The dashboard is read-only: no DB or Redis writes in the metrics module or routes (the `pel_size` group creation is pre-existing triage behavior).
+- Thresholds (`src/serve/metrics.py::THRESHOLDS`) map each SLO to `warn`/`fail` boundaries and card classes; an explicit `LABELS` map supplies display names. The metrics module and routes perform no DB writes and no direct Redis writes; the one Redis mutation is `pel_size` creating missing stream groups (`XGROUP CREATE ... MKSTREAM`) on a fresh Redis, which is pre-existing triage behavior.
 - OpenAPI re-pin for the three GET routes: `7ed80e2ee95d9113cf040f05e5c574f774fdc705404b6cf828abd2f22fbf3db1` → `1c5bdb6423fff93eeb2f4f93ff40548ae4d63970d3cdb8844f8109f2dab97f64`; golden snapshots regenerated (new `metrics.json`, `partials_metrics.json`, `api_metrics.json`; `openapi_json.json` changed; `runs_run_id.json` and all other snapshots unchanged). `build_golden_app` injects `metrics_redis=lambda: None` so the new snapshots are environment-independent.
 - Verification: full suite 1165 passed, coverage 95.75% (floor 93); ruff + black clean; golden suite green.
 - Task 3 verification: `test_queue_pel_reflects_delivered_unacked` passes (enqueue -> claim -> `pel == 1`), confirming the `pel_size` wiring retained by triage R58 (commit be0d216). Final Phase 4: full suite 1166 collected/passed, coverage 95.75% (floor 93); ruff + black clean.
