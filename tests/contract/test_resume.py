@@ -206,3 +206,14 @@ def test_resume_requires_csrf(clean, tmp_path, monkeypatch):
     run_id, _ = seed_run(clean, tmp_path)
     client = make_client(clean, tmp_path, runner_factory=fake_runner_factory)
     assert client.post(f"/runs/{run_id}/resume").status_code == 403
+
+
+def test_run_detail_shows_resume_only_for_failed(clean, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    client = make_client(clean, tmp_path, runner_factory=fake_runner_factory)
+    assert "Resume" not in client.get(f"/runs/{run_id}").text
+    with clean.begin() as connection:
+        connection.execute(
+            text("UPDATE runs SET status='failed', error='boom' WHERE id=:id"), {"id": run_id}
+        )
+    assert "Resume" in client.get(f"/runs/{run_id}").text

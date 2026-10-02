@@ -235,3 +235,11 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Executed tasks 1–2 of `docs/superpowers/plans/2026-10-02-qa-reconciliation.md`: quality module `src/serve/quality.py` (acb427f), JSON + partial routes and run-detail panel (8649b96).
 - Execution rulings: null-warn ratio 0.5 (clean-run seed tolerance), injectable clock for deterministic `generated_at`, golden `PATH_PARAMS` + snapshots regenerated, unknown-run 404s, read-only module.
 - Verification: full suite 1150 passed, coverage 96.11% (floor 93); ruff + black clean; golden suite green with the run-detail change insertion-only.
+
+## Run resume Phase 3 (2026-10-02)
+
+- Orphan recovery: startup marks queued/running runs `failed: orphaned`, idempotently (`bfa6c42`, isolation `7f68e73`).
+- Resume route: `POST /runs/{run_id}/resume` re-queues only failed runs, resets items/artifacts first, and reuses the stored `filter_spec`/`filter_hash`; detect-kind branch is present behind `row.get("kind") == "detect"` but unreachable until the detection plan lands (`2bc9216`, `aaac0eb`).
+- Console: Resume form renders on failed run-detail pages only; Jinja whitespace control keeps done/partial output byte-identical (`src/serve/templates/run_detail.html`).
+- OpenAPI re-pin for the resume POST route: `3a025995ea6f8263faa1f68595c6b986088f639de71309c63faeb86ec6b9ad3c` → `7ed80e2ee95d9113cf040f05e5c574f774fdc705404b6cf828abd2f22fbf3db1`; `runs_run_id.json` unchanged.
+- Runbook: `docs/environment.md` "After a crash" (restart marks orphans failed; resume from the run page or console; upserts make re-fetch safe).

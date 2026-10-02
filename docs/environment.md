@@ -221,3 +221,8 @@ During provisioning, a combined setup command was killed by the tool's pipe hand
 - [ ] keyboard rownav (j/k/enter/esc) works on the results table
 - [ ] dark mode toggle persists
 - [ ] clone modal estimate + start on a small run
+
+## After a crash
+1. Restart the app (`python -m serve`) — queued/running runs are marked `failed: orphaned`.
+2. Open the run and click **Resume** (or `POST /runs/{id}/resume` from the console).
+3. Resume re-fetches from the start; upserts make it safe. Detection runs clear their evidence first.

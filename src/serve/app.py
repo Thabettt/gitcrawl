@@ -797,6 +797,23 @@ def create_app(
         if row["status"] != "failed":
             return HTMLResponse("only failed runs can be resumed", status_code=400)
 
+        if row.get("kind") == "detect":
+            from detect.orchestrator import run_detection
+            from detect.packs import load_frozen
+            from serve.detect_spec import parse_detect_spec
+
+            from serve.runner import build_deps
+
+            spec = parse_detect_spec(row["filter_spec"])
+            pack = load_frozen(engine, spec.pack_version)
+
+            def detect_runner(_run_id: int, _spec_doc: dict):
+                return run_detection(build_deps(engine), run_id, spec, pack)
+
+            submit_runner = detect_runner
+        else:
+            submit_runner = runner_for()
+
         def reset_and_queue() -> None:
             reset_run_artifacts(engine, run_id)
             with engine.begin() as connection:
@@ -805,7 +822,7 @@ def create_app(
                 )
 
         await run_in_threadpool(reset_and_queue)
-        executor_for().submit(run_id, runner_for())
+        executor_for().submit(run_id, submit_runner)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @application.get("/runs/{run_id}/quality")
