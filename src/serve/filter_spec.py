@@ -339,7 +339,7 @@ def _describe_token(token: str) -> str:
     return f"not {described}" if excluded else described
 
 
-def _describe_virtual(name: str, value: object) -> str | None:
+def _describe_virtual(name: str, value: object, virtual: Mapping[str, object]) -> str | None:
     if name in _VIRTUAL_COUNT_LABELS:
         qualifier = "at least" if name.startswith("min_") else "at most"
         return f"{qualifier} {value} {_VIRTUAL_COUNT_LABELS[name]}"
@@ -351,13 +351,17 @@ def _describe_virtual(name: str, value: object) -> str | None:
         return "has Dockerfile" if value else "no Dockerfile"
     if name == "owner_country":
         return f"owner country {str(value).upper()}"
+    if name == "min_geo_confidence":
+        if "owner_country" in virtual and value == VIRTUAL_FILTERS["min_geo_confidence"].default:
+            return None
+        return f"country match: {value}"
     return None
 
 
 def describe_spec(spec: FilterSpec) -> str:
     parts = [_describe_token(token) for token in tokenize(spec.q)]
     for name, value in spec.virtual.items():
-        described = _describe_virtual(name, value)
+        described = _describe_virtual(name, value, spec.virtual)
         if described:
             parts.append(described)
     return " · ".join(part for part in parts if part) or "Everything"

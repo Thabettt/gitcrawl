@@ -202,3 +202,16 @@ def test_numeric_count_rows_expose_min_and_max(clean, tmp_path, monkeypatch):
     assert 'name="range_stars_min"' in body
     assert 'name="range_stars_max"' in body
     assert 'name="range_size_min"' in body and 'name="range_size_max"' in body
+
+
+def test_prefilled_loc_filters_round_trip_through_hidden_mirrors(clean, tmp_path, monkeypatch):
+    body = (
+        healthy_client(clean, tmp_path, monkeypatch)
+        .get("/find", params={"min_loc": "5000", "max_loc": "9000"})
+        .text
+    )
+
+    assert re.search(r'<input[^>]*name="min_loc"[^>]*disabled', body)
+    assert re.search(r'<input[^>]*name="max_loc"[^>]*disabled', body)
+    assert re.search(r'<input[^>]*type="hidden"[^>]*name="min_loc"[^>]*value="5000"', body)
+    assert re.search(r'<input[^>]*type="hidden"[^>]*name="max_loc"[^>]*value="9000"', body)

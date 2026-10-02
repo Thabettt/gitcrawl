@@ -16,6 +16,9 @@
 <label class="field" for="field-{{ name }}">
   <span class="field-label">{{ label }}</span>
   <input class="field-input" type="number" min="0" id="field-{{ name }}" name="{{ name }}" value="{{ state.fields.get(name, '') }}" disabled aria-describedby="field-note-{{ name }}">
+  {%- if state.fields.get(name) %}
+  <input type="hidden" name="{{ name }}" value="{{ state.fields.get(name, '') }}">
+  {%- endif %}
   <span class="field-note muted" id="field-note-{{ name }}">{{ note }}</span>
 </label>
 {%- endmacro %}

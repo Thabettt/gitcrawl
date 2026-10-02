@@ -33,3 +33,10 @@ def test_describe_spec_appends_virtual_filters_deterministically():
         "topic rust · license mit · 10–200 stars · org github · "
         "has Dockerfile · owner country DE · at least 100 commits"
     )
+
+
+def test_describe_spec_includes_an_explicit_confidence_threshold():
+    assert describe_spec(make_spec("", {"min_geo_confidence": "name"})) == "country match: name"
+
+    overridden = make_spec("", {"owner_country": "DE", "min_geo_confidence": "exact-iso"})
+    assert describe_spec(overridden) == "owner country DE · country match: exact-iso"
