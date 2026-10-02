@@ -66,6 +66,7 @@ from serve.pages import (
 from serve.payload_cache import CACHE_TTL_SECONDS, RunPayloadCache
 from serve.runner import apply_sort, build_deps, make_runner
 from serve.runs import bundle_file, export_bundle, latest_run_for_hash
+from serve.settings import register_settings
 from serve.virtual_params import VIRTUAL_FILTERS
 from store.models import Owner, Repo, RunItem, Runs
 
@@ -914,6 +915,12 @@ def create_app(
     @application.get("/partials/metrics", response_class=HTMLResponse)
     def metrics_partial(request: Request):
         return _metrics_response(request, "partials/metrics_cards.html")
+
+    register_settings(
+        application,
+        engine_factory=engine_for,
+        token_present=token_present,
+    )
 
     register_pages(
         application,

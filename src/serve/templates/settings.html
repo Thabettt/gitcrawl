@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Limits · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Limits</h1>
+    <p class="muted">Run limits for new searches. Part of System.</p>
+  </div>
+  {% if saved %}<p class="banner" role="status">Settings saved.</p>{% endif %}
+  {% if errors %}
+  <ul class="errors">
+    {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if hints %}
+  <ul class="hints">
+    {% for hint in hints %}<li>{{ hint }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <p class="badge">
+    GitHub token: <strong>{{ "present" if token_present else "missing" }}</strong>
+  </p>
+  <form method="post" action="/settings">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <section class="filter-section">
+      <h2>Search limits</h2>
+      <div class="field-grid">
+        <label class="field">
+          <span class="field-label">Search breadth (slices)</span>
+          <input class="field-input" type="number" name="max_shards" value="{{ values["max_shards"] }}"
+                 {% if "max_shards" in pinned %}readonly{% endif %}>
+          <span class="muted">How many slices a live search may be split into. Broader = longer.</span>
+          {% if "max_shards" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field-label">Repos to keep per search</span>
+          <input class="field-input" type="number" name="max_candidates"
+                 value="{{ values["max_candidates"] }}"
+                 {% if "max_candidates" in pinned %}readonly{% endif %}>
+          <span class="muted">How many matching repos the search holds on to.</span>
+          {% if "max_candidates" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field-label">Repos to save details for</span>
+          <input class="field-input" type="number" name="max_hydrate" value="{{ values["max_hydrate"] }}"
+                 {% if "max_hydrate" in pinned %}readonly{% endif %}>
+          <span class="muted">How many of those get current details fetched (uses your allowance).
+            Cannot exceed “Repos to keep”.</span>
+          {% if "max_hydrate" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field-label">Extra rules to check</span>
+          <input class="field-input" type="number" name="max_enrich" value="{{ values["max_enrich"] }}"
+                 {% if "max_enrich" in pinned %}readonly{% endif %}>
+          <span class="muted">How many repos get file and country checks.</span>
+          {% if "max_enrich" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field-label">Stop a search after (seconds)</span>
+          <input class="field-input" type="number" name="request_deadline_seconds"
+                 value="{{ values["request_deadline_seconds"] }}"
+                 {% if "request_deadline_seconds" in pinned %}readonly{% endif %}>
+          <span class="muted">Long searches abort past this; raise it for corpus builds.</span>
+          {% if "request_deadline_seconds" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+      </div>
+    </section>
+    <section class="filter-section">
+      <h2>Faster saving (batching)</h2>
+      <div class="field-grid">
+        <label class="field">
+          <span class="field-label">Batch repo lookups</span>
+          <input class="field-input" type="checkbox" name="graphql_batch"
+                 {% if values["graphql_batch"] %}checked{% endif %}
+                 {% if "graphql_batch" in pinned %}disabled{% endif %}>
+          <span class="muted">Faster saving with fewer requests. Off = one request per repo.</span>
+          {% if "graphql_batch" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field-label">Repos per batch</span>
+          <input class="field-input" type="number" name="graphql_batch_size"
+                 value="{{ values["graphql_batch_size"] }}"
+                 {% if "graphql_batch_size" in pinned %}readonly{% endif %}>
+          <span class="muted">Keep at 20 or below; GitHub cuts off large batches.</span>
+          {% if "graphql_batch_size" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+      </div>
+    </section>
+    <section class="filter-section">
+      <h2>Request pacing</h2>
+      <div class="field-grid">
+        <label class="field">
+          <span class="field-label">Simultaneous requests</span>
+          <input class="field-input" type="number" name="limiter_max_concurrent"
+                 value="{{ values["limiter_max_concurrent"] }}"
+                 {% if "limiter_max_concurrent" in pinned %}readonly{% endif %}>
+          <span class="muted">How many requests run at once.
+            Keep well under GitHub’s ceiling of 100.</span>
+          {% if "limiter_max_concurrent" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+      </div>
+    </section>
+    <div class="form-actions">
+      <button class="button primary" type="submit">Save</button>
+      <button class="button" type="submit" name="reset" value="1">Reset to defaults</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
