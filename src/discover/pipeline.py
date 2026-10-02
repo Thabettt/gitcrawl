@@ -309,6 +309,10 @@ def run_search_discovery(
         while pending:
             process(pending.popleft())
     else:
+        for queued in queue.reclaim_stale(consumer):
+            if process(queued.shard_id, queued):
+                break
+            queue.ack(queued.stream_id, queued.shard_id)
         while True:
             claimed = queue.claim(consumer, count=1)
             if not claimed:
