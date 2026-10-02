@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine, Row
 from sqlalchemy.engine.row import RowMapping
+from starlette.responses import StreamingResponse
 
 from enrich.cloner import (
     PROGRESS_NAME,
@@ -183,6 +184,21 @@ def export_bundle(
     if format == "json":
         return _json_chunks(engine, run_row, run_id), _MEDIA_TYPES[format]
     return _csv_chunks(engine, run_id), _MEDIA_TYPES[format]
+
+
+def export_run(
+    engine: Engine, run_id: int, *, format: str = "json", runs_root: str = "runs"
+) -> StreamingResponse:
+    if format not in _MEDIA_TYPES:
+        raise ValueError("format", "format must be one of: json, csv")
+    run_row = _row_for_run(engine, run_id)
+    regenerated = not bundle_file(runs_root, run_row["filter_hash"], run_id, format).is_file()
+    chunks, media_type = export_bundle(engine, run_id, format=format, runs_root=runs_root)
+    filename = f"gitcrawl-{run_row['filter_hash']}-{run_id}.{format}"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if regenerated:
+        headers["X-Gitcrawl-Regenerated"] = "true"
+    return StreamingResponse(chunks, media_type=media_type, headers=headers)
 
 
 class CloneRegistry:

@@ -312,14 +312,10 @@ def test_results_page_filter_row_is_a_placeholder(clean, tmp_path, monkeypatch):
 
 def test_results_page_offers_export_with_explanation(clean, tmp_path, monkeypatch):
     run_id = seed_run(clean, tmp_path)
-    with clean.connect() as connection:
-        filter_hash = connection.scalar(
-            text("SELECT filter_hash FROM runs WHERE id = :id"), {"id": run_id}
-        )
     body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}/results").text
 
-    assert f'href="/vsearch/runs/{filter_hash}/export?format=json"' in body
-    assert f'href="/vsearch/runs/{filter_hash}/export?format=csv"' in body
+    assert f'href="/runs/{run_id}/export?format=json"' in body
+    assert f'href="/runs/{run_id}/export?format=csv"' in body
     assert "Downloads the frozen result list as JSON or CSV." in body
 
 

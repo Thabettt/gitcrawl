@@ -35,6 +35,10 @@ CSRF_INPUT = re.compile(r'(<input type="hidden" name="csrf" value=")[^"]*(")')
 DISK_WARNING = re.compile(
     r"low disk: estimated [0-9.]+ MB with [0-9.]+ MB free \(reserve [0-9.]+ MB\)"
 )
+CLONE_DESTINATION = re.compile(
+    r'(<p id="clone-destination" class="muted">Destination: <span class="mono">)'
+    r".*?(/&lt;hash&gt;</span></p>)"
+)
 
 FILTER_SPEC_JSON = '{"gitcrawl_filter": 1, "q": "language:rust", "sort": "stars", "order": "desc"}'
 
@@ -112,6 +116,7 @@ PATH_PARAMS = {
     "/api/runs/{run_id}/diff": {"run_id": RUN_A},
     "/runs/{run_id}/diff": {"run_id": RUN_A},
     "/runs/{run_id}/results": {"run_id": RUN_A},
+    "/runs/{run_id}/export": {"run_id": RUN_A},
     "/runs/{run_id}": {"run_id": RUN_A},
     "/runs/{run_id}/quality": {"run_id": RUN_A},
     "/runs/{run_id}/clone-estimate": {"run_id": RUN_A},
@@ -123,6 +128,7 @@ PATH_PARAMS = {
 QUERY = {
     "/vsearch/repos": "?q=language:rust&sort=stars&order=desc",
     "/api/runs/{run_id}/diff": f"?against={RUN_B}",
+    "/runs/{run_id}/export": "?format=json",
 }
 HEADERS = {"/filters": {"Accept": "text/html"}}
 EXTRA_CASES = (
@@ -155,6 +161,7 @@ def normalize_html(body: str) -> str:
     normalized = CSRF_INPUT.sub(r"\1<redacted>\2", normalized)
     normalized = RELATIVE_TIME.sub("<relative-time>", normalized)
     normalized = DISK_WARNING.sub("<disk-warning>", normalized)
+    normalized = CLONE_DESTINATION.sub(r"\1<clone-root>\2", normalized)
     return normalized
 
 

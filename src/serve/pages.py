@@ -36,6 +36,7 @@ from serve.filter_spec import (
 from serve.forms import build_spec_from_form, form_state, spec_to_form_values
 from serve.library import LibraryError, create_filter, get_filter, list_filters
 from serve.metrics import severity
+from serve.quality import sentence_for
 from serve.runs import (
     CloneRegistry,
     cancel_clone,
@@ -54,6 +55,7 @@ HEALTH_TIMEOUT_SECONDS = 0.25
 HEALTH_CACHE_SECONDS = 5.0
 RECENT_RUNS_LIMIT = 20
 TABLE_PAGE_SIZE = 50
+PREVIEW_PAGE_SIZE = 20
 RUN_SORT_COLUMNS = {
     "stars": RunItem.stargazers,
     "pushed": RunItem.pushed_at,
@@ -426,10 +428,11 @@ def render_library(
 
 
 def quality_panel(request: Request, report) -> HTMLResponse:
+    checks = [{"status": check.status, "sentence": sentence_for(check)} for check in report.checks]
     return _templates.TemplateResponse(
         request,
         "partials/quality.html",
-        {"report": report, "badge": {"ok": "good", "warn": "warn", "fail": "bad"}[report.status]},
+        {"checks": checks, "badge": {"ok": "good", "warn": "warn", "fail": "bad"}[report.status]},
     )
 
 
@@ -504,8 +507,68 @@ def _run_detail_summary(row, item_count: int) -> dict:
         "duration": _duration(row["started_at"], row["finished_at"]),
         "item_count": item_count,
         "polling": row["status"] in NON_TERMINAL_STATUSES,
+        "q": _raw_query(row["filter_spec"]),
         "flags": _run_flags(row, _virtual_filters(row["filter_spec"])),
     }
+
+
+def _raw_query(filter_spec: object) -> str:
+    if isinstance(filter_spec, dict):
+        value = filter_spec.get("q")
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def _int_or_zero(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _dockerfile_count(engine: Engine, run_id: int) -> int:
+    with engine.connect() as connection:
+        count = connection.scalar(
+            text(
+                "SELECT count(*) FROM run_items "
+                "WHERE run_id = :run_id AND virtuals->>'has_dockerfile' = 'true'"
+            ),
+            {"run_id": run_id},
+        )
+    return int(count or 0)
+
+
+def _run_counts(engine: Engine, row) -> dict[str, dict]:
+    counts: dict[str, dict] = {
+        "found": {
+            "label": "Found",
+            "explain": "Repos GitHub said matched your search.",
+            "value": _int_or_zero(row["fetched"]),
+        },
+        "saved": {
+            "label": "Saved",
+            "explain": "We fetched each repo’s current details.",
+            "value": _int_or_zero(row["inserted"]) + _int_or_zero(row["updated"]),
+        },
+        "passed": {
+            "label": "Passed filters",
+            "explain": "Also met your file and country rules.",
+            "value": _int_or_zero(row["unchanged"]),
+        },
+    }
+    if _virtual_filters(row["filter_spec"]).get("has_dockerfile"):
+        counts["with_file"] = {
+            "label": "With a Dockerfile",
+            "explain": "Contain the file you asked about.",
+            "value": _dockerfile_count(engine, row["id"]),
+        }
+    counts["unavailable"] = {
+        "label": "Unavailable",
+        "explain": "Deleted or private by the time we looked.",
+        "value": _int_or_zero(row["skipped"]),
+    }
+    return counts
 
 
 def results_context(
@@ -965,7 +1028,7 @@ def register_pages(
             engine,
             run_id,
             page=1,
-            per_page=TABLE_PAGE_SIZE,
+            per_page=PREVIEW_PAGE_SIZE,
             sort="stars",
             dir="desc",
             run_row=row,
@@ -983,6 +1046,10 @@ def register_pages(
             {
                 "run": _run_detail_summary(row, item_count),
                 "run_id": run_id,
+                "sentence": _spec_sentence(row["filter_spec"]),
+                "counts": _run_counts(engine, row),
+                "preview_page_size": PREVIEW_PAGE_SIZE,
+                "clone_root": clone_root,
                 "csrf_token": request.state.csrf_token,
                 "estimate": estimate,
                 "progress": progress,
@@ -1019,7 +1086,10 @@ def register_pages(
         return templates.TemplateResponse(
             request,
             "partials/status.html",
-            {"run": _run_detail_summary(row, _item_count(engine, run_id))},
+            {
+                "run": _run_detail_summary(row, _item_count(engine, run_id)),
+                "counts": _run_counts(engine, row),
+            },
         )
 
     @app.get("/runs/{run_id}/results", response_class=HTMLResponse)

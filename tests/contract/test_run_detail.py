@@ -121,6 +121,12 @@ def make_client(engine: Engine, tmp_path) -> TestClient:
     return TestClient(application, raise_server_exceptions=False)
 
 
+def healthy_client(engine: Engine, tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("GITHUB_TOKEN", "super-secret-token-value")
+    monkeypatch.delenv("GITHUB_TOKENS", raising=False)
+    return make_client(engine, tmp_path)
+
+
 def payload_item(repo_id: int, full_name: str, stars: int, **overrides) -> RunPayloadItem:
     values: dict[str, object] = {
         "pushed_at": "2026-01-02T00:00:00Z",
@@ -668,3 +674,64 @@ def test_table_fragment_shows_a_visible_row_count(clean: Engine, tmp_path):
     assert 'data-shown="3"' in html
     assert 'data-total="3"' in html
     assert html.index('id="run-table-count"') < html.index('class="table-wrap"')
+
+
+def test_run_detail_shows_filter_sentence_and_explained_counts(clean, tmp_path, monkeypatch):
+    run_id = seed_run(clean, tmp_path)
+    body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}").text
+    assert "Rust" in body
+    for line in (
+        "Repos GitHub said matched your search.",
+        "We fetched each repo’s current details.",
+        "Deleted or private by the time we looked.",
+    ):
+        assert line in body
+    assert "View all results" in body
+    assert "Detect agent use" in body and "disabled" in body
+
+
+def test_quality_panel_uses_sentences(clean, tmp_path, monkeypatch):
+    run_id = seed_run(clean, tmp_path)
+    body = healthy_client(clean, tmp_path, monkeypatch).get(f"/partials/runs/{run_id}/quality").text
+    assert "count_parity" not in body
+    assert "counts match" in body.lower()
+
+
+def test_export_links_point_at_this_run(clean, tmp_path, monkeypatch):
+    run_id = seed_run(clean, tmp_path)
+    body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}").text
+    assert f'href="/runs/{run_id}/export?format=json"' in body
+    assert f'href="/runs/{run_id}/export?format=csv"' in body
+
+
+def test_run_scoped_export_downloads_this_run(clean, tmp_path, monkeypatch):
+    run_id = seed_run(clean, tmp_path)
+    response = healthy_client(clean, tmp_path, monkeypatch).get(
+        f"/runs/{run_id}/export?format=json"
+    )
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run_id
+
+
+def test_run_scoped_export_downloads_the_viewed_run_not_the_latest(
+    clean: Engine, tmp_path, monkeypatch
+):
+    first = seed_run(clean, tmp_path, items=[payload_item(101, "octo/alpha", 30)])
+    second = seed_run(clean, tmp_path, items=[payload_item(1296269, "octo/hello", 80)])
+    assert second != first
+
+    response = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{first}/export?format=json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == first
+    assert [item["full_name"] for item in payload["items"]] == ["octo/alpha"]
+
+
+def test_clone_modal_shows_destination_and_tradeoffs(clean, tmp_path, monkeypatch):
+    run_id = seed_run(clean, tmp_path)
+    body = healthy_client(clean, tmp_path, monkeypatch).get(f"/runs/{run_id}").text
+    assert "Destination:" in body
+    assert "latest snapshot only" in body
+    assert "no history, smallest disk" in body
+    assert "recent history, largest disk" in body

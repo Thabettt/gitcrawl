@@ -1,8 +1,11 @@
 <section id="quality-panel" class="panel quality-{{ badge }}">
-  <h2>Run quality: {{ badge }}</h2>
-  <ul>
-    {% for check in report.checks %}
-    <li class="check-{{ check.status }}"><strong>{{ check.name }}</strong>: {{ check.detail }}</li>
+  <h2>Data quality: {{ badge }}</h2>
+  <ul class="quality-checks">
+    {% for check in checks %}
+    <li class="check-{{ check.status }}">
+      <strong>{{ check.sentence }}</strong>
+      {%- if check.status != 'ok' %} <span class="muted">— {{ 'needs attention' if check.status == 'warn' else 'failed' }}</span>{% endif %}
+    </li>
     {% endfor %}
   </ul>
 </section>

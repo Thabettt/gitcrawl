@@ -1,40 +1,56 @@
 {% extends "base.html" %}
-{% block title %}Run {{ run.id if run else "not found" }} · gitcrawl{% endblock %}
+{% block title %}Search {{ run.id if run else "not found" }} · gitcrawl{% endblock %}
 {% block body %}
 {% if not run %}
 <section class="panel" id="run-not-found">
-  <h1>Run not found</h1>
-  <p class="muted">No run with this id exists in the database.</p>
-  <p><a href="/">Back to dashboard</a></p>
+  <h1>Search not found</h1>
+  <p class="muted">No search with this id exists in the database.</p>
+  <p><a href="/runs">All searches</a></p>
 </section>
 {% else %}
 <section class="panel" id="run-header" data-run-id="{{ run.id }}">
   <div class="panel-head">
-    <h1>Run {{ run.id }}</h1>
+    <h1>Search #{{ run.id }} — {{ sentence }}</h1>
     <span class="run-hash-wrap">
       <span id="run-hash" class="mono" data-hash="{{ run.filter_hash }}">{{ run.hash_short }}</span>
       <button id="copy-hash" class="button ghost" type="button" data-copy="{{ run.filter_hash }}">Copy hash</button>
       <button id="copy-link" class="button ghost" type="button" data-copy-url="true">Copy link</button>
     </span>
   </div>
-  <div class="run-meta">
-    <span id="run-created" data-field="created">created {{ run.created_at }}</span>
-    <span id="run-started" data-field="started">started {{ run.started_at }}</span>
-    <span id="run-finished" data-field="finished">finished {{ run.finished_at }}</span>
-    <span id="run-duration" data-field="duration">duration {{ run.duration }}</span>
-  </div>
   {% include "partials/status.html" %}
+  <details id="run-timestamps">
+    <summary>Technical details</summary>
+    <div class="run-meta">
+      <span id="run-created" data-field="created">created {{ run.created_at }}</span>
+      <span id="run-started" data-field="started">started {{ run.started_at }}</span>
+      <span id="run-finished" data-field="finished">finished {{ run.finished_at }}</span>
+      <span id="run-duration" data-field="duration">duration {{ run.duration }}</span>
+    </div>
+  </details>
+</section>
+<section class="panel" id="run-asked-for">
+  <details>
+    <summary>What this search asked for</summary>
+    <p>{{ sentence }}</p>
+    <details>
+      <summary>Technical details</summary>
+      <p class="mono">{{ run.q or '—' }}</p>
+    </details>
+  </details>
 </section>
 <section hx-get="/partials/runs/{{ run.id }}/quality" hx-trigger="load" hx-swap="outerHTML">
-  <p>Run quality is loading…</p>
+  <p>Data quality is loading…</p>
 </section>
 <section class="panel" id="run-actions">
   <div class="form-actions">
-    <a id="export-json" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=json">Export JSON</a>
-    <a id="export-csv" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=csv">Export CSV</a>
+    <button id="detect-agent-use" class="button" type="button" disabled title="Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.">Detect agent use</button>
+    <a id="export-json" class="button" href="/runs/{{ run.id }}/export?format=json">Export JSON</a>
+    <a id="export-csv" class="button" href="/runs/{{ run.id }}/export?format=csv">Export CSV</a>
+    <button id="clone-open" class="button" type="button" data-open="clone-modal">Clone code…</button>
+    <a id="compare-with" class="button ghost" href="/runs/{{ run.id }}/diff">Compare with…</a>
     <form id="replay" action="/runs/{{ run.id }}/replay" method="post">
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
-      <button class="button primary" type="submit">Replay</button>
+      <button class="button primary" type="submit">Search again</button>
     </form>
 {%- if run.status == 'failed' %}
     <form id="resume" method="post" action="/runs/{{ run.id }}/resume">
@@ -42,11 +58,14 @@
       <button class="button primary" type="submit">Resume</button>
     </form>
 {%- endif %}
-    <button id="clone-open" class="button" type="button" data-open="clone-modal">Clone</button>
   </div>
+  <p id="detect-agent-use-note" class="muted">Detect agent use scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo. Coming soon.</p>
+  <p class="muted">Export downloads the frozen result list as JSON or CSV. Clone copies repo contents to this machine — no GitHub API calls; uses disk and time. Search again starts a new search with the same filter; the old results stay frozen.</p>
+  <p><a href="/runs">All searches</a></p>
 </section>
 <span id="table-loading" class="htmx-indicator muted" role="status">Loading results…</span>
 <div id="run-table">{% include "partials/table.html" %}</div>
+<p id="view-all-results"><a class="button" href="/runs/{{ run.id }}/results">View all results →</a></p>
 {% include "partials/clone_modal.html" %}
 <section class="panel" id="clone-progress-panel">
   <div class="panel-head">

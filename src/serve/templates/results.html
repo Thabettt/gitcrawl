@@ -24,8 +24,8 @@
 </section>
 <section class="panel" id="results-actions">
   <div class="form-actions">
-    <a id="export-json" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=json">Export JSON</a>
-    <a id="export-csv" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=csv">Export CSV</a>
+    <a id="export-json" class="button" href="/runs/{{ run.id }}/export?format=json">Export JSON</a>
+    <a id="export-csv" class="button" href="/runs/{{ run.id }}/export?format=csv">Export CSV</a>
   </div>
   <p class="muted">Downloads the frozen result list as JSON or CSV.</p>
 </section>

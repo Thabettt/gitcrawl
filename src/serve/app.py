@@ -16,7 +16,6 @@ from fastapi.responses import (
     JSONResponse,
     RedirectResponse,
     Response,
-    StreamingResponse,
 )
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.engine import Engine
@@ -65,7 +64,7 @@ from serve.pages import (
 )
 from serve.payload_cache import CACHE_TTL_SECONDS, RunPayloadCache
 from serve.runner import apply_sort, build_deps
-from serve.runs import bundle_file, export_bundle, latest_run_for_hash
+from serve.runs import export_run, latest_run_for_hash
 from serve.settings import register_settings
 from serve.system import register_system
 from serve.virtual_params import VIRTUAL_FILTERS
@@ -632,21 +631,13 @@ def create_app(
                 status_code=404,
                 content={"error": "run_not_ready", "filter_hash": filter_hash},
             )
-        regenerated = not bundle_file(runs_root, filter_hash, run_row["id"], format).is_file()
         try:
-            chunks, media_type = export_bundle(
-                bound_engine, run_row["id"], format=format, runs_root=runs_root
-            )
+            return export_run(bound_engine, run_row["id"], format=format, runs_root=runs_root)
         except KeyError:
             return JSONResponse(
                 status_code=404,
                 content={"error": "run_not_found", "filter_hash": filter_hash},
             )
-        filename = f"gitcrawl-{filter_hash}-{run_row['id']}.{format}"
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        if regenerated:
-            headers["X-Gitcrawl-Regenerated"] = "true"
-        return StreamingResponse(chunks, media_type=media_type, headers=headers)
 
     def is_form_request(request: Request) -> bool:
         content_type = request.headers.get("content-type", "")
@@ -842,6 +833,25 @@ def create_app(
         await run_in_threadpool(reset_and_queue)
         executor_for().submit(run_id, submit_runner)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @application.get("/runs/{run_id}/export")
+    def export_run_route(run_id: int, format: str = "json"):
+        if format not in ("json", "csv"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_param",
+                    "param": "format",
+                    "hint": "format must be one of: json, csv",
+                },
+            )
+        try:
+            return export_run(engine_for(), run_id, format=format, runs_root=runs_root)
+        except KeyError:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "run_not_found", "run_id": run_id},
+            )
 
     @application.get("/runs/{run_id}/quality")
     def run_quality_json(run_id: int):

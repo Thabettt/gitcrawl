@@ -128,7 +128,7 @@ def test_run_detail_renders_quality_panel(clean, tmp_path, monkeypatch):
     run_id, _ = seed_run(clean, tmp_path)
     client = healthy_client(clean, tmp_path, monkeypatch)
     response = client.get(f"/runs/{run_id}")
-    assert "Run quality" in response.text
+    assert "Data quality" in response.text
     assert f'hx-get="/partials/runs/{run_id}/quality"' in response.text
 
 
@@ -137,5 +137,6 @@ def test_quality_partial_renders_checks(clean, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
     response = client.get(f"/partials/runs/{run_id}/quality")
     assert response.status_code == 200
-    assert "count_parity" in response.text
-    assert "bundle" in response.text
+    assert "Result counts match what was stored" in response.text
+    assert "Export bundle readable" in response.text
+    assert "count_parity" not in response.text

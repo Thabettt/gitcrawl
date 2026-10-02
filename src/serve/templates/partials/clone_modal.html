@@ -19,6 +19,7 @@
       <h2 id="clone-modal-title">Clone top repos</h2>
       <button id="clone-close" class="button ghost" type="button" data-close="clone-modal" aria-label="Close clone dialog">Close</button>
     </div>
+    <p id="clone-destination" class="muted">Destination: <span class="mono">{{ clone_root }}/&lt;hash&gt;</span></p>
     <form id="clone-controls"
           hx-get="/runs/{{ run.id }}/clone-estimate"
           hx-trigger="change"
@@ -32,9 +33,9 @@
       </div>
       <fieldset class="clone-modes">
         <legend>Mode</legend>
-        <label><input type="radio" name="mode" value="shallow" checked> shallow</label>
-        <label><input type="radio" name="mode" value="file_only"> file only</label>
-        <label><input type="radio" name="mode" value="windowed"> windowed</label>
+        <label><input type="radio" name="mode" value="shallow" checked> shallow — <span class="muted">latest snapshot only</span></label>
+        <label><input type="radio" name="mode" value="file_only"> file only — <span class="muted">no history, smallest disk</span></label>
+        <label><input type="radio" name="mode" value="windowed"> windowed — <span class="muted">recent history, largest disk</span></label>
       </fieldset>
     </form>
     <span id="clone-estimate-loading" class="htmx-indicator muted" role="status">Updating estimate…</span>

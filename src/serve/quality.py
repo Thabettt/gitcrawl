@@ -13,6 +13,16 @@ from store.models import RunItem, Runs
 
 _SPARSE_EXPECTED = {"country_iso"}
 _WARN_NULL_RATIO = 0.5
+SENTENCES: dict[str, str] = {
+    "count_parity": "Result counts match what was stored",
+    "duplicate_full_names": "No duplicate repository names",
+    "missing_language": "{percent} missing language",
+    "missing_license_spdx": "{percent} missing license",
+    "missing_country_iso": "{percent} missing country",
+    "incomplete": "Data completeness",
+    "bundle": "Export bundle readable",
+    "field_coverage": "All enriched fields have data",
+}
 
 
 @dataclass(frozen=True)
@@ -21,6 +31,16 @@ class Check:
     status: str
     detail: str
     value: object | None = None
+
+
+def sentence_for(check: Check) -> str:
+    template = SENTENCES.get(check.name)
+    if template is None:
+        return "Data check"
+    if "{percent}" in template:
+        ratio = float(check.value) if isinstance(check.value, (int, float)) else 0.0
+        return template.replace("{percent}", f"{ratio:.0%}")
+    return template
 
 
 @dataclass(frozen=True)

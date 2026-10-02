@@ -638,8 +638,8 @@ def test_run_page_renders_banner_rows_and_links(clean: Engine, tmp_path):
     assert "done" in html
     assert 'id="run-items"' in html
     assert "octo/hello" in html
-    assert f"/vsearch/runs/{filter_hash}/export?format=json" in html
-    assert f"/vsearch/runs/{filter_hash}/export?format=csv" in html
+    assert f"/runs/{run_id}/export?format=json" in html
+    assert f"/runs/{run_id}/export?format=csv" in html
     assert f'action="/runs/{run_id}/replay"' in html
     assert re.search(rf'<span id="run-hash"[^>]*>{filter_hash[:8]}</span>', html)
 
