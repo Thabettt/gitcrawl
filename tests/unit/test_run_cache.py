@@ -70,3 +70,22 @@ def test_run_once_propagates_producer_error_and_clears_in_flight():
 
     assert cache.run_once("key", lambda: "recovered") == "recovered"
     assert attempts["n"] == 1
+
+
+def test_run_once_waiter_timeout_raises_deadline_error():
+    from concurrent.futures import Future
+
+    from lib.deadlines import DeadlineExceededError
+
+    cache = RunPayloadCache()
+    cache._inflight["key"] = Future()
+
+    with pytest.raises(DeadlineExceededError) as excinfo:
+        cache.run_once("key", lambda: "never", timeout=0.01)
+
+    assert excinfo.value.retry_after == 0.01
+
+
+def test_run_once_waiter_returns_quickly_for_a_fast_producer():
+    cache = RunPayloadCache()
+    assert cache.run_once("key", lambda: "value", timeout=1.0) == "value"

@@ -7,6 +7,8 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import TypeVar
 
+from lib.deadlines import DeadlineExceededError
+
 CACHE_TTL_SECONDS = 120.0
 
 T = TypeVar("T")
@@ -50,7 +52,7 @@ class RunPayloadCache:
             while len(self._entries) > self._max_entries:
                 self._entries.popitem(last=False)
 
-    def run_once(self, key: str, producer: Callable[[], T]) -> T:
+    def run_once(self, key: str, producer: Callable[[], T], *, timeout: float | None = None) -> T:
         with self._lock:
             cached = self._get_locked(key)
             if cached is not None:
@@ -63,7 +65,12 @@ class RunPayloadCache:
             else:
                 owner = False
         if not owner:
-            return pending.result()
+            try:
+                return pending.result(timeout=timeout)
+            except DeadlineExceededError:
+                raise
+            except TimeoutError as exc:
+                raise DeadlineExceededError(timeout or 0.0) from exc
         try:
             value = producer()
         except BaseException as exc:

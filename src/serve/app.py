@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from discover.search_shards import RequestFailed
+from lib.deadlines import DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve.diff import diff_runs
 from serve.executor import RunExecutor, Runner, RunPayload, RunPayloadItem, create_run
@@ -165,6 +166,13 @@ def _library_error_response(exc: LibraryError) -> JSONResponse:
     return JSONResponse(
         status_code=_LIBRARY_STATUS.get(exc.code, 400),
         content={"error": exc.code, "message": exc.message, "hints": list(exc.hints)},
+    )
+
+
+def _timeout_response(exc: DeadlineExceededError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"error": "timeout", "retry_after": max(1, int(exc.retry_after))},
     )
 
 
@@ -363,6 +371,14 @@ def create_app(
 
         return cast(RunExecutor, loaders.get("executor", build))
 
+    def run_with_deadline(job: Callable[[], object], timeout: float) -> object:
+        try:
+            return executor_for().submit_call(job).result(timeout=timeout)
+        except DeadlineExceededError:
+            raise
+        except TimeoutError:
+            raise DeadlineExceededError(timeout) from None
+
     @application.get("/vsearch/repos")
     def list_repos(request: Request):
         supplied = request.query_params.multi_items()
@@ -423,12 +439,16 @@ def create_app(
                 },
             )
         key = spec_hash(spec)
+        timeout = request_deadline_seconds()
         try:
             runner = runner_for()
             payload = payload_cache.run_once(
                 key,
-                lambda: executor_for().submit_call(lambda: runner(0, spec_to_dict(spec))).result(),
+                lambda: run_with_deadline(lambda: runner(0, spec_to_dict(spec)), timeout),
+                timeout=timeout,
             )
+        except DeadlineExceededError as exc:
+            return _timeout_response(exc)
         except (RequestFailed, PartialResultsError):
             return JSONResponse(
                 status_code=502,
@@ -500,7 +520,16 @@ def create_app(
                 captured.append(exc)
                 raise
 
-        await asyncio.wrap_future(executor_for().submit(run_id, runner=capturing))
+        timeout = request_deadline_seconds()
+        try:
+            await asyncio.wait_for(
+                asyncio.wrap_future(executor_for().submit(run_id, runner=capturing)),
+                timeout,
+            )
+        except DeadlineExceededError as exc:
+            return _timeout_response(exc)
+        except TimeoutError:
+            return _timeout_response(DeadlineExceededError(timeout))
         if captured:
             error = captured[0]
             if isinstance(error, ThrottledError):

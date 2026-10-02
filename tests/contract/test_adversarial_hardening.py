@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 from alembic import command
 from fastapi.testclient import TestClient
@@ -258,3 +260,53 @@ def test_chunked_body_without_content_length_is_capped(clean: Engine, tmp_path):
     )
 
     assert response.status_code == 413
+
+
+def test_get_repos_timeout_returns_503(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_REQUEST_DEADLINE_SECONDS", "0.05")
+    release = threading.Event()
+    started = threading.Event()
+
+    def blocking(run_id: int, filter_spec: dict) -> RunPayload:
+        started.set()
+        release.wait(10)
+        return RunPayload(total_count=0, items=[])
+
+    client = make_client(clean, tmp_path, runner=blocking)
+    try:
+        response = client.get("/vsearch/repos", params={"q": "language:rust"})
+    finally:
+        release.set()
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "timeout", "retry_after": 1}
+
+
+def test_post_run_timeout_returns_503(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_REQUEST_DEADLINE_SECONDS", "0.05")
+    release = threading.Event()
+
+    def blocking(run_id: int, filter_spec: dict) -> RunPayload:
+        release.wait(10)
+        return RunPayload(total_count=0, items=[])
+
+    client = make_client(clean, tmp_path, runner=blocking)
+    try:
+        response = client.post("/vsearch/run", json=FILTER)
+    finally:
+        release.set()
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "timeout", "retry_after": 1}
+
+
+def test_deadline_env_does_not_affect_a_fast_run(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(
+        clean, tmp_path, runner=counting_runner(RunPayload(total_count=0, items=[]), calls)
+    )
+
+    response = client.post("/vsearch/run", json=FILTER)
+
+    assert response.status_code == 200
+    assert len(calls) == 1
