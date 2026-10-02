@@ -250,6 +250,7 @@ def build_golden_app(engine: Engine, runs_root: Path):
         clock=lambda: 0.0,
         redis_ping=lambda: True,
         token_present=lambda: True,
+        metrics_redis=lambda: None,
     )
 
 

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Metrics · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>SLO dashboard</h1>
+    <button class="button ghost" type="button" hx-get="/partials/metrics" hx-target="#metrics-cards" hx-swap="outerHTML">Refresh</button>
+  </div>
+  {% include "partials/metrics_cards.html" %}
+</section>
+{% endblock %}

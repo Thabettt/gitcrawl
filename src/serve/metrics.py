@@ -21,6 +21,16 @@ THRESHOLDS = {
     "geo_unmatched_rate": ("gt", 0.4, 0.6),
 }
 
+LABELS = {
+    "search_remaining": "Search remaining",
+    "incomplete_results_ratio": "Incomplete ratio",
+    "rate_422": "422 rate",
+    "rate_403_429": "403/429 rate",
+    "p95_latency_ms": "p95 latency",
+    "shard_coverage": "Shard coverage",
+    "geo_unmatched_rate": "Geo unmatched",
+}
+
 
 def severity(name: str, value) -> str:
     if value is None:

@@ -1,0 +1,16 @@
+<section id="metrics-cards" hx-get="/partials/metrics" hx-trigger="every 10s" hx-swap="outerHTML">
+  <div class="cards">
+    {% for name, value in payload.slo.items() %}
+    <article class="card {{ severity(name, value) }}">
+      <h3>{{ labels[name] }}</h3>
+      <p>{{ 'n/a' if value is none else value }}</p>
+    </article>
+    {% endfor %}
+    <article class="card {{ 'na' if payload.queue.pel is none else 'ok' }}">
+      <h3>Queue PEL</h3>
+      <p>{{ 'n/a' if payload.queue.pel is none else payload.queue.pel }}</p>
+    </article>
+  </div>
+  <p class="limiter">Paused buckets: {{ payload.limiter.paused|length }}
+    {% if payload.limiter.degraded %}(degraded: no Redis){% endif %}</p>
+</section>

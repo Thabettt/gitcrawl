@@ -244,3 +244,11 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - OpenAPI re-pin for the resume POST route: `3a025995ea6f8263faa1f68595c6b986088f639de71309c63faeb86ec6b9ad3c` → `7ed80e2ee95d9113cf040f05e5c574f774fdc705404b6cf828abd2f22fbf3db1`; `runs_run_id.json` unchanged.
 - Runbook: `docs/environment.md` "After a crash" (restart marks orphans failed; resume from the run page or console; upserts make re-fetch safe).
 - Verification: full suite 1157 collected/passed, coverage 95.79% (floor 93); ruff + black clean; golden suite green; the detect branch is present but unreachable/untested until the detection plan lands.
+
+## SLO dashboard Phase 4 (2026-10-02)
+
+- Metrics payload (`src/serve/metrics.py::metrics_payload`, Task 1) wraps `lib.audit.slo_snapshot` and adds limiter pause state, queue PEL, and run counts by status.
+- Routes: `GET /api/metrics` (JSON), `GET /metrics` (cards page), `GET /partials/metrics` (htmx fragment, refreshes `every 10s`). Redis access is injectable via `create_app(metrics_redis=...)`; when Redis is unavailable the payload degrades (`limiter.degraded`/`queue.degraded`) and cards render `n/a` for missing values instead of failing.
+- Thresholds (`src/serve/metrics.py::THRESHOLDS`) map each SLO to `warn`/`fail` boundaries and card classes; an explicit `LABELS` map supplies display names. The dashboard is read-only: no DB or Redis writes in the metrics module or routes (the `pel_size` group creation is pre-existing triage behavior).
+- OpenAPI re-pin for the three GET routes: `7ed80e2ee95d9113cf040f05e5c574f774fdc705404b6cf828abd2f22fbf3db1` → `1c5bdb6423fff93eeb2f4f93ff40548ae4d63970d3cdb8844f8109f2dab97f64`; golden snapshots regenerated (new `metrics.json`, `partials_metrics.json`, `api_metrics.json`; `openapi_json.json` changed; `runs_run_id.json` and all other snapshots unchanged). `build_golden_app` injects `metrics_redis=lambda: None` so the new snapshots are environment-independent.
+- Verification: full suite 1165 passed, coverage 95.75% (floor 93); ruff + black clean; golden suite green.

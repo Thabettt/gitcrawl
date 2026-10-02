@@ -26,6 +26,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from discover.search_shards import RequestFailed
 from lib.deadlines import DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
+from serve import pages
 from serve.diff import diff_runs
 from serve.executor import (
     RunExecutor,
@@ -342,6 +343,7 @@ def create_app(
     clock: Callable[[], float] = time.time,
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
+    metrics_redis: Callable[[], object] | None = None,
 ) -> FastAPI:
     loaders = _LazyLoaders()
     payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
@@ -866,6 +868,49 @@ def create_app(
         except KeyError:
             return HTMLResponse("run not found", status_code=404)
         return quality_panel(request, report)
+
+    def metrics_redis_client() -> object | None:
+        if metrics_redis is not None:
+            return metrics_redis()
+        url = os.environ.get("REDIS_URL")
+        if not url:
+            return None
+        try:
+            import redis as redis_module
+
+            client = redis_module.Redis.from_url(url, socket_connect_timeout=0.5)
+            client.ping()
+            return client
+        except Exception:
+            return None
+
+    @application.get("/api/metrics")
+    def api_metrics():
+        from serve.metrics import metrics_payload
+
+        return metrics_payload(engine_for(), redis_client=metrics_redis_client())
+
+    def _metrics_response(request: Request, template: str):
+        from serve.metrics import LABELS, metrics_payload
+
+        payload = metrics_payload(engine_for(), redis_client=metrics_redis_client())
+        return pages._templates.TemplateResponse(
+            request,
+            template,
+            {
+                "payload": payload,
+                "labels": LABELS,
+                "csrf_token": request.state.csrf_token,
+            },
+        )
+
+    @application.get("/metrics", response_class=HTMLResponse)
+    def metrics_page(request: Request):
+        return _metrics_response(request, "metrics.html")
+
+    @application.get("/partials/metrics", response_class=HTMLResponse)
+    def metrics_partial(request: Request):
+        return _metrics_response(request, "partials/metrics_cards.html")
 
     register_pages(
         application,

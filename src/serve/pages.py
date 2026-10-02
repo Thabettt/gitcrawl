@@ -29,6 +29,7 @@ from serve.executor import RunExecutor, Runner, create_run
 from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
 from serve.forms import build_spec_from_form, form_state, spec_to_form_values
 from serve.library import LibraryError, create_filter, get_filter, list_filters
+from serve.metrics import severity
 from serve.runs import (
     CloneRegistry,
     cancel_clone,
@@ -66,6 +67,7 @@ _templates = Jinja2Templates(
         auto_reload=False,
     )
 )
+_templates.env.globals["severity"] = severity
 _redis_client = None
 logger = logging.getLogger("gitcrawl.serve")
 
