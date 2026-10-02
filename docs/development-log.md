@@ -227,5 +227,11 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 ## QA reconciliation (2026-10-02)
 
 - Task 1: computed run quality report in `src/serve/quality.py` (`acb427f`).
-- Task 2: `GET /runs/{run_id}/quality` (JSON) and `GET /partials/runs/{run_id}/quality` (htmx fragment); the run-detail page loads the quality panel on page load and shows it for completed find runs. Both routes pass the app's injectable clock into `run_quality`, so `generated_at` is deterministic in tests/snapshots.
+- Task 2: `GET /runs/{run_id}/quality` (JSON) and `GET /partials/runs/{run_id}/quality` (htmx fragment); the panel loads on page load for every run-detail page because the `runs` table has no kind column (find-only gating is deferred). Both routes pass the app's injectable clock into `run_quality`, so `generated_at` is deterministic in tests/snapshots.
 - OpenAPI pin re-pinned for the two new routes: `5d46f629b1aa80164f3cada46de8948763bb8fc6173dc6e620c1582dea324e05` → `3a025995ea6f8263faa1f68595c6b986088f639de71309c63faeb86ec6b9ad3c`; golden snapshots regenerated (new `runs_run_id_quality.json`, `partials_runs_run_id_quality.json`; `runs_run_id.json` gains the loading section).
+
+## QA reconciliation Phase 2 (2026-10-02)
+
+- Executed tasks 1–2 of `docs/superpowers/plans/2026-10-02-qa-reconciliation.md`: quality module `src/serve/quality.py` (acb427f), JSON + partial routes and run-detail panel (8649b96).
+- Execution rulings: null-warn ratio 0.5 (clean-run seed tolerance), injectable clock for deterministic `generated_at`, golden `PATH_PARAMS` + snapshots regenerated, unknown-run 404s, read-only module.
+- Verification: full suite 1150 passed, coverage 96.11% (floor 93); ruff + black clean; golden suite green with the run-detail change insertion-only.
