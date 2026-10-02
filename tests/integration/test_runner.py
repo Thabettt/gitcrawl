@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -66,6 +67,72 @@ def repo_item(
     }
     item.update(overrides)
     return item
+
+
+GRAPHQL_REPO_ALIAS_RE = re.compile(r'(n\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')
+
+
+def rest_item_to_graphql_node(item: dict) -> dict:
+    owner = item.get("owner") or {}
+    return {
+        "databaseId": item.get("id"),
+        "id": item.get("node_id"),
+        "name": item.get("name"),
+        "nameWithOwner": item.get("full_name"),
+        "stargazerCount": item.get("stargazers_count", 0),
+        "forkCount": item.get("forks_count", 0),
+        "watchers": {"totalCount": item.get("watchers_count", 0)},
+        "issues": {"totalCount": item.get("open_issues_count", 0)},
+        "diskUsage": item.get("size", 0),
+        "isArchived": bool(item.get("archived")),
+        "isDisabled": bool(item.get("disabled")),
+        "isFork": bool(item.get("fork")),
+        "isTemplate": bool(item.get("is_template")),
+        "visibility": str(item.get("visibility") or "public").upper(),
+        "description": item.get("description"),
+        "homepageUrl": item.get("homepage"),
+        "pushedAt": item.get("pushed_at"),
+        "updatedAt": item.get("updated_at") or item.get("pushed_at"),
+        "createdAt": item.get("created_at") or item.get("pushed_at"),
+        "defaultBranchRef": {"name": item.get("default_branch") or "main"},
+        "primaryLanguage": {"name": item.get("language")} if item.get("language") else None,
+        "licenseInfo": (
+            {"spdxId": (item.get("license") or {}).get("spdx_id")} if item.get("license") else None
+        ),
+        "repositoryTopics": {
+            "nodes": [{"topic": {"name": topic}} for topic in item.get("topics", [])]
+        },
+        "hasIssuesEnabled": True,
+        "hasWikiEnabled": False,
+        "hasProjectsEnabled": False,
+        "hasDiscussionsEnabled": False,
+        "hasPullRequestsEnabled": True,
+        "parent": None,
+        "owner": {
+            "databaseId": owner.get("id"),
+            "login": owner.get("login"),
+            "__typename": owner.get("type") or "User",
+        },
+    }
+
+
+def graphql_batch_response(
+    request: httpx.Request, items_by_full_name: dict[str, dict]
+) -> httpx.Response:
+    body = json.loads(request.content)
+    data: dict[str, object] = {}
+    errors: list[dict] = []
+    for alias, owner, name in GRAPHQL_REPO_ALIAS_RE.findall(body["query"]):
+        item = items_by_full_name.get(f"{owner}/{name}")
+        if item is None:
+            data[alias] = None
+            errors.append({"message": "Could not resolve to a Repository", "path": [alias]})
+        else:
+            data[alias] = rest_item_to_graphql_node(item)
+    payload: dict[str, object] = {"data": data}
+    if errors:
+        payload["errors"] = errors
+    return httpx.Response(200, json=payload)
 
 
 def count_response(total: int) -> httpx.Response:
@@ -185,6 +252,8 @@ def test_run_filter_honors_shard_candidate_and_hydrate_caps(clean: Engine):
             if is_count(request):
                 return count_response(1600 if "created:" not in query_of(request) else 500)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner2/repo2": repo_item(2, stars=100)})
         if path.startswith("/repos/"):
             return httpx.Response(200, json=repo_item(2, stars=100))
         return httpx.Response(404)
@@ -203,7 +272,8 @@ def test_run_filter_honors_shard_candidate_and_hydrate_caps(clean: Engine):
     assert any("max_hydrate=1" in warning for warning in payload.warnings)
     assert len([request for request in requests if is_search_page(request)]) == 1
     hydration = [path_of(request) for request in requests if path_of(request).startswith("/repos/")]
-    assert hydration == ["/repos/owner2/repo2"]
+    assert hydration == []
+    assert any(request.url.path == "/graphql" for request in requests)
 
 
 def test_run_filter_marks_incomplete_when_a_discovery_shard_is_incomplete(clean: Engine):
@@ -213,6 +283,8 @@ def test_run_filter_marks_incomplete_when_a_discovery_shard_is_incomplete(clean:
             if is_count(request):
                 return count_response(1)
             return page_response([repo_item(1)], incomplete=True)
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
@@ -238,6 +310,8 @@ def test_run_filter_marks_incomplete_when_the_page_cap_truncates(clean: Engine):
             if is_count(request):
                 return count_response(500)
             return page_response(page, next_url=next_page_url(query_of(request), 2))
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
@@ -263,6 +337,8 @@ def test_run_filter_marks_incomplete_when_the_shard_plan_is_capped(clean: Engine
             if is_count(request):
                 return count_response(1600 if "created:" not in query_of(request) else 500)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
@@ -294,6 +370,8 @@ def test_run_filter_applies_db_filters_and_builds_payload(clean: Engine):
             if is_count(request):
                 return count_response(3)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": hydrated[1]})
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=hydrated[1])
         return httpx.Response(404)
@@ -335,6 +413,8 @@ def _sort_fixture_handler():
             if is_count(request):
                 return count_response(3)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             repo_id = int(path.rsplit("repo", 1)[1])
             return httpx.Response(200, json=page[repo_id - 1])
@@ -386,6 +466,8 @@ def test_run_filter_records_r44_warnings_and_marks_incomplete(clean: Engine):
             if is_count(request):
                 return count_response(1)
             return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
@@ -413,6 +495,8 @@ def test_run_filter_tolerates_hydration_failures(clean: Engine):
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner2/repo2": repo_item(2, stars=42)})
         if path == "/repos/owner1/repo1":
             return httpx.Response(422, json={"message": "Validation Failed"})
         if path == "/repos/owner2/repo2":
@@ -445,6 +529,8 @@ def test_run_filter_owner_country_filters_and_bounds_owner_fetches(clean: Engine
             if is_count(request):
                 return count_response(3)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
             repo_id = int(path.rsplit("repo", 1)[1])
@@ -504,6 +590,8 @@ def test_run_filter_has_dockerfile_true_enforces_presence_and_budget(clean: Engi
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             if path in trees:
                 return httpx.Response(200, json={**trees[path], "truncated": False})
@@ -541,6 +629,8 @@ def test_run_filter_has_dockerfile_false_keeps_absent_repos(clean: Engine):
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path in trees:
             return httpx.Response(200, json={**trees[path], "truncated": False})
         if path.startswith("/repos/"):
@@ -568,6 +658,8 @@ def test_run_filter_tolerates_owner_fetch_failure(clean: Engine):
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
             repo_id = int(path.rsplit("repo", 1)[1])
@@ -603,6 +695,8 @@ def test_run_filter_tolerates_tree_fetch_failure(clean: Engine):
             if is_count(request):
                 return count_response(1)
             return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if "/git/trees/" in path:
             return httpx.Response(404)
         if path == "/repos/owner1/repo1":
@@ -632,6 +726,8 @@ def test_run_filter_tolerates_owner_fetch_sso_partial_results(clean: Engine):
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
             repo_id = int(path.rsplit("repo", 1)[1])
@@ -745,6 +841,8 @@ def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, 
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path in trees:
             events.append(("tree", path))
             return httpx.Response(200, json={**trees[path], "truncated": False})
@@ -784,12 +882,15 @@ def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, 
         ("tree", "/repos/alice/repo1/git/trees/main"),
     ]
     assert [item.repo_id for item in payload.items] == [1]
-    assert payload.field_stats == {
+    field_stats = dict(payload.field_stats)
+    field_stats.pop("graphql")
+    assert field_stats == {
         "per_field_sources": {"owner_country": 1, "has_dockerfile": 1},
         "calls_spent": {"owner_country": 2, "has_dockerfile": 1},
         "requeues": 0,
         "warnings": [],
     }
+    assert "graphql" in payload.field_stats
 
 
 def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
@@ -801,6 +902,10 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
             if is_count(request):
                 return count_response(2)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(
+                request, {"owner1/repo1": repo_item(1, stars=11, topics=("rust",))}
+            )
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1, stars=11, topics=("rust",)))
         return httpx.Response(404)
@@ -812,12 +917,15 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
         config=RunnerConfig(max_shards=1),
     )
 
-    assert payload.field_stats == {
+    field_stats = dict(payload.field_stats)
+    field_stats.pop("graphql")
+    assert field_stats == {
         "per_field_sources": {"min_stars": 1, "team_topic": 1},
         "calls_spent": {"min_stars": 0, "team_topic": 0},
         "requeues": 0,
         "warnings": [],
     }
+    assert "graphql" in payload.field_stats
 
     run_id = create_run(clean, {"gitcrawl_filter": 1, "q": "language:python"}, api_version="v1")
     execute_run(clean, run_id, runner=lambda rid, spec: payload, runs_root=str(tmp_path))
@@ -874,6 +982,8 @@ def test_run_filter_surfaces_dropped_segments_as_incomplete(clean: Engine, monke
             if is_count(request):
                 return count_response(1)
             return page_response(page)
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
@@ -897,3 +1007,56 @@ def test_run_filter_surfaces_dropped_segments_as_incomplete(clean: Engine, monke
     assert "dropped" in dropped
     assert "`has_dockerfile`" in dropped
     assert dropped in payload.warnings
+
+
+def test_run_filter_batches_hydration_and_isolates_a_bad_repo(clean: Engine, monkeypatch):
+    real_refresh = runner_module.refresh_repos_batched
+
+    def fast_refresh(*args, **kwargs):
+        kwargs.setdefault("sleep", lambda _seconds: None)
+        return real_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "refresh_repos_batched", fast_refresh)
+    scripts = {
+        "/search/repositories": page_response([repo_item(index) for index in (1, 2, 3)]),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return scripts[path]
+        if path == "/graphql":
+            return graphql_batch_response(
+                request,
+                {"owner1/repo1": repo_item(1), "owner3/repo3": repo_item(3)},
+            )
+        if path == "/repos/owner2/repo2":
+            return httpx.Response(500, json={"message": "boom"})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, requests = scripted(handler)
+    deps = make_deps(clean, client)
+    payload = run_filter(deps, spec_for(q="language:python"))
+    assert payload.fetched == 3
+    assert payload.field_stats["graphql"]["hydration"]["unresolved"] == 1
+    assert any("could not be hydrated" in warning for warning in payload.warnings)
+    graphql_requests = [request for request in requests if request.url.path == "/graphql"]
+    assert len(graphql_requests) == 1
+
+
+def test_run_filter_reports_batch_counts_in_field_stats(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    payload = run_filter(make_deps(clean, client), spec_for(q="language:python"))
+    hydration = payload.field_stats["graphql"]["hydration"]
+    assert hydration["keys"] == 1
+    assert hydration["values"] == 1
+    assert hydration["requests"] == 1
+    assert hydration["deadline_hit"] is False

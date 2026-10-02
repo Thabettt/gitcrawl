@@ -18,7 +18,7 @@ from enrich.cost_planner import plan_enrichment
 from enrich.geo_resolver import GeoCache, _cache_key, resolve_many
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
-from hydrate.tail import refresh_repos
+from hydrate.tail import RefreshStats, refresh_repos_batched
 from lib import audit
 from lib.batching import chunked
 from lib.deadlines import Deadline, request_deadline_seconds
@@ -193,17 +193,18 @@ def _hydrate(
     rows: list[dict],
     cap: int,
     hook: Callable[[httpx.Response, float], None],
-) -> None:
-    names = [row["full_name"] for row in rows[:cap]]
-    if not names:
-        return
-    refresh_repos(
+) -> RefreshStats:
+    candidates = rows[:cap]
+    if not candidates:
+        return RefreshStats()
+    return refresh_repos_batched(
         deps.engine,
         deps.client,
-        names,
+        candidates,
         limiter=deps.limiter,
         token_id=deps.token_fp,
         on_response=hook,
+        deadline=deps.limiter.deadline if deps.limiter is not None else None,
     )
 
 
@@ -568,7 +569,16 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
             f"{dropped_hydration} repo(s) not hydrated due to max_hydrate="
             f"{cfg.max_hydrate}; results are incomplete"
         )
-    _hydrate(deps, candidates, cfg.max_hydrate, hook)
+    hydration = _hydrate(deps, candidates, cfg.max_hydrate, hook)
+    graphql_report: dict[str, object] = {"hydration": hydration.batch}
+    if hydration.unresolved:
+        sample = "; ".join(
+            f"{name}: {reason}" for name, reason in list(hydration.unresolved.items())[:3]
+        )
+        warnings.append(
+            f"{len(hydration.unresolved)} repo(s) could not be hydrated ({sample}); "
+            "results are incomplete"
+        )
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
     budget = {"remaining": cfg.max_enrich}
     skipped = {"geo": 0, "dockerfile": 0}
@@ -599,13 +609,15 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         )
     rows = apply_sort(rows, spec.sort, spec.order)
     items = [_payload_item(row, virtual) for row in rows]
+    field_stats = asdict(segment_stats)
+    field_stats["graphql"] = graphql_report
     return RunPayload(
         total_count=total_count,
         fetched=stats.fetched,
         incomplete=bool(warnings) or bool(segment_stats.warnings) or stats.incomplete_shards > 0,
         warnings=warnings,
         items=items,
-        field_stats=asdict(segment_stats),
+        field_stats=field_stats,
         updated=stats.updated,
         unchanged=stats.unchanged,
         skipped=stats.skipped,
