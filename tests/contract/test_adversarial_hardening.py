@@ -150,3 +150,44 @@ def test_same_origin_matches_host_scheme_and_effective_port():
     assert _same_origin("http://testserver:9999", base) is False
     assert _same_origin("null", base) is False
     assert _same_origin("http://evil.example", base) is False
+
+
+@pytest.fixture(autouse=True)
+def _allow_testclient_host(monkeypatch):
+    monkeypatch.setenv("GITCRAWL_ALLOWED_HOSTS", "testserver")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://localhost", "http://127.0.0.1:8000", "http://[::1]:8000"],
+)
+def test_loopback_hosts_are_allowed(clean: Engine, tmp_path, base_url):
+    application = create_app(engine=clean, runs_root=str(tmp_path / "runs"))
+    client = TestClient(application, base_url=base_url, raise_server_exceptions=False)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+
+
+def test_non_local_host_is_rejected(clean: Engine, tmp_path):
+    application = create_app(engine=clean, runs_root=str(tmp_path / "runs"))
+    client = TestClient(application, base_url="http://evil.example", raise_server_exceptions=False)
+
+    response = client.get("/health")
+
+    assert response.status_code == 400
+    assert "Invalid host header" in response.text
+
+
+def test_allowed_hosts_env_extends_the_allowlist(clean: Engine, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_ALLOWED_HOSTS", "gitcrawl.internal")
+    application = create_app(engine=clean, runs_root=str(tmp_path / "runs"))
+
+    allowed = TestClient(
+        application, base_url="http://gitcrawl.internal", raise_server_exceptions=False
+    )
+    replaced = TestClient(application, base_url="http://testserver", raise_server_exceptions=False)
+
+    assert allowed.get("/health").status_code == 200
+    assert replaced.get("/health").status_code == 400

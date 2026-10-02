@@ -77,6 +77,22 @@ def alembic_engine(test_database_url: str) -> Iterator[Engine]:
     engine.dispose()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def allow_testclient_host_session() -> Iterator[None]:
+    previous = os.environ.get("GITCRAWL_ALLOWED_HOSTS")
+    os.environ["GITCRAWL_ALLOWED_HOSTS"] = "testserver"
+    yield
+    if previous is None:
+        os.environ.pop("GITCRAWL_ALLOWED_HOSTS", None)
+    else:
+        os.environ["GITCRAWL_ALLOWED_HOSTS"] = previous
+
+
+@pytest.fixture(autouse=True)
+def allow_testclient_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITCRAWL_ALLOWED_HOSTS", "testserver")
+
+
 CleanDbFactory = Callable[..., Engine]
 
 FULL_TRUNCATE_TABLES = (

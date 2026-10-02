@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from discover.search_shards import RequestFailed
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
@@ -54,6 +55,13 @@ READY_STATUSES = frozenset({"done", "partial"})
 _GET_PARAMS = ("q", "sort", "order", "per_page", "page", *VIRTUAL_FILTERS)
 _GET_PARAM_SET = frozenset(_GET_PARAMS)
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
+
+
+def _allowed_hosts() -> list[str]:
+    hosts = ["localhost", "127.0.0.1", "[::1]"]
+    extra = os.environ.get("GITCRAWL_ALLOWED_HOSTS", "")
+    hosts.extend(host.strip() for host in extra.split(",") if host.strip())
+    return hosts
 
 
 def _iso(value: object) -> str | None:
@@ -313,6 +321,11 @@ def create_app(
     payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
     application = FastAPI(title="gitcrawl", version="0.0.1")
     application.add_middleware(OriginCsrfMiddleware)
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=_allowed_hosts(),
+        www_redirect=False,
+    )
 
     def build_engine() -> Engine:
         url = os.environ.get("DATABASE_URL")
