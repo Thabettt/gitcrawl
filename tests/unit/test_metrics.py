@@ -88,6 +88,20 @@ def test_metrics_payload_reads_paused_buckets_and_pel(clean_db, monkeypatch):
     assert payload["queue"]["pel"] is not None  # wired by triage Task 2; value may be 0
 
 
+def test_queue_pel_reflects_delivered_unacked(clean_db):
+    import fakeredis
+
+    from scheduler.state_machine import ShardQueue
+
+    engine = clean_db()
+    redis = fakeredis.FakeRedis()
+    queue = ShardQueue(redis)
+    queue.enqueue(1)
+    queue.claim("gitcrawl-dead", count=1)  # delivered, never acked
+    payload = metrics_payload(engine, redis_client=redis)
+    assert payload["queue"]["pel"] == 1
+
+
 def test_metrics_payload_tolerates_malformed_rl_keys(clean_db, monkeypatch):
     engine = clean_db()
     redis = fakeredis.FakeRedis()
