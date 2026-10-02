@@ -230,6 +230,28 @@ def test_rest_fallback_counts_returned_items_without_a_link_header(clean_db):
     assert stats.commit_counts["2"] == 2
 
 
+def test_rest_fallback_commit_count_failure_keeps_the_repo_hydrated(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/graphql":
+            return graphql_handler([], bad_repos=frozenset({1}))(request)
+        if path == "/repos/octo/repo1":
+            return httpx.Response(200, json=rest_repo_payload(1))
+        if path == "/repos/octo/repo1/commits":
+            raise httpx.ConnectError("boom")
+        raise AssertionError(f"unexpected path {path}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    stats = refresh_repos_batched(engine, client, rows_for(1), sleep=lambda _seconds: None)
+    assert stats.refreshed == 1
+    assert stats.fallbacks == 1
+    assert stats.unresolved == {}
+    assert stats.commit_counts == {}
+
+
 def test_unresolved_repo_is_reported_not_swallowed(clean_db):
     engine = clean_db()
     seed_repos(engine, 1)

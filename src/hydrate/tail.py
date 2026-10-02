@@ -150,16 +150,21 @@ def refresh_repos_batched(
         stats.fallbacks += 1
         if outcome.renamed_from is not None:
             stats.renamed += 1
-        count = fetch_commit_count(
-            client,
-            full_name,
-            limiter=limiter,
-            token_id=token_id,
-            sleep=sleep,
-            now=now,
-            jitter=jitter,
-            on_response=on_response,
-        )
+        try:
+            count = fetch_commit_count(
+                client,
+                full_name,
+                limiter=limiter,
+                token_id=token_id,
+                sleep=sleep,
+                now=now,
+                jitter=jitter,
+                on_response=on_response,
+            )
+        except PartialResultsError:
+            raise
+        except (ThrottledError, httpx.HTTPError):
+            count = None
         if count is not None:
             stats.commit_counts[str(hydrated.id)] = count
         return None
