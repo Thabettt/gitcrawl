@@ -35,6 +35,7 @@ from serve.library import (
     list_filters,
     rename_filter,
 )
+from serve.middleware import OriginCsrfMiddleware
 from serve.pages import (
     FORM_CONTENT_TYPES,
     register_pages,
@@ -311,6 +312,7 @@ def create_app(
     loaders = _LazyLoaders()
     payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
     application = FastAPI(title="gitcrawl", version="0.0.1")
+    application.add_middleware(OriginCsrfMiddleware)
 
     def build_engine() -> Engine:
         url = os.environ.get("DATABASE_URL")

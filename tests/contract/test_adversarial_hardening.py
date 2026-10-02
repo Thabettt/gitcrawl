@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import pytest
+from alembic import command
+from fastapi.testclient import TestClient
+from sqlalchemy.engine import Engine
+from starlette.datastructures import URL
+
+from serve.app import create_app
+from serve.executor import RunPayload, RunPayloadItem
+from serve.middleware import STATE_CHANGING_METHODS, _same_origin
+
+FILTER = {"gitcrawl_filter": 1, "q": "language:rust"}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def schema(alembic_config):
+    command.upgrade(alembic_config, "head")
+
+
+@pytest.fixture()
+def clean(clean_db):
+    return clean_db()
+
+
+def payload_item(repo_id: int = 1, full_name: str = "octo/hello") -> RunPayloadItem:
+    return RunPayloadItem(repo_id=repo_id, full_name=full_name, stargazers=10, virtuals={})
+
+
+def counting_runner(payload: RunPayload, calls: list):
+    def runner(run_id: int, filter_spec: dict) -> RunPayload:
+        calls.append(filter_spec)
+        return payload
+
+    return runner
+
+
+def make_client(engine: Engine, tmp_path, *, runner=None, **kwargs) -> TestClient:
+    if runner is None:
+        runner = counting_runner(RunPayload(total_count=0, items=[]), [])
+    application = create_app(
+        engine=engine,
+        runner_factory=lambda _engine: runner,
+        runs_root=str(tmp_path / "runs"),
+        clone_root=str(tmp_path / "clones"),
+        **kwargs,
+    )
+    return TestClient(application, raise_server_exceptions=False)
+
+
+def test_cross_origin_post_is_rejected(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(clean, tmp_path, runner=counting_runner(RunPayload(0, []), calls))
+
+    response = client.post("/vsearch/run", json=FILTER, headers={"Origin": "http://evil.example"})
+
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_same_origin_post_passes(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(
+        clean, tmp_path, runner=counting_runner(RunPayload(total_count=0, items=[]), calls)
+    )
+
+    response = client.post("/vsearch/run", json=FILTER, headers={"Origin": "http://testserver"})
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+def test_default_port_origin_passes(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(
+        clean, tmp_path, runner=counting_runner(RunPayload(total_count=0, items=[]), calls)
+    )
+
+    response = client.post("/vsearch/run", json=FILTER, headers={"Origin": "http://testserver:80"})
+
+    assert response.status_code == 200
+
+
+def test_post_without_origin_passes(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(
+        clean, tmp_path, runner=counting_runner(RunPayload(total_count=0, items=[]), calls)
+    )
+
+    response = client.post("/vsearch/run", json=FILTER)
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["https://testserver", "http://testserver:9999", "null", "http://testserver:notaport"],
+)
+def test_mismatched_origin_is_rejected(clean: Engine, tmp_path, origin):
+    client = make_client(clean, tmp_path)
+
+    response = client.post("/vsearch/run", json=FILTER, headers={"Origin": origin})
+
+    assert response.status_code == 403
+
+
+def test_cross_origin_referer_is_rejected_when_origin_is_absent(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+
+    response = client.post(
+        "/vsearch/run", json=FILTER, headers={"Referer": "http://evil.example/find"}
+    )
+
+    assert response.status_code == 403
+
+
+def test_same_origin_referer_passes_when_origin_is_absent(clean: Engine, tmp_path):
+    calls: list = []
+    client = make_client(
+        clean, tmp_path, runner=counting_runner(RunPayload(total_count=0, items=[]), calls)
+    )
+
+    response = client.post(
+        "/vsearch/run", json=FILTER, headers={"Referer": "http://testserver/runs/1"}
+    )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+def test_cross_origin_delete_clone_is_rejected_before_routing(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+
+    response = client.delete("/runs/999999/clone", headers={"Origin": "http://evil.example"})
+
+    assert response.status_code == 403
+
+
+def test_state_changing_methods_cover_write_verbs():
+    assert STATE_CHANGING_METHODS == frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def test_same_origin_matches_host_scheme_and_effective_port():
+    base = URL("http://testserver")
+
+    assert _same_origin("http://testserver", base) is True
+    assert _same_origin("http://testserver:80", base) is True
+    assert _same_origin("https://testserver", base) is False
+    assert _same_origin("http://testserver:9999", base) is False
+    assert _same_origin("null", base) is False
+    assert _same_origin("http://evil.example", base) is False
