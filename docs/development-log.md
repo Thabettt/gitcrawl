@@ -243,3 +243,4 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Console: Resume form renders on failed run-detail pages only; Jinja whitespace control keeps done/partial output byte-identical (`src/serve/templates/run_detail.html`).
 - OpenAPI re-pin for the resume POST route: `3a025995ea6f8263faa1f68595c6b986088f639de71309c63faeb86ec6b9ad3c` → `7ed80e2ee95d9113cf040f05e5c574f774fdc705404b6cf828abd2f22fbf3db1`; `runs_run_id.json` unchanged.
 - Runbook: `docs/environment.md` "After a crash" (restart marks orphans failed; resume from the run page or console; upserts make re-fetch safe).
+- Verification: full suite 1157 collected/passed, coverage 95.79% (floor 93); ruff + black clean; golden suite green; the detect branch is present but unreachable/untested until the detection plan lands.
