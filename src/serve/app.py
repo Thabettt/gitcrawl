@@ -11,7 +11,13 @@ from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
@@ -762,6 +768,48 @@ def create_app(
             "changed": list(result.changed),
             "summary": result.summary,
         }
+
+    @application.get("/runs/{run_id}/quality")
+    def run_quality_json(run_id: int):
+        from serve.quality import run_quality
+
+        try:
+            report = run_quality(
+                engine_for(),
+                run_id,
+                runs_root=runs_root,
+                now=lambda: datetime.fromtimestamp(clock(), UTC),
+            )
+        except KeyError:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "run_not_found", "run_id": run_id},
+            )
+        return {
+            "run_id": report.run_id,
+            "status": report.status,
+            "generated_at": report.generated_at.isoformat(),
+            "checks": [
+                {"name": c.name, "status": c.status, "detail": c.detail, "value": c.value}
+                for c in report.checks
+            ],
+        }
+
+    @application.get("/partials/runs/{run_id}/quality", response_class=HTMLResponse)
+    def run_quality_partial(request: Request, run_id: int):
+        from serve.pages import quality_panel
+        from serve.quality import run_quality
+
+        try:
+            report = run_quality(
+                engine_for(),
+                run_id,
+                runs_root=runs_root,
+                now=lambda: datetime.fromtimestamp(clock(), UTC),
+            )
+        except KeyError:
+            return HTMLResponse("run not found", status_code=404)
+        return quality_panel(request, report)
 
     register_pages(
         application,

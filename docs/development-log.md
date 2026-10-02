@@ -223,3 +223,9 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Deletions per R58: `RetryQueue`, `order_shards`, `plan_id_ranges`, `mirrors`, `graphql_batch`, `fetch_metafiles`, `skeleton.py` and their tests; quarantine manifest updated (5fafdca).
 - Parked-minor fixes: `_error_message` sanitizes run errors (no upstream bodies), migration 0004 downgrade note, console manual checklist; lazy-loader lock was already fixed in def016b (7951b7e).
 - Verification: full suite 1140 tests collected/passed, coverage 96.12% (floor 93); ruff + black clean.
+
+## QA reconciliation (2026-10-02)
+
+- Task 1: computed run quality report in `src/serve/quality.py` (`acb427f`).
+- Task 2: `GET /runs/{run_id}/quality` (JSON) and `GET /partials/runs/{run_id}/quality` (htmx fragment); the run-detail page loads the quality panel on page load and shows it for completed find runs. Both routes pass the app's injectable clock into `run_quality`, so `generated_at` is deterministic in tests/snapshots.
+- OpenAPI pin re-pinned for the two new routes: `5d46f629b1aa80164f3cada46de8948763bb8fc6173dc6e620c1582dea324e05` → `3a025995ea6f8263faa1f68595c6b986088f639de71309c63faeb86ec6b9ad3c`; golden snapshots regenerated (new `runs_run_id_quality.json`, `partials_runs_run_id_quality.json`; `runs_run_id.json` gains the loading section).

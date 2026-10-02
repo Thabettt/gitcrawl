@@ -344,6 +344,14 @@ def render_library(
     )
 
 
+def quality_panel(request: Request, report) -> HTMLResponse:
+    return _templates.TemplateResponse(
+        request,
+        "partials/quality.html",
+        {"report": report, "badge": {"ok": "good", "warn": "warn", "fail": "bad"}[report.status]},
+    )
+
+
 def _run_detail_row(engine: Engine, run_id: int):
     with engine.connect() as connection:
         return connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()

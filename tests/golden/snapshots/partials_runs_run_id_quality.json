@@ -1,0 +1,8 @@
+{
+  "path": "/partials/runs/931/quality",
+  "status": 200,
+  "headers": {
+    "content-type": "text/html; charset=utf-8"
+  },
+  "body": "<section id=\"quality-panel\" class=\"panel quality-warn\">\n  <h2>Run quality: warn</h2>\n  <ul>\n    \n    <li class=\"check-ok\"><strong>count_parity</strong>: run_items=3 runs.inserted=3 fetched=3</li>\n    \n    <li class=\"check-ok\"><strong>duplicate_full_names</strong>: 0 full_name value(s) mapped to multiple repo ids</li>\n    \n    <li class=\"check-ok\"><strong>missing_language</strong>: 33% null (1/3)</li>\n    \n    <li class=\"check-ok\"><strong>missing_license_spdx</strong>: 33% null (1/3)</li>\n    \n    <li class=\"check-ok\"><strong>missing_country_iso</strong>: 67% null (2/3)</li>\n    \n    <li class=\"check-ok\"><strong>incomplete</strong>: status=done incomplete_shards=0</li>\n    \n    <li class=\"check-warn\"><strong>bundle</strong>: bundle.json missing or unreadable</li>\n    \n  </ul>\n</section>"
+}

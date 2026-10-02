@@ -25,6 +25,9 @@
   </div>
   {% include "partials/status.html" %}
 </section>
+<section hx-get="/partials/runs/{{ run.id }}/quality" hx-trigger="load" hx-swap="outerHTML">
+  <p>Run quality is loading…</p>
+</section>
 <section class="panel" id="run-actions">
   <div class="form-actions">
     <a id="export-json" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=json">Export JSON</a>

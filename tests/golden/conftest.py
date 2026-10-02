@@ -108,8 +108,10 @@ PATH_PARAMS = {
     "/api/runs/{run_id}/diff": {"run_id": RUN_A},
     "/runs/{run_id}/diff": {"run_id": RUN_A},
     "/runs/{run_id}": {"run_id": RUN_A},
+    "/runs/{run_id}/quality": {"run_id": RUN_A},
     "/runs/{run_id}/clone-estimate": {"run_id": RUN_A},
     "/partials/runs/{run_id}/status": {"run_id": RUN_A},
+    "/partials/runs/{run_id}/quality": {"run_id": RUN_A},
     "/partials/runs/{run_id}/table": {"run_id": RUN_A},
     "/partials/runs/{run_id}/clone-progress": {"run_id": RUN_A},
 }

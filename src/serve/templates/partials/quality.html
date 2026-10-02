@@ -1,0 +1,8 @@
+<section id="quality-panel" class="panel quality-{{ badge }}">
+  <h2>Run quality: {{ badge }}</h2>
+  <ul>
+    {% for check in report.checks %}
+    <li class="check-{{ check.status }}"><strong>{{ check.name }}</strong>: {{ check.detail }}</li>
+    {% endfor %}
+  </ul>
+</section>
