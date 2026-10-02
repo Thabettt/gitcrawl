@@ -20,6 +20,7 @@ from enrich.trees_first import fetch_tree
 from hydrate.tail import refresh_repos
 from lib import audit
 from lib.batching import chunked
+from lib.deadlines import Deadline, request_deadline_seconds
 from lib.gh_client import (
     API_BASE,
     PartialResultsError,
@@ -503,9 +504,13 @@ def apply_sort(items: list[dict], sort: str | None, order: str | None) -> list[d
 
 
 def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
+    if deps.limiter is not None:
+        deps.limiter.bind_deadline(Deadline(request_deadline_seconds()))
     try:
         return _run_filter(deps, spec, config=config)
     finally:
+        if deps.limiter is not None:
+            deps.limiter.bind_deadline(None)
         if deps.audit_buffer is not None:
             deps.audit_buffer.flush()
 

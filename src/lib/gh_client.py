@@ -137,6 +137,8 @@ def request_with_retry(
                 denials += 1
                 if denials >= max_attempts:
                     raise ThrottledError(acquired.retry_after or 0.0)
+                if limiter.deadline is not None:
+                    limiter.deadline.bound_wait(acquired.retry_after or 0.0)
                 sleep(acquired.retry_after or 0.0)
                 continue
             denials = 0

@@ -621,3 +621,58 @@ def test_limiter_deny_loop_raises_at_configured_cap():
         )
     assert len(sleeps) == 1
     assert excinfo.value.retry_after == 20.0
+
+
+def test_limiter_deadline_stops_before_an_overlong_sleep():
+    from lib.deadlines import Deadline, DeadlineExceededError
+
+    redis = fakeredis.FakeRedis()
+    now = [1000.0]
+    limiter = BucketLimiter(
+        redis,
+        specs={"search": (0, 60.0)},
+        max_concurrent=100,
+        deadline=Deadline(5.0, clock=lambda: now[0]),
+    )
+    sleeps = []
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    )
+
+    with pytest.raises(DeadlineExceededError) as excinfo:
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/search/repositories?q=x",
+            limiter=limiter,
+            token_id="tok",
+            max_attempts=2,
+            sleep=sleeps.append,
+            now=lambda: now[0],
+        )
+
+    assert sleeps == []
+    assert excinfo.value.retry_after == 20.0
+
+
+def test_limiter_without_a_deadline_sleeps_exactly_as_before():
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"search": (0, 60.0)}, max_concurrent=100)
+    sleeps = []
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    )
+
+    with pytest.raises(ThrottledError):
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/search/repositories?q=x",
+            limiter=limiter,
+            token_id="tok",
+            max_attempts=2,
+            sleep=sleeps.append,
+            now=lambda: 1000.0,
+        )
+
+    assert sleeps == [20.0]

@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from lib.deadlines import Deadline
+
 RESOURCE_SPECS: dict[str, tuple[int, float]] = {
     "search": (30, 60.0),
     "core": (5000, 3600.0),
@@ -120,10 +122,19 @@ class BucketLimiter:
         *,
         specs: dict[str, tuple[int, float]] = RESOURCE_SPECS,
         max_concurrent: int = 10,
+        deadline: Deadline | None = None,
     ) -> None:
         self._redis = redis
         self._specs = specs
         self._max_concurrent = max_concurrent
+        self._deadline = deadline
+
+    def bind_deadline(self, deadline: Deadline | None) -> None:
+        self._deadline = deadline
+
+    @property
+    def deadline(self) -> Deadline | None:
+        return self._deadline
 
     def _key(self, resource: str, token_id: str) -> str:
         return f"{_KEY_PREFIX}:{resource}:{token_id}"
