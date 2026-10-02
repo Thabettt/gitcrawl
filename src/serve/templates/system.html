@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}System · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>System</h1>
+    <p class="muted">Health, performance, and limits for this machine.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Status</h2>
+  </div>
+  <div class="health-grid">
+    <div class="card health-card">
+      <span class="health-label">Database</span>
+      <span class="badge {{ 'ok' if status.database else 'down' }}">{{ 'ok' if status.database else 'down' }}</span>
+    </div>
+    <div class="card health-card">
+      <span class="health-label">Queue</span>
+      <span class="badge {{ 'ok' if status.redis else 'down' }}">{{ 'ok' if status.redis else 'down' }}</span>
+    </div>
+    <div class="card health-card">
+      <span class="health-label">GitHub token</span>
+      <span class="badge {{ 'ok' if status.github_token_present else 'down' }}">{{ 'present' if status.github_token_present else 'missing' }}</span>
+    </div>
+  </div>
+  {% if status.redis_degraded %}
+  <p class="muted">The queue is configured but did not answer; searches still run with reduced pacing.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Performance</h2>
+    <p class="muted">Rates and response times cover the last 1,000 requests; queue and failed-search counts are live.</p>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Measure</th>
+          <th scope="col">Value</th>
+          <th scope="col">State</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for name, value in metrics.slo.items() %}
+        {% if name in plain %}
+        <tr>
+          <td>{{ plain[name] }}</td>
+          <td>{{ 'n/a' if value is none else value }}</td>
+          <td><span class="badge {{ severity(name, value) }}">{{ {'ok': 'fine', 'warn': 'watch', 'fail': 'act', 'na': 'no data'}[severity(name, value)] }}</span></td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+        <tr>
+          <td>Queue waiting</td>
+          <td>{{ 'n/a' if metrics.queue.pel is none else metrics.queue.pel }}</td>
+          <td><span class="badge {{ 'na' if metrics.queue.pel is none else 'ok' }}">{{ 'no data' if metrics.queue.pel is none else 'fine' }}</span></td>
+        </tr>
+        <tr>
+          <td>Failed searches (all time)</td>
+          <td>{{ metrics.runs.failed }}</td>
+          <td><span class="badge {{ 'ok' if metrics.runs.failed == 0 else 'warn' }}">{{ 'none' if metrics.runs.failed == 0 else 'check' }}</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Limits</h2>
+  </div>
+  <p class="muted">How broad a search may be, how many repos it keeps and saves, how long it may
+    run, and how requests are paced. Env-pinned values show a “set by environment” badge.</p>
+  <p><a class="button" href="/settings">Open limits</a></p>
+</section>
+{% endblock %}

@@ -105,6 +105,8 @@ GOLDEN_SEED_SQL = (
 
 PATH_PARAMS = {
     "/settings": {},
+    "/system": {},
+    "/partials/status-dot": {},
     "/vsearch/runs/{filter_hash}": {"filter_hash": FILTER_HASH},
     "/vsearch/runs/{filter_hash}/export": {"filter_hash": FILTER_HASH},
     "/api/runs/{run_id}/diff": {"run_id": RUN_A},

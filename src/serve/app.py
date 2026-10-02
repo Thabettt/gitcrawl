@@ -67,6 +67,7 @@ from serve.payload_cache import CACHE_TTL_SECONDS, RunPayloadCache
 from serve.runner import apply_sort, build_deps
 from serve.runs import bundle_file, export_bundle, latest_run_for_hash
 from serve.settings import register_settings
+from serve.system import register_system
 from serve.virtual_params import VIRTUAL_FILTERS
 from store.models import Owner, Repo, RunItem, Runs
 
@@ -931,6 +932,10 @@ def create_app(
 
     errors.register_error_pages(application)
 
+    health_snapshot = pages.build_health_snapshot(
+        engine_for, redis_ping=redis_ping, token_present=token_present
+    )
+
     register_settings(
         application,
         engine_factory=engine_for,
@@ -944,8 +949,16 @@ def create_app(
         clone_root=clone_root,
         redis_ping=redis_ping,
         token_present=token_present,
+        health_snapshot=health_snapshot,
         runner_factory=runner_for,
         executor_factory=executor_for,
+    )
+
+    register_system(
+        application,
+        engine_factory=engine_for,
+        health_snapshot=health_snapshot,
+        metrics_redis=metrics_redis_client,
     )
 
     return application

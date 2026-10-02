@@ -41,6 +41,7 @@
     <a href="/filters"{% if path.startswith("/filters") %} aria-current="page"{% endif %}>Library</a>
     <a href="/settings"{% if path.startswith("/settings") %} aria-current="page"{% endif %}>System</a>
   </nav>
+  <a class="status-link" href="/system" aria-label="System status"><span hx-get="/partials/status-dot" hx-trigger="load, every 30s" hx-swap="outerHTML"></span></a>
   <button id="shortcuts-open" class="button ghost" type="button" data-open="shortcuts-modal" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   <button id="theme-toggle" class="button ghost" type="button" aria-pressed="false" aria-label="Toggle dark mode" title="Toggle dark mode">Theme</button>
 </header>

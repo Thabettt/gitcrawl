@@ -145,6 +145,63 @@ def _default_redis_ping() -> bool:
         return False
 
 
+def build_health_snapshot(
+    engine_factory: Callable[[], Engine],
+    redis_ping: Callable[[], object] | None = None,
+    token_present: Callable[[], bool] | None = None,
+) -> Callable[[], dict[str, bool]]:
+    db_probe = _Probe()
+    redis_probe = _Probe()
+
+    def database_ok() -> bool:
+        try:
+            engine = engine_factory()
+            with engine.connect() as connection:
+                connection.execute(
+                    text(f"SET LOCAL statement_timeout = {int(HEALTH_TIMEOUT_SECONDS * 1000)}")
+                )
+                connection.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
+    def redis_ok() -> bool:
+        return redis_probe.run(redis_ping or _default_redis_ping)
+
+    def token_ok() -> bool:
+        if token_present is None:
+            return bool(load_tokens())
+        return bool(token_present())
+
+    health_cache: dict[str, float | dict[str, bool] | None] = {"at": 0.0, "value": None}
+    health_lock = threading.Lock()
+
+    def health_snapshot() -> dict[str, bool]:
+        now = time.monotonic()
+        with health_lock:
+            cached = health_cache["value"]
+            cached_at = health_cache["at"]
+            if (
+                isinstance(cached, dict)
+                and isinstance(cached_at, float)
+                and now - cached_at < HEALTH_CACHE_SECONDS
+            ):
+                return dict(cached)
+        value = {
+            "database": db_probe.run(database_ok),
+            "redis": redis_ok(),
+            "github_token_present": token_ok(),
+        }
+        if os.environ.get("REDIS_URL") and not value["redis"]:
+            value["redis_degraded"] = True
+        with health_lock:
+            health_cache["at"] = time.monotonic()
+            health_cache["value"] = dict(value)
+        return value
+
+    return health_snapshot
+
+
 def _relative_time(value: datetime | None) -> str:
     if value is None:
         return "—"
@@ -564,6 +621,7 @@ def register_pages(
     clone_root: str = "clones",
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
+    health_snapshot: Callable[[], dict[str, bool]] | None = None,
     runner_factory: Callable[[], Runner] | None = None,
     executor_factory: Callable[[], RunExecutor],
 ) -> None:
@@ -571,54 +629,9 @@ def register_pages(
     if _STATIC_DIR.is_dir():
         app.mount("/static", CachedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-    db_probe = _Probe()
-    redis_probe = _Probe()
-
-    def database_ok() -> bool:
-        try:
-            engine = engine_factory()
-            with engine.connect() as connection:
-                connection.execute(
-                    text(f"SET LOCAL statement_timeout = {int(HEALTH_TIMEOUT_SECONDS * 1000)}")
-                )
-                connection.execute(text("SELECT 1"))
-            return True
-        except Exception:
-            return False
-
-    def redis_ok() -> bool:
-        return redis_probe.run(redis_ping or _default_redis_ping)
-
-    def token_ok() -> bool:
-        if token_present is None:
-            return bool(load_tokens())
-        return bool(token_present())
-
-    health_cache: dict[str, float | dict[str, bool] | None] = {"at": 0.0, "value": None}
-    health_lock = threading.Lock()
-
-    def health_snapshot() -> dict[str, bool]:
-        now = time.monotonic()
-        with health_lock:
-            cached = health_cache["value"]
-            cached_at = health_cache["at"]
-            if (
-                isinstance(cached, dict)
-                and isinstance(cached_at, float)
-                and now - cached_at < HEALTH_CACHE_SECONDS
-            ):
-                return dict(cached)
-        value = {
-            "database": db_probe.run(database_ok),
-            "redis": redis_ok(),
-            "github_token_present": token_ok(),
-        }
-        if os.environ.get("REDIS_URL") and not value["redis"]:
-            value["redis_degraded"] = True
-        with health_lock:
-            health_cache["at"] = time.monotonic()
-            health_cache["value"] = dict(value)
-        return value
+    snapshot = health_snapshot or build_health_snapshot(
+        engine_factory, redis_ping=redis_ping, token_present=token_present
+    )
 
     @app.middleware("http")
     async def csrf_cookie(request: Request, call_next):
@@ -637,7 +650,7 @@ def register_pages(
 
     @app.get("/health")
     def health():
-        return health_snapshot()
+        return snapshot()
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
@@ -653,7 +666,7 @@ def register_pages(
             {
                 "runs": runs,
                 "runs_error": runs_error,
-                "health": health_snapshot(),
+                "health": snapshot(),
                 "runs_root": runs_root,
                 "csrf_token": request.state.csrf_token,
             },
