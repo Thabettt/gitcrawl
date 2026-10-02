@@ -272,6 +272,26 @@ def test_reclaim_stale_redelivers_with_incremented_attempts(redis):
     assert queue.pel_size() == 1
 
 
+def test_set_state_refreshes_updated_at(store, alembic_engine):
+    shard_id = store.create(spec())
+    with alembic_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE shards SET updated_at = now() - interval '1 hour' WHERE id = :id"),
+            {"id": shard_id},
+        )
+        before = connection.scalar(
+            text("SELECT updated_at FROM shards WHERE id = :id"), {"id": shard_id}
+        )
+
+    store.set_state(shard_id, ShardState.ACTIVE)
+
+    with alembic_engine.connect() as connection:
+        after = connection.scalar(
+            text("SELECT updated_at FROM shards WHERE id = :id"), {"id": shard_id}
+        )
+    assert after > before
+
+
 def test_pel_size_accounts_per_lane_and_total(redis):
     queue = ShardQueue(redis, lanes=4)
     queue.enqueue(0)

@@ -366,6 +366,18 @@ def progress_payload(progress: CloneProgress) -> dict:
     return asdict(progress)
 
 
+def _progress_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value
+
+
+def _progress_errors(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
 def read_clone_progress(
     engine: Engine,
     run_id: int,
@@ -384,16 +396,17 @@ def read_clone_progress(
         except ValueError:
             data = None
         if isinstance(data, dict):
-            errors = data.get("errors")
-            error_list = [str(item) for item in errors] if isinstance(errors, list) else []
+            errors = _progress_errors(data.get("errors"))
+            status = data.get("status")
+            current = data.get("current")
             return CloneProgress(
-                status=str(data.get("status", "done")),
-                total=int(data.get("total", 0)),
-                completed=int(data.get("completed", 0)),
-                failed=int(data.get("failed", 0)),
-                current=data.get("current"),
-                errors=error_list,
-                error_count=int(data.get("error_count", len(error_list))),
+                status=status if isinstance(status, str) else "done",
+                total=_progress_int(data.get("total")),
+                completed=_progress_int(data.get("completed")),
+                failed=_progress_int(data.get("failed")),
+                current=current if isinstance(current, str) else None,
+                errors=errors,
+                error_count=_progress_int(data.get("error_count"), default=len(errors)),
             )
     return CloneProgress(status="done", total=0, completed=0, failed=0)
 

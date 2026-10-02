@@ -27,7 +27,7 @@ def _clean(form: Mapping[str, str], name: str) -> str:
 
 
 def _int_or_raw(value: str) -> int | str:
-    return int(value) if value.isdigit() else value
+    return int(value) if value.isascii() and value.isdigit() else value
 
 
 def _scope_fragment(form: Mapping[str, str]) -> str:

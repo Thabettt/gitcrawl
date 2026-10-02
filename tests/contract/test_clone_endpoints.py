@@ -329,6 +329,53 @@ def test_clone_progress_caps_rendered_errors(clean: Engine, tmp_path):
     assert 'style="--progress: 0.2"' in response.text
 
 
+def test_progress_tolerates_corrupt_json_and_wrong_types(clean: Engine, tmp_path):
+    run_id, filter_hash = seed_run(clean, tmp_path)
+    progress_path = tmp_path / "runs" / filter_hash / str(run_id) / "clone-progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    client = make_client(clean, tmp_path)
+
+    progress_path.write_text("{not json", encoding="utf-8")
+    assert client.get(f"/partials/runs/{run_id}/clone-progress").json() == IDLE_PROGRESS
+
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": 7,
+                "total": "many",
+                "completed": [],
+                "failed": None,
+                "current": 5,
+                "errors": {"a": 1},
+                "error_count": "nope",
+            }
+        ),
+        encoding="utf-8",
+    )
+    response = client.get(f"/partials/runs/{run_id}/clone-progress")
+
+    assert response.status_code == 200
+    assert response.json() == IDLE_PROGRESS
+
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "total": 2,
+                "completed": 1,
+                "failed": 0,
+                "errors": [1, None],
+                "error_count": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    body = client.get(f"/partials/runs/{run_id}/clone-progress").json()
+
+    assert body["errors"] == ["1", "None"]
+    assert body["error_count"] == 2
+
+
 def test_clone_unknown_run_is_404(clean: Engine, tmp_path):
     client = make_client(clean, tmp_path)
 

@@ -132,7 +132,7 @@ class ShardStore:
         incomplete: bool | None = None,
         total_count: int | None = None,
     ) -> None:
-        values: dict[str, object] = {"state": new_state.value}
+        values: dict[str, object] = {"state": new_state.value, "updated_at": func.now()}
         if fetched is not None:
             values["fetched"] = fetched
         if incomplete is not None:
