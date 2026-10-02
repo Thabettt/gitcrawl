@@ -215,3 +215,11 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - **Body caps** (`src/serve/middleware.py`): state-changing request bodies default to 1 MiB; `/find` uploads allow 10 MiB. Oversized requests get 413 `{"error":"payload_too_large",...}`.
 - **Clone git environment** (`src/enrich/cloner.py::_git_env`): clones run with `GIT_TERMINAL_PROMPT=0`, stdin closed, and global/system git config disabled (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` pointed at the null device). A machine that relies on global `http.proxy`/custom CA/`url.*.insteadOf` config must set it per-repo or via environment instead.
 - **Run counters (E1)**: run pages now show real `updated`/`unchanged`/`skipped` counters (`src/serve/templates/partials/status.html`).
+
+## Unwired-debt triage Phase 1 (2026-10-02)
+
+- Executed tasks 1–4 of `docs/superpowers/plans/2026-10-02-unwired-debt-triage.md`; ruling R58 recorded (commit 35dbd5a).
+- Wiring: `reclaim_stale` reclaimed before the claim loop in `src/discover/pipeline.py` (225d169, test isolation c8e89c3).
+- Deletions per R58: `RetryQueue`, `order_shards`, `plan_id_ranges`, `mirrors`, `graphql_batch`, `fetch_metafiles`, `skeleton.py` and their tests; quarantine manifest updated (5fafdca).
+- Parked-minor fixes: `_error_message` sanitizes run errors (no upstream bodies), migration 0004 downgrade note, console manual checklist; lazy-loader lock was already fixed in def016b (7951b7e).
+- Verification: full suite 1140 tests collected/passed, coverage 96.12% (floor 93); ruff + black clean.
