@@ -1,50 +1,9 @@
-{% macro sort_link(key, label) %}
-{% set next_dir = 'asc' if sort == key and dir == 'desc' else 'desc' %}
-<a class="sort-link{% if sort == key %} active{% endif %}" data-sort="{{ key }}" data-dir="{{ next_dir }}"
-   href="/partials/runs/{{ run_id }}/table?sort={{ key }}&dir={{ next_dir }}&page=1"
-   hx-get="/partials/runs/{{ run_id }}/table?sort={{ key }}&dir={{ next_dir }}&page=1"
-   hx-target="#run-table" hx-indicator="#table-loading" hx-push-url="false">{{ label }}</a>
-{% endmacro %}
-<p id="run-table-count" class="muted" data-total="{{ total }}" data-shown="{{ rows|length }}">Showing {{ rows|length }} of {{ total }} rows</p>
-<div class="table-wrap">
-  <table id="run-items" class="data-table">
-    <thead>
-      <tr>
-        <th scope="col">{{ sort_link('name', 'Repository') }}</th>
-        <th scope="col">{{ sort_link('stars', 'Stars') }}</th>
-        <th scope="col">{{ sort_link('pushed', 'Pushed') }}</th>
-        <th scope="col">Language</th>
-        <th scope="col">License</th>
-        <th scope="col">Country</th>
-        <th scope="col">Flags</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for row in rows %}
-      <tr id="run-item-{{ row.repo_id }}" data-full-name="{{ row.full_name }}">
-        <td class="mono">{{ row.full_name }}</td>
-        <td>{{ row.stargazers if row.stargazers is not none else '—' }}</td>
-        <td>{{ row.pushed_at or '—' }}</td>
-        <td>{{ row.language or '—' }}</td>
-        <td>{{ row.license_spdx or '—' }}</td>
-        <td><span class="country" data-country="{{ row.country_iso }}">{{ row.country_iso or '—' }}</span>{% if row.geo_confidence %} <span class="confidence" data-confidence="{{ row.geo_confidence }}">{{ row.geo_confidence }}</span>{% endif %}</td>
-        <td class="flags-cell">
-          {% if row.archived %}<span class="badge flag archived" data-flag="archived">archived</span>{% endif %}
-          {% if row.incomplete %}<span class="badge flag incomplete" data-flag="incomplete">incomplete</span>{% endif %}
-        </td>
-      </tr>
-    {% else %}
-      <tr id="run-table-empty">
-        <td colspan="7">
-          <p>No results in this search.</p>
-          <p class="muted">The filter matched nothing new; broaden it and search again.</p>
-          <p class="empty-actions"><a class="button ghost" href="/find">Start a new search</a></p>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
+{% if hint %}
+<p id="table-hint" class="empty-state error-state" role="alert">{{ hint }}</p>
+{% endif %}
+{% with compact = true, table_hx = true, table_url = "/partials/runs/" ~ run_id ~ "/table" %}
+{% include "partials/results_table.html" %}
+{% endwith %}
 <nav id="run-pagination" class="pagination" aria-label="Results pages">
   {% if page > 1 %}
   <a id="page-prev" class="button" href="/partials/runs/{{ run_id }}/table?sort={{ sort }}&dir={{ dir }}&page={{ page - 1 }}"

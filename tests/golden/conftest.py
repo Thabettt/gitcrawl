@@ -111,6 +111,7 @@ PATH_PARAMS = {
     "/vsearch/runs/{filter_hash}/export": {"filter_hash": FILTER_HASH},
     "/api/runs/{run_id}/diff": {"run_id": RUN_A},
     "/runs/{run_id}/diff": {"run_id": RUN_A},
+    "/runs/{run_id}/results": {"run_id": RUN_A},
     "/runs/{run_id}": {"run_id": RUN_A},
     "/runs/{run_id}/quality": {"run_id": RUN_A},
     "/runs/{run_id}/clone-estimate": {"run_id": RUN_A},

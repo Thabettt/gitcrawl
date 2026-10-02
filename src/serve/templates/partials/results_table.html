@@ -1,0 +1,56 @@
+{% macro sort_link(key, label) %}
+{% set next_dir = 'asc' if sort == key and dir == 'desc' else 'desc' %}
+{% if table_hx %}
+<a class="sort-link{% if sort == key %} active{% endif %}" data-sort="{{ key }}" data-dir="{{ next_dir }}"
+   href="{{ table_url }}?sort={{ key }}&dir={{ next_dir }}&page=1"
+   hx-get="{{ table_url }}?sort={{ key }}&dir={{ next_dir }}&page=1"
+   hx-target="#run-table" hx-indicator="#table-loading" hx-push-url="false">{{ label }}</a>
+{% else %}
+<a class="sort-link{% if sort == key %} active{% endif %}" data-sort="{{ key }}" data-dir="{{ next_dir }}"
+   href="{{ table_url }}?sort={{ key }}&dir={{ next_dir }}&page=1&per_page={{ per_page }}">{{ label }}</a>
+{% endif %}
+{% endmacro %}
+<p id="run-table-count" class="muted" data-total="{{ total }}" data-shown="{{ rows|length }}">Showing {{ rows|length }} of {{ total }} rows</p>
+<div class="table-wrap">
+  <table id="run-items" class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">{{ sort_link('name', 'Repository') }}</th>
+        <th scope="col">{{ sort_link('stars', 'Stars') }}</th>
+        {% if not compact %}<th scope="col">Forks</th>{% endif %}
+        <th scope="col">{{ sort_link('pushed', 'Updated') }}</th>
+        {% if not compact %}<th scope="col">Language</th>{% endif %}
+        {% if not compact %}<th scope="col">License</th>{% endif %}
+        <th scope="col">Country</th>
+        <th scope="col">Flags</th>
+        {% if not compact %}<th scope="col">Saved time</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr id="run-item-{{ row.repo_id }}" data-full-name="{{ row.full_name }}">
+        <td class="mono">{{ row.full_name }}</td>
+        <td>{{ row.stargazers if row.stargazers is not none else '—' }}</td>
+        {% if not compact %}<td>{{ row.forks_count if row.forks_count is not none else '—' }}</td>{% endif %}
+        <td>{{ row.pushed_at or '—' }}</td>
+        {% if not compact %}<td>{{ row.language or '—' }}</td>{% endif %}
+        {% if not compact %}<td>{{ row.license_spdx or '—' }}</td>{% endif %}
+        <td><span class="country" data-country="{{ row.country_iso }}">{{ row.country_iso or '—' }}</span>{% if row.geo_confidence %} <span class="confidence" data-confidence="{{ row.geo_confidence }}">{{ row.geo_confidence }}</span>{% endif %}</td>
+        <td class="flags-cell">
+          {% if row.archived %}<span class="badge flag archived" data-flag="archived">archived</span>{% endif %}
+          {% if row.incomplete %}<span class="badge flag incomplete" data-flag="incomplete">incomplete</span>{% endif %}
+        </td>
+        {% if not compact %}<td>{{ saved_at }}</td>{% endif %}
+      </tr>
+    {% else %}
+      <tr id="run-table-empty">
+        <td colspan="{{ 5 if compact else 9 }}">
+          <p>No results in this search.</p>
+          <p class="muted">The filter matched nothing new; broaden it and search again.</p>
+          <p class="empty-actions"><a class="button ghost" href="/find">Start a new search</a></p>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

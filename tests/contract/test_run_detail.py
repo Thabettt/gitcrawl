@@ -453,11 +453,9 @@ def test_table_fragment_non_integer_page_is_a_friendly_400(clean: Engine, tmp_pa
     response = client.get(f"/partials/runs/{run_id}/table", params={"page": "abc"})
 
     assert response.status_code == 400
-    assert response.json() == {
-        "error": "invalid_param",
-        "param": "page",
-        "hint": "page must be an integer >= 1",
-    }
+    assert response.headers["content-type"].startswith("text/html")
+    assert "whole number" in response.text
+    assert 'id="run-items"' in response.text  # the table still renders behind the hint
 
 
 def test_status_fragment_refreshes_flags_when_the_run_becomes_terminal(clean: Engine, tmp_path):

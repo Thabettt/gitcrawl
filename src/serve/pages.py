@@ -44,7 +44,7 @@ from serve.runs import (
     read_clone_progress,
     start_clone,
 )
-from store.models import RunItem, Runs
+from store.models import Repo, RunItem, Runs
 
 CSRF_COOKIE = "gc_csrf"
 CSRF_HEADER = "x-csrf-token"
@@ -59,6 +59,8 @@ RUN_SORT_COLUMNS = {
     "pushed": RunItem.pushed_at,
     "name": RunItem.full_name,
 }
+RESULTS_PAGE_SIZES = (25, 50, 100, 200)
+RESULTS_DIRECTIONS = ("asc", "desc")
 NON_TERMINAL_STATUSES = ("queued", "running")
 HISTORY_STATUSES = ("queued", "running", "done", "partial", "failed")
 HISTORY_PAGE_SIZE = 50
@@ -506,24 +508,28 @@ def _run_detail_summary(row, item_count: int) -> dict:
     }
 
 
-def _table_view(
+def results_context(
     engine: Engine,
     run_id: int,
-    sort: str,
-    direction: str,
-    page: int,
     *,
+    page: int,
+    per_page: int,
+    sort: str,
+    dir: str,
     run_row=None,
     total: int | None = None,
 ) -> dict | None:
-    if run_row is None and _run_detail_row(engine, run_id) is None:
-        return None
+    if run_row is None:
+        run_row = _run_detail_row(engine, run_id)
+        if run_row is None:
+            return None
     if sort not in RUN_SORT_COLUMNS:
         sort = "stars"
-    if direction not in ("asc", "desc"):
-        direction = "desc"
+    if dir not in RESULTS_DIRECTIONS:
+        dir = "desc"
+    per_page = max(1, int(per_page))
     column = RUN_SORT_COLUMNS[sort]
-    order = column.asc() if direction == "asc" else column.desc()
+    order = column.asc() if dir == "asc" else column.desc()
     with engine.connect() as connection:
         if total is None:
             total = int(
@@ -533,7 +539,7 @@ def _table_view(
                 or 0
             )
         total = int(total)
-        pages = max(1, (total + TABLE_PAGE_SIZE - 1) // TABLE_PAGE_SIZE)
+        pages = max(1, (total + per_page - 1) // per_page)
         current = min(max(page, 1), pages)
         rows = (
             connection.execute(
@@ -548,11 +554,13 @@ def _table_view(
                     RunItem.country_iso,
                     RunItem.geo_confidence,
                     RunItem.virtuals,
+                    Repo.forks_count,
                 )
+                .outerjoin(Repo, Repo.id == RunItem.repo_id)
                 .where(RunItem.run_id == run_id)
                 .order_by(order.nullslast(), RunItem.repo_id)
-                .offset((current - 1) * TABLE_PAGE_SIZE)
-                .limit(TABLE_PAGE_SIZE)
+                .offset((current - 1) * per_page)
+                .limit(per_page)
             )
             .mappings()
             .all()
@@ -571,11 +579,30 @@ def _table_view(
     return {
         "rows": items,
         "sort": sort,
-        "dir": direction,
+        "dir": dir,
         "page": current,
         "pages": pages,
         "total": total,
+        "per_page": per_page,
+        "saved_at": _iso(run_row["finished_at"] or run_row["created_at"]),
     }
+
+
+def _results_page_number(raw: str) -> tuple[int, str]:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    if value < 1:
+        return 1, "Page must be a whole number of 1 or more."
+    return value, ""
+
+
+def _spec_sentence(filter_spec: object) -> str:
+    try:
+        return describe_spec(parse_filter_spec(filter_spec))
+    except (FilterSpecError, TypeError):
+        return "Everything"
 
 
 async def validate_csrf(request: Request) -> bool:
@@ -934,7 +961,16 @@ def register_pages(
                 request, "run_detail.html", {"run": None}, status_code=404
             )
         item_count = _item_count(engine, run_id)
-        table = _table_view(engine, run_id, "stars", "desc", 1, run_row=row, total=item_count)
+        table = results_context(
+            engine,
+            run_id,
+            page=1,
+            per_page=TABLE_PAGE_SIZE,
+            sort="stars",
+            dir="desc",
+            run_row=row,
+            total=item_count,
+        )
         estimate = clone_estimate_for_run(
             engine, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=clone_root
         )
@@ -986,6 +1022,61 @@ def register_pages(
             {"run": _run_detail_summary(row, _item_count(engine, run_id))},
         )
 
+    @app.get("/runs/{run_id}/results", response_class=HTMLResponse)
+    def run_results_page(
+        request: Request,
+        run_id: int,
+        page: str = "1",
+        per_page: str = "50",
+        sort: str = "stars",
+        dir: str = "desc",
+    ):
+        engine = engine_factory()
+        row = _run_detail_row(engine, run_id)
+        if row is None:
+            return templates.TemplateResponse(
+                request, "results.html", {"run": None}, status_code=404
+            )
+        hints: list[str] = []
+        page_number, hint = _results_page_number(page)
+        if hint:
+            hints.append(hint)
+        try:
+            page_size = int(per_page)
+        except (TypeError, ValueError):
+            page_size = 0
+        if page_size not in RESULTS_PAGE_SIZES:
+            hints.append("Per page must be one of 25, 50, 100, 200.")
+            page_size = TABLE_PAGE_SIZE
+        if sort not in RUN_SORT_COLUMNS:
+            hints.append("Sort must be one of: stars, pushed, name.")
+            sort = "stars"
+        if dir not in RESULTS_DIRECTIONS:
+            hints.append("Direction must be one of: asc, desc.")
+            dir = "desc"
+        table = results_context(
+            engine,
+            run_id,
+            page=page_number,
+            per_page=page_size,
+            sort=sort,
+            dir=dir,
+            run_row=row,
+        )
+        return templates.TemplateResponse(
+            request,
+            "results.html",
+            {
+                "run": row,
+                "run_id": run_id,
+                "sentence": _spec_sentence(row["filter_spec"]),
+                "hints": hints,
+                "per_page_options": RESULTS_PAGE_SIZES,
+                **(table or {}),
+            },
+            status_code=400 if hints else 200,
+        )
+
     @app.get("/partials/runs/{run_id}/table", response_class=HTMLResponse)
     def run_table_partial(
         request: Request,
@@ -994,15 +1085,22 @@ def register_pages(
         dir: str = "desc",
         page: str = "1",
     ):
-        try:
-            page_number = _page_param(page)
-        except ValueError:
-            return _invalid_param("page", "page must be an integer >= 1")
-        table = _table_view(engine_factory(), run_id, sort, dir, page_number)
+        page_number, hint = _results_page_number(page)
+        table = results_context(
+            engine_factory(),
+            run_id,
+            page=page_number,
+            per_page=TABLE_PAGE_SIZE,
+            sort=sort,
+            dir=dir,
+        )
         if table is None:
             return _run_not_found(run_id)
         return templates.TemplateResponse(
-            request, "partials/table.html", {"run_id": run_id, **table}
+            request,
+            "partials/table.html",
+            {"run_id": run_id, "hint": hint, **table},
+            status_code=400 if hint else 200,
         )
 
     @app.get("/runs/{run_id}/clone-estimate")

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Results · gitcrawl{% endblock %}
+{% block body %}
+{% if not run %}
+<section class="panel" id="results-not-found">
+  <h1>Search not found</h1>
+  <p class="muted">No search with this id exists in the database.</p>
+  <p><a href="/runs">Back to searches</a></p>
+</section>
+{% else %}
+<section class="panel" id="results-header" data-run-id="{{ run.id }}">
+  <div class="panel-head">
+    <h1>Results</h1>
+    <p class="muted">Search #{{ run.id }} · {{ sentence }}</p>
+  </div>
+  {% if hints %}
+  <div id="results-hints" class="empty-state error-state" role="alert">
+    {% for item in hints %}
+    <p>{{ item }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <p class="muted">Frozen results, saved {{ saved_at }} · {{ total }} rows. Every page, sort and page size lives in the URL, so Back works.</p>
+</section>
+<section class="panel" id="results-actions">
+  <div class="form-actions">
+    <a id="export-json" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=json">Export JSON</a>
+    <a id="export-csv" class="button" href="/vsearch/runs/{{ run.filter_hash }}/export?format=csv">Export CSV</a>
+  </div>
+  <p class="muted">Downloads the frozen result list as JSON or CSV.</p>
+</section>
+<section class="panel" id="results-filter-row">
+  <h2>Narrow these results</h2>
+  <form id="results-filters" class="filter-row" method="get" action="/runs/{{ run.id }}/results" aria-describedby="results-filters-note">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <input type="hidden" name="per_page" value="{{ per_page }}">
+    <label class="field" for="filter-dockerfile">
+      <span class="field-label">Has Dockerfile</span>
+      <select class="field-input" id="filter-dockerfile" name="has_dockerfile" disabled>
+        <option value="any">any</option>
+        <option value="true">yes</option>
+        <option value="false">no</option>
+      </select>
+    </label>
+    <label class="field" for="filter-country">
+      <span class="field-label">Country</span>
+      <input class="field-input" type="text" id="filter-country" name="country" disabled>
+    </label>
+    <label class="field" for="filter-language">
+      <span class="field-label">Language</span>
+      <input class="field-input" type="text" id="filter-language" name="language" disabled>
+    </label>
+    <button class="button" type="submit" disabled>Filter</button>
+    <p class="muted" id="results-filters-note">Not available yet — narrowing a frozen result list is planned.</p>
+  </form>
+</section>
+{% with compact = false, table_hx = false, table_url = "/runs/" ~ run.id ~ "/results" %}
+{% include "partials/results_table.html" %}
+{% endwith %}
+<nav id="run-pagination" class="pagination" aria-label="Results pages">
+  {% if page > 1 %}
+  <a id="page-prev" class="button" href="/runs/{{ run.id }}/results?page={{ page - 1 }}&per_page={{ per_page }}&sort={{ sort }}&dir={{ dir }}">Previous</a>
+  {% endif %}
+  <span id="page-status" class="muted" data-page="{{ page }}" data-pages="{{ pages }}">Page {{ page }} of {{ pages }} · {{ total }} rows</span>
+  {% if page < pages %}
+  <a id="page-next" class="button" href="/runs/{{ run.id }}/results?page={{ page + 1 }}&per_page={{ per_page }}&sort={{ sort }}&dir={{ dir }}">Next</a>
+  {% endif %}
+</nav>
+<form id="per-page" class="per-page-form" method="get" action="/runs/{{ run.id }}/results">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="dir" value="{{ dir }}">
+  <label class="field" for="per-page-select">
+    <span class="field-label">Per page</span>
+    <select class="field-input" id="per-page-select" name="per_page">
+      {% for size in per_page_options %}
+      <option value="{{ size }}"{{ ' selected' if size == per_page }}>{{ size }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button class="button" type="submit">Apply</button>
+</form>
+<p><a href="/runs/{{ run.id }}">Back to search #{{ run.id }}</a> · <a href="/runs">All searches</a></p>
+{% endif %}
+{% endblock %}
