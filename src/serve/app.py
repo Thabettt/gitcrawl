@@ -64,7 +64,7 @@ from serve.pages import (
     validate_csrf,
 )
 from serve.payload_cache import CACHE_TTL_SECONDS, RunPayloadCache
-from serve.runner import apply_sort, build_deps, make_runner
+from serve.runner import apply_sort, build_deps
 from serve.runs import bundle_file, export_bundle, latest_run_for_hash
 from serve.settings import register_settings
 from serve.virtual_params import VIRTUAL_FILTERS
@@ -375,9 +375,26 @@ def create_app(
 
     def runner_for() -> Runner:
         def build() -> Runner:
-            if runner_factory is None:
-                return make_runner(build_deps(engine_for()))
-            return runner_factory(engine_for())
+            if runner_factory is not None:
+                return runner_factory(engine_for())
+
+            def runner(run_id: int, filter_spec: dict) -> RunPayload:
+                from serve.filter_spec import parse_filter_spec
+                from serve.runner import run_filter, runner_config_from
+                from store.settings import load_run_settings
+
+                settings = load_run_settings(engine_for())
+                deps = build_deps(engine_for(), max_concurrent=settings.limiter_max_concurrent)
+                try:
+                    return run_filter(
+                        deps,
+                        parse_filter_spec(filter_spec),
+                        config=runner_config_from(settings),
+                    )
+                finally:
+                    deps.client.close()
+
+            return runner
 
         return cast(Runner, loaders.get("runner", build))
 

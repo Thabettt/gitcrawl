@@ -239,3 +239,20 @@ def test_sso_partial_results_propagates():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(PartialResultsError):
         fetch_batch(DictAdapter(), ["1"], client=client)
+
+
+def test_allow_requests_false_resolves_everything_through_fallback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request expected when batching is disabled")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        KeyAdapter(),
+        ["1", "2"],
+        client=client,
+        allow_requests=False,
+        fallback=lambda key: f"rest-{key}",
+    )
+    assert outcome.values == {"1": "rest-1", "2": "rest-2"}
+    assert outcome.stats.requests == 0
+    assert outcome.stats.fallbacks == 2

@@ -40,6 +40,7 @@ from serve.executor import Runner, RunPayload, RunPayloadItem
 from serve.filter_spec import FilterSpec, parse_filter_spec, spec_to_query
 from serve.virtual_params import GEO_CONFIDENCE_ORDER
 from store.models import Owner, Repo
+from store.settings import RunSettings
 
 _INT_PARAMS = ("page", "per_page", "since")
 _R44_VIRTUALS = ("min_loc", "max_loc")
@@ -59,6 +60,21 @@ class RunnerConfig:
     max_candidates: int = 500
     max_hydrate: int = 200
     max_enrich: int = 100
+    request_deadline_seconds: float | None = None
+    graphql_batch: bool = True
+    graphql_batch_size: int = 20
+
+
+def runner_config_from(settings: RunSettings) -> RunnerConfig:
+    return RunnerConfig(
+        max_shards=settings.max_shards,
+        max_candidates=settings.max_candidates,
+        max_hydrate=settings.max_hydrate,
+        max_enrich=settings.max_enrich,
+        request_deadline_seconds=float(settings.request_deadline_seconds),
+        graphql_batch=settings.graphql_batch,
+        graphql_batch_size=settings.graphql_batch_size,
+    )
 
 
 def _redis_or_fake():
@@ -92,6 +108,7 @@ def build_deps(
     redis_client=None,
     client: httpx.Client | None = None,
     config: RunnerConfig | None = None,
+    max_concurrent: int = 10,
 ) -> Deps:
     if token is None:
         tokens = load_tokens()
@@ -104,7 +121,11 @@ def build_deps(
         client=client if client is not None else create_client(token),
         engine=engine,
         redis=redis_client,
-        limiter=BucketLimiter(redis_client) if redis_client is not None else None,
+        limiter=(
+            BucketLimiter(redis_client, max_concurrent=max_concurrent)
+            if redis_client is not None
+            else None
+        ),
         token_fp=token_fingerprint(token),
         audit_buffer=audit.AuditBuffer(engine),
     )
@@ -194,10 +215,10 @@ def _ordered_rows(engine: Engine, repo_ids: list[int]) -> list[dict]:
 def _hydrate(
     deps: Deps,
     rows: list[dict],
-    cap: int,
+    cfg: RunnerConfig,
     hook: Callable[[httpx.Response, float], None],
 ) -> RefreshStats:
-    candidates = rows[:cap]
+    candidates = rows[: cfg.max_hydrate]
     if not candidates:
         return RefreshStats()
     return refresh_repos_batched(
@@ -208,6 +229,8 @@ def _hydrate(
         token_id=deps.token_fp,
         on_response=hook,
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
+        batch_size=cfg.graphql_batch_size,
+        allow_requests=cfg.graphql_batch,
     )
 
 
@@ -287,6 +310,7 @@ def _apply_geo(
     budget: int,
     hook: Callable[[httpx.Response, float], None],
     report: dict,
+    cfg: RunnerConfig,
 ) -> tuple[list[dict], int, int]:
     country = virtual.get("owner_country")
     threshold = virtual.get("min_geo_confidence")
@@ -323,7 +347,7 @@ def _apply_geo(
         return location
 
     outcome = fetch_batch(
-        OwnerLocationAdapter(owner_types),
+        OwnerLocationAdapter(owner_types, batch_size=cfg.graphql_batch_size),
         list(rows_by_login),
         client=deps.client,
         limiter=deps.limiter,
@@ -331,6 +355,7 @@ def _apply_geo(
         fallback=fallback,
         on_response=hook,
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
+        allow_requests=cfg.graphql_batch,
     )
     report["owners"] = outcome.stats.as_dict()
     for login, owner_id in rows_by_login.items():
@@ -409,6 +434,7 @@ def _apply_dockerfile(
     budget: int,
     hook: Callable[[httpx.Response, float], None],
     report: dict,
+    cfg: RunnerConfig,
 ) -> tuple[list[dict], int, int]:
     if not isinstance(wanted, bool):
         return rows, 0, 0
@@ -435,7 +461,9 @@ def _apply_dockerfile(
     rows_by_key = {str(row["id"]): row for row in selected}
     outcome = fetch_batch(
         FilePresenceAdapter(
-            _DOCKERFILE_PATH, {key: row["full_name"] for key, row in rows_by_key.items()}
+            _DOCKERFILE_PATH,
+            {key: row["full_name"] for key, row in rows_by_key.items()},
+            batch_size=cfg.graphql_batch_size,
         ),
         list(rows_by_key),
         client=deps.client,
@@ -444,6 +472,7 @@ def _apply_dockerfile(
         fallback=fallback,
         on_response=hook,
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
+        allow_requests=cfg.graphql_batch,
     )
     report["files"] = outcome.stats.as_dict()
     kept: list[dict] = []
@@ -497,10 +526,12 @@ def _commit_handler(
     return handler
 
 
-def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped, report):
+def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped, report, cfg):
     def handler(ids):
         rows = [rows_by_id[repo_id] for repo_id in ids]
-        kept, used, geo_skipped = _apply_geo(deps, rows, virtual, budget["remaining"], hook, report)
+        kept, used, geo_skipped = _apply_geo(
+            deps, rows, virtual, budget["remaining"], hook, report, cfg
+        )
         budget["remaining"] = max(0, budget["remaining"] - used)
         skipped["geo"] += geo_skipped
         return [row["id"] for row in kept], used
@@ -508,11 +539,11 @@ def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped, report):
     return handler
 
 
-def _dockerfile_handler(deps, rows_by_id, wanted, budget, hook, skipped, report):
+def _dockerfile_handler(deps, rows_by_id, wanted, budget, hook, skipped, report, cfg):
     def handler(ids):
         rows = [rows_by_id[repo_id] for repo_id in ids]
         kept, dockerfile_skipped, used = _apply_dockerfile(
-            deps, rows, wanted, budget["remaining"], hook, report
+            deps, rows, wanted, budget["remaining"], hook, report, cfg
         )
         budget["remaining"] = max(0, budget["remaining"] - used)
         skipped["dockerfile"] += dockerfile_skipped
@@ -532,7 +563,9 @@ def _enrich_handlers(
     commit_counts: Mapping[str, int] | None = None,
     *,
     depth: str = "page",
+    cfg: RunnerConfig | None = None,
 ) -> tuple[dict, list[str]]:
+    resolved = cfg or RunnerConfig()
     rows_by_id = {row["id"]: row for row in rows}
     handlers: dict = {}
     unsupported: list[str] = []
@@ -550,12 +583,19 @@ def _enrich_handlers(
         elif step.field in ("owner_country", "min_geo_confidence"):
             if not geo_claimed:
                 handlers[step.field] = _geo_handler(
-                    deps, rows_by_id, virtual, budget, hook, skipped, report
+                    deps, rows_by_id, virtual, budget, hook, skipped, report, resolved
                 )
                 geo_claimed = True
         elif step.field == "has_dockerfile":
             handlers[step.field] = _dockerfile_handler(
-                deps, rows_by_id, virtual.get("has_dockerfile"), budget, hook, skipped, report
+                deps,
+                rows_by_id,
+                virtual.get("has_dockerfile"),
+                budget,
+                hook,
+                skipped,
+                report,
+                resolved,
             )
         else:
             unsupported.append(step.field)
@@ -613,8 +653,14 @@ def apply_sort(items: list[dict], sort: str | None, order: str | None) -> list[d
 
 
 def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
+    cfg = config or RunnerConfig()
     if deps.limiter is not None:
-        deps.limiter.bind_deadline(Deadline(request_deadline_seconds()))
+        seconds = (
+            cfg.request_deadline_seconds
+            if cfg.request_deadline_seconds is not None
+            else request_deadline_seconds()
+        )
+        deps.limiter.bind_deadline(Deadline(seconds))
     try:
         return _run_filter(deps, spec, config=config)
     finally:
@@ -665,7 +711,7 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
             f"{dropped_hydration} repo(s) not hydrated due to max_hydrate="
             f"{cfg.max_hydrate}; results are incomplete"
         )
-    hydration = _hydrate(deps, candidates, cfg.max_hydrate, hook)
+    hydration = _hydrate(deps, candidates, cfg, hook)
     graphql_report: dict[str, object] = {"hydration": hydration.batch}
     if hydration.unresolved:
         sample = "; ".join(
@@ -679,7 +725,15 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
     budget = {"remaining": cfg.max_enrich}
     skipped = {"geo": 0, "dockerfile": 0, "commits": 0}
     handlers, unsupported = _enrich_handlers(
-        deps, rows, virtual, budget, hook, skipped, graphql_report, hydration.commit_counts
+        deps,
+        rows,
+        virtual,
+        budget,
+        hook,
+        skipped,
+        graphql_report,
+        hydration.commit_counts,
+        cfg=cfg,
     )
     for field in unsupported:
         warnings.append(

@@ -108,6 +108,7 @@ def refresh_repos_batched(
     on_response: Callable[[httpx.Response, float], None] | None = None,
     deadline: Deadline | None = None,
     batch_size: int = MAX_BATCH_SIZE,
+    allow_requests: bool = True,
 ) -> RefreshStats:
     stats = RefreshStats()
     candidates = [(str(row["id"]), str(row["full_name"])) for row in rows]
@@ -181,6 +182,7 @@ def refresh_repos_batched(
         sleep=sleep,
         now=now,
         jitter=jitter,
+        allow_requests=allow_requests,
     )
     for key, details in outcome.values.items():
         hydrated = HydratedRepo(

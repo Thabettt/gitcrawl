@@ -137,6 +137,10 @@ class BucketLimiter:
     def deadline(self) -> Deadline | None:
         return self._deadline
 
+    @property
+    def max_concurrent(self) -> int:
+        return self._max_concurrent
+
     def _key(self, resource: str, token_id: str) -> str:
         return f"{_KEY_PREFIX}:{resource}:{token_id}"
 

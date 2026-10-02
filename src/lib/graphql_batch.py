@@ -168,6 +168,7 @@ def fetch_batch(
     limiter: BucketLimiter | None = None,
     token_id: str | None = None,
     fallback: Callable[[str], object | None] | None = None,
+    allow_requests: bool = True,
     deadline: Deadline | None = None,
     on_response: Callable[[httpx.Response, float], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -205,6 +206,13 @@ def fetch_batch(
         else:
             values[key] = result
             stats.fallbacks += 1
+
+    if not allow_requests:
+        for key in unique:
+            fall_back(key, "graphql batching disabled")
+        stats.values = len(values)
+        stats.unresolved = len(unresolved)
+        return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
 
     def requeue(failed: list[str]) -> list[str]:
         fresh: list[str] = []

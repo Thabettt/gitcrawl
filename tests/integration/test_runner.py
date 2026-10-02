@@ -1320,3 +1320,48 @@ def test_run_filter_reports_batch_counts_in_field_stats(clean: Engine):
     assert hydration["values"] == 1
     assert hydration["requests"] == 1
     assert hydration["deadline_hit"] is False
+
+
+def test_runner_config_from_maps_settings(clean: Engine):
+    from serve.runner import runner_config_from
+    from store.settings import update_run_settings
+
+    settings = update_run_settings(
+        clean, {"max_shards": 1, "max_candidates": 2, "max_hydrate": 1, "graphql_batch": False}
+    )
+    config = runner_config_from(settings)
+    assert config.max_shards == 1
+    assert config.max_candidates == 2
+    assert config.max_hydrate == 1
+    assert config.graphql_batch is False
+
+
+def test_build_deps_honors_max_concurrent(clean: Engine):
+    deps = build_deps(clean, token="t", redis_client=fakeredis.FakeRedis(), max_concurrent=2)
+    assert isinstance(deps.limiter, BucketLimiter)
+    assert deps.limiter.max_concurrent == 2
+
+
+def test_run_filter_with_batching_disabled_hydrates_via_rest(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            raise AssertionError("graphql batching disabled must skip /graphql")
+        if path.startswith("/repos/owner1/repo1"):
+            return httpx.Response(200, json=repo_item(1))
+        raise AssertionError(f"unexpected path {path}")
+
+    client, requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python"),
+        config=RunnerConfig(max_shards=1, graphql_batch=False),
+    )
+
+    assert [item.repo_id for item in payload.items] == [1]
+    assert all(request.url.path != "/graphql" for request in requests)
+    hydration = payload.field_stats["graphql"]["hydration"]
+    assert hydration["requests"] == 0
+    assert hydration["handled"] == 1
