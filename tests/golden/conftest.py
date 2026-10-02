@@ -248,6 +248,9 @@ def build_golden_app(engine: Engine, runs_root: Path):
 
         return runner
 
+    def find_count_factory():
+        return lambda _query: 4200
+
     return create_app(
         engine=engine,
         runner_factory=runner_factory,
@@ -257,6 +260,7 @@ def build_golden_app(engine: Engine, runs_root: Path):
         redis_ping=lambda: True,
         token_present=lambda: True,
         metrics_redis=lambda: None,
+        find_count_factory=find_count_factory,
     )
 
 

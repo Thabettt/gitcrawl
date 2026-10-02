@@ -26,7 +26,13 @@ from enrich.cloner import CloneMode, parse_mode
 from lib.gh_client import API_VERSION, load_tokens
 from serve.diff import diff_runs
 from serve.executor import RunExecutor, Runner, create_run
-from serve.filter_spec import FilterSpecError, parse_filter_spec, spec_to_dict
+from serve.filter_spec import (
+    FilterSpecError,
+    describe_spec,
+    parse_filter_spec,
+    spec_to_dict,
+    spec_to_query,
+)
 from serve.forms import build_spec_from_form, form_state, spec_to_form_values
 from serve.library import LibraryError, create_filter, get_filter, list_filters
 from serve.metrics import severity
@@ -594,12 +600,16 @@ async def validate_csrf(request: Request) -> bool:
         return False
 
 
-def _flat_form(form) -> dict[str, str]:
+def _flat_items(items) -> dict[str, str]:
     grouped: dict[str, list[str]] = {}
-    for key, value in form.multi_items():
+    for key, value in items:
         if isinstance(value, str):
             grouped.setdefault(key, []).append(value)
     return {key: ",".join(values) for key, values in grouped.items()}
+
+
+def _flat_form(form) -> dict[str, str]:
+    return _flat_items(form.multi_items())
 
 
 def _invalid_param(param: str, hint: str) -> JSONResponse:
@@ -623,6 +633,7 @@ def register_pages(
     token_present: Callable[[], bool] | None = None,
     health_snapshot: Callable[[], dict[str, bool]] | None = None,
     runner_factory: Callable[[], Runner] | None = None,
+    find_count_factory: Callable[[], Callable[[str], int]] | None = None,
     executor_factory: Callable[[], RunExecutor],
 ) -> None:
     templates = _templates
@@ -678,12 +689,13 @@ def register_pages(
         errors: tuple[str, ...] = (),
         hints: tuple[str, ...] = (),
         status_code: int = 200,
+        sentence: str = "",
     ) -> HTMLResponse:
         state = replace(form_state(values), errors=tuple(errors), hints=tuple(hints))
         return templates.TemplateResponse(
             request,
             "filters.html",
-            {"state": state, "csrf_token": request.state.csrf_token},
+            {"state": state, "csrf_token": request.state.csrf_token, "spec_sentence": sentence},
             status_code=status_code,
         )
 
@@ -691,6 +703,48 @@ def register_pages(
         if runner_factory is None:
             return None
         return runner_factory()
+
+    def default_find_count_factory() -> Callable[[str], int]:
+        def count(query: str) -> int:
+            from discover.pipeline import count_total
+            from serve.runner import build_deps
+
+            deps = build_deps(engine_factory())
+            try:
+                return count_total(deps, query)
+            finally:
+                deps.client.close()
+
+        return count
+
+    count_factory = find_count_factory or default_find_count_factory
+
+    @app.get("/partials/find/matches", response_class=HTMLResponse)
+    def find_matches(request: Request):
+        values = _flat_items(request.query_params.multi_items())
+        if "q" in request.query_params:
+            values["keywords"] = request.query_params["q"]
+        context: dict[str, object] = {
+            "errors": (),
+            "hints": (),
+            "csrf_token": request.state.csrf_token,
+        }
+        try:
+            spec = parse_filter_spec(build_spec_from_form(values))
+        except FilterSpecError as exc:
+            context["errors"] = exc.errors
+            context["hints"] = exc.hints
+        else:
+            try:
+                count = count_factory()(spec_to_query(spec))
+            except Exception:
+                context["errors"] = ("Could not check matches right now.",)
+            else:
+                context["count"] = count
+                context["sentence"] = describe_spec(spec)
+        if request.headers.get("hx-request") == "true":
+            return templates.TemplateResponse(request, "partials/find_matches.html", context)
+        return templates.TemplateResponse(request, "find_matches_full.html", context)
 
     @app.get("/find", response_class=HTMLResponse)
     @app.get("/vsearch/", response_class=HTMLResponse)
@@ -715,7 +769,13 @@ def register_pages(
                     404,
                 )
             values.update(spec_to_form_values(view.filter_spec))
-        return render_filters(request, values)
+        sentence = ""
+        if values:
+            try:
+                sentence = describe_spec(parse_filter_spec(build_spec_from_form(values)))
+            except FilterSpecError:
+                sentence = ""
+        return render_filters(request, values, sentence=sentence)
 
     @app.post("/find")
     async def filter_submit(request: Request):

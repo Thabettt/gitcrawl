@@ -72,6 +72,10 @@
     };
   }
 
+  function countInputsFor(comparator) {
+    return comparator === "range" ? "range" : "value";
+  }
+
   return {
     TOAST_DURATION_MS: TOAST_DURATION_MS,
     requestErrorMessage: requestErrorMessage,
@@ -80,6 +84,7 @@
     parseCloneLimit: parseCloneLimit,
     isEditableTarget: isEditableTarget,
     createRowCache: createRowCache,
-    createStartGuard: createStartGuard
+    createStartGuard: createStartGuard,
+    countInputsFor: countInputsFor
   };
 });

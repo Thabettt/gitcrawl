@@ -100,12 +100,14 @@ def make_client(
     redis_ping=None,
     token_present=None,
     runs_root="runs",
+    find_count_factory=None,
 ) -> TestClient:
     application = create_app(
         engine=engine,
         runs_root=str(runs_root),
         redis_ping=redis_ping,
         token_present=token_present,
+        find_count_factory=find_count_factory,
     )
     return TestClient(application, raise_server_exceptions=False)
 

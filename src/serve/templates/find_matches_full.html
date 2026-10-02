@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Check matches · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Check matches</h1>
+    <p class="muted">GitHub-evaluable filters only; extra rules (files, country) are applied after fetching.</p>
+  </div>
+  {% include "partials/find_matches.html" %}
+  <p><a href="/find">Back to New search</a></p>
+</section>
+{% endblock %}

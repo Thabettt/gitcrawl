@@ -43,6 +43,13 @@ test("isEditableTarget detects form controls and contenteditable", () => {
   assert.equal(applib.isEditableTarget({ tagName: "div", isContentEditable: true }), true);
 });
 
+test("countInputsFor keeps only the inputs a comparator needs", () => {
+  assert.equal(applib.countInputsFor("range"), "range");
+  for (const comparator of [">", ">=", "<", "<=", "=", "eq", "", "bogus"]) {
+    assert.equal(applib.countInputsFor(comparator), "value");
+  }
+});
+
 test("toast messages and duration are stable", () => {
   assert.equal(applib.requestErrorMessage(500), "Request failed (500)");
   assert.equal(applib.requestErrorMessage(""), "Request failed");

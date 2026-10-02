@@ -12,6 +12,13 @@
   <input class="field-input" type="number" min="0" id="field-{{ name }}" name="{{ name }}" value="{{ state.fields.get(name, '') }}">
 </label>
 {%- endmacro %}
+{% macro disabled_number_field(name, label, note) -%}
+<label class="field" for="field-{{ name }}">
+  <span class="field-label">{{ label }}</span>
+  <input class="field-input" type="number" min="0" id="field-{{ name }}" name="{{ name }}" value="{{ state.fields.get(name, '') }}" disabled aria-describedby="field-note-{{ name }}">
+  <span class="field-note muted" id="field-note-{{ name }}">{{ note }}</span>
+</label>
+{%- endmacro %}
 {% macro date_field(name, label) -%}
 <label class="field" for="field-{{ name }}">
   <span class="field-label">{{ label }}</span>
@@ -29,9 +36,9 @@
 </label>
 {%- endmacro %}
 {% macro count_row(name, label) -%}
-<fieldset class="count-row">
+<fieldset class="count-row" data-count-row>
   <legend class="field-label">{{ label }}</legend>
-  <select class="field-input" id="field-cmp-{{ name }}" name="cmp_{{ name }}">
+  <select class="field-input" id="field-cmp-{{ name }}" name="cmp_{{ name }}" data-count-comparator>
     <option value=">" {{ 'selected' if state.fields.get('cmp_' ~ name, '>') == '>' }}>&gt;</option>
     <option value=">=" {{ 'selected' if state.fields.get('cmp_' ~ name) == '>=' }}>&gt;=</option>
     <option value="<" {{ 'selected' if state.fields.get('cmp_' ~ name) == '<' }}>&lt;</option>
@@ -40,16 +47,16 @@
     <option value="eq" {{ 'selected' if state.fields.get('cmp_' ~ name) == 'eq' }}>eq</option>
     <option value="range" {{ 'selected' if state.fields.get('cmp_' ~ name) == 'range' }}>range</option>
   </select>
-  <input class="field-input" type="text" id="field-val-{{ name }}" name="val_{{ name }}" value="{{ state.fields.get('val_' ~ name, '') }}" aria-label="value">
-  <input class="field-input" type="text" id="field-range-{{ name }}-min" name="range_{{ name }}_min" value="{{ state.fields.get('range_' ~ name ~ '_min', '') }}" aria-label="range minimum">
-  <input class="field-input" type="text" id="field-range-{{ name }}-max" name="range_{{ name }}_max" value="{{ state.fields.get('range_' ~ name ~ '_max', '') }}" aria-label="range maximum">
+  <input class="field-input" type="text" id="field-val-{{ name }}" name="val_{{ name }}" value="{{ state.fields.get('val_' ~ name, '') }}" aria-label="Value" data-count-mode="value">
+  <input class="field-input" type="text" id="field-range-{{ name }}-min" name="range_{{ name }}_min" value="{{ state.fields.get('range_' ~ name ~ '_min', '') }}" aria-label="Minimum" data-count-mode="range">
+  <input class="field-input" type="text" id="field-range-{{ name }}-max" name="range_{{ name }}_max" value="{{ state.fields.get('range_' ~ name ~ '_max', '') }}" aria-label="Maximum" data-count-mode="range">
 </fieldset>
 {%- endmacro %}
 {% block body %}
 <section class="panel">
   <div class="panel-head">
-    <h1>Find</h1>
-    <p class="muted">Pick filters or upload a filter-spec JSON; both doors build the same spec.</p>
+    <h1>New search</h1>
+    <p class="muted">Pick filters and run the search; GitHub evaluates the query, extra rules run after fetching.</p>
   </div>
   <div id="recent-filters" class="recent-filters" hidden>
     <span class="field-label" id="recent-filters-label">Recent filters</span>
@@ -67,163 +74,195 @@
   {% endif %}
   <form id="find-form" class="filter-form" action="/find" method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
-    <section class="filter-section" id="filter-keywords">
-      <h2>Keywords</h2>
-      <div class="field-grid">
-        {{ text_field("keywords", "Keywords") }}
+    <aside class="summary-rail" id="find-summary" aria-label="Search summary">
+      <div class="summary-rail-block">
+        <span class="field-label">Your search</span>
+        <p id="spec-sentence">{{ spec_sentence or "Everything" }}</p>
       </div>
-      <fieldset class="field-group">
-        <legend class="field-label">In scope</legend>
-        {% for scope in ("name", "description", "topics", "readme") %}
-        <label class="checkbox" for="field-in-scope-{{ scope }}">
-          <input type="checkbox" id="field-in-scope-{{ scope }}" name="in_scope" value="{{ scope }}" {{ 'checked' if scope in state.fields.get('in_scope', '').split(',') }}>
-          {{ scope }}
-        </label>
-        {% endfor %}
-      </fieldset>
-    </section>
-    <section class="filter-section" id="filter-owner">
-      <h2>Owner</h2>
-      <div class="field-grid">
-        {{ text_field("user", "User") }}
-        {{ text_field("org", "Org") }}
-        {{ text_field("repo", "Repo") }}
+      <div class="summary-rail-block">
+        <button class="button" type="button" id="check-matches" hx-get="/partials/find/matches" hx-include="closest form" hx-target="#match-result" hx-swap="innerHTML">Check matches</button>
+        <p class="muted">One search request. Approximate count of repos GitHub can evaluate; extra rules (files, country) will shrink this when you run.</p>
+        <div id="match-result" aria-live="polite"></div>
       </div>
-    </section>
-    <section class="filter-section" id="filter-counts">
-      <h2>Counts</h2>
-      <div class="field-grid">
-        {{ count_row("stars", "Stars") }}
-        {{ count_row("forks", "Forks") }}
-        {{ count_row("size", "Size (KB)") }}
-        {{ count_row("followers", "Followers") }}
-        {{ count_row("topics", "Topics count") }}
+      <div class="summary-rail-block">
+        <div class="action-row">
+          <button class="button primary" type="submit" name="action" value="find">Run search (live)</button>
+          <p class="muted">Finds matching repos now, saves their details, applies file and country rules, and freezes the results. Uses your GitHub allowance; can take minutes.</p>
+        </div>
+        <div class="action-row">
+          {{ text_field("name", "Filter name (Save to library)") }}
+          <button class="button" type="submit" name="action" value="save">Save to library</button>
+          <p class="muted">Keeps this filter on this machine for reuse. No GitHub calls.</p>
+        </div>
+        <div class="action-row">
+          <button class="button" type="submit" name="action" value="download">Download file</button>
+          <p class="muted">Exports this filter as a portable JSON file. No GitHub calls.</p>
+        </div>
       </div>
-    </section>
-    <section class="filter-section" id="filter-dates">
-      <h2>Dates</h2>
-      <div class="field-grid">
-        {{ date_field("created_from", "Created from") }}
-        {{ date_field("created_to", "Created to") }}
-        {{ date_field("pushed_from", "Pushed from") }}
-        {{ date_field("pushed_to", "Pushed to") }}
-      </div>
-    </section>
-    <section class="filter-section" id="filter-meta">
-      <h2>Meta</h2>
-      <div class="field-grid">
-        {{ text_field("language", "Language") }}
-        {{ text_field("topic", "Topic") }}
-        {{ text_field("license", "License") }}
-      </div>
-    </section>
-    <section class="filter-section" id="filter-flags">
-      <h2>Flags</h2>
-      <div class="field-grid">
-        <label class="field" for="field-fork">
-          <span class="field-label">Fork</span>
-          <select class="field-input" id="field-fork" name="fork">
-            <option value="omit" {{ 'selected' if state.fields.get('fork', 'omit') == 'omit' }}>omit</option>
-            <option value="include" {{ 'selected' if state.fields.get('fork') == 'include' }}>include</option>
-            <option value="only" {{ 'selected' if state.fields.get('fork') == 'only' }}>only</option>
-          </select>
-        </label>
-        {{ flag_select("archived", "Archived") }}
-        {{ flag_select("mirror", "Mirror") }}
-        {{ flag_select("template", "Template") }}
-        <label class="field" for="field-visibility">
-          <span class="field-label">Visibility</span>
-          <select class="field-input" id="field-visibility" name="visibility">
-            <option value="any" {{ 'selected' if state.fields.get('visibility', 'any') == 'any' }}>any</option>
-            <option value="public" {{ 'selected' if state.fields.get('visibility') == 'public' }}>public</option>
-            <option value="private" {{ 'selected' if state.fields.get('visibility') == 'private' }}>private</option>
-            <option value="internal" {{ 'selected' if state.fields.get('visibility') == 'internal' }}>internal</option>
-          </select>
-        </label>
-        {{ flag_select("sponsorable", "Sponsorable") }}
-        {{ flag_select("funding_file", "Funding file") }}
-        {{ number_field("good_first_min", "Good first issues min") }}
-        {{ number_field("help_wanted_min", "Help wanted issues min") }}
-      </div>
-    </section>
-    <section class="filter-section" id="filter-props-section">
-      <fieldset id="filter-props" class="field-group" data-props-enabled="{{ 'true' if state.props_enabled else 'false' }}"{{ ' disabled' if not state.props_enabled }}>
-        <legend class="field-label">Custom properties (single org only)</legend>
+    </aside>
+    <section class="filter-section" id="filter-common">
+      <h2>Common</h2>
+      <p class="muted">These limit which repos match. GitHub evaluates the first part; extra rules run after fetching.</p>
+      <div id="filter-keywords">
         <div class="field-grid">
-          <label class="field" for="field-props-name">
-            <span class="field-label">Property name</span>
-            <input class="field-input" type="text" id="field-props-name" name="props_name" value="{{ state.fields.get('props_name', '') }}">
-          </label>
-          <label class="field" for="field-props-value">
-            <span class="field-label">Property value</span>
-            <input class="field-input" type="text" id="field-props-value" name="props_value" value="{{ state.fields.get('props_value', '') }}">
+          {{ text_field("keywords", "Keywords") }}
+          {{ text_field("language", "Language") }}
+          {{ number_field("min_stars", "Minimum stars") }}
+          {{ date_field("pushed_from", "Updated since") }}
+          <label class="field" for="field-fork">
+            <span class="field-label">Include forks</span>
+            <select class="field-input" id="field-fork" name="fork">
+              <option value="omit" {{ 'selected' if state.fields.get('fork', 'omit') == 'omit' }}>no forks</option>
+              <option value="include" {{ 'selected' if state.fields.get('fork') == 'include' }}>include forks</option>
+              <option value="only" {{ 'selected' if state.fields.get('fork') == 'only' }}>forks only</option>
+            </select>
           </label>
         </div>
-      </fieldset>
-    </section>
-    <section class="filter-section" id="filter-virtuals">
-      <h2>Virtual filters</h2>
-      <div class="field-grid">
-        {{ number_field("min_stars", "Min stars") }}
-        {{ text_field("team_topic", "Team topic") }}
-        {{ flag_select("has_dockerfile", "Has Dockerfile") }}
-        {{ text_field("owner_country", "Owner country (ISO2)") }}
-        <label class="field" for="field-min-geo-confidence">
-          <span class="field-label">Min geo confidence</span>
-          <select class="field-input" id="field-min-geo-confidence" name="min_geo_confidence">
-            <option value="" {{ 'selected' if not state.fields.get('min_geo_confidence') }}>any</option>
-            <option value="exact-iso" {{ 'selected' if state.fields.get('min_geo_confidence') == 'exact-iso' }}>exact-iso</option>
-            <option value="name" {{ 'selected' if state.fields.get('min_geo_confidence') == 'name' }}>name</option>
-            <option value="gazetteer-city" {{ 'selected' if state.fields.get('min_geo_confidence') == 'gazetteer-city' }}>gazetteer-city</option>
-            <option value="geocoder" {{ 'selected' if state.fields.get('min_geo_confidence') == 'geocoder' }}>geocoder</option>
-            <option value="weak" {{ 'selected' if state.fields.get('min_geo_confidence') == 'weak' }}>weak</option>
-          </select>
-        </label>
-        {{ number_field("min_commits", "Min commits") }}
-        {{ number_field("min_loc", "Min LOC") }}
+        <fieldset class="field-group">
+          <legend class="field-label">In scope</legend>
+          {% for scope in ("name", "description", "topics", "readme") %}
+          <label class="checkbox" for="field-in-scope-{{ scope }}">
+            <input type="checkbox" id="field-in-scope-{{ scope }}" name="in_scope" value="{{ scope }}" {{ 'checked' if scope in state.fields.get('in_scope', '').split(',') }}>
+            {{ scope }}
+          </label>
+          {% endfor %}
+        </fieldset>
       </div>
     </section>
-    <section class="filter-section" id="filter-result">
-      <h2>Result</h2>
+    <details class="advanced-filters">
+      <summary>Advanced</summary>
+      <p class="muted">These limit which repos match. GitHub evaluates the first part; extra rules run after fetching.</p>
+      <section class="filter-section" id="filter-owner">
+        <h2>Owner</h2>
+        <div class="field-grid">
+          {{ text_field("user", "User") }}
+          {{ text_field("org", "Org") }}
+          {{ text_field("repo", "Repo") }}
+        </div>
+      </section>
+      <section class="filter-section" id="filter-counts">
+        <h2>Counts</h2>
+        <div class="field-grid">
+          {{ count_row("stars", "Stars") }}
+          {{ count_row("forks", "Forks") }}
+          {{ count_row("size", "Size (KB)") }}
+          {{ count_row("followers", "Followers") }}
+          {{ count_row("topics", "Topics count") }}
+        </div>
+      </section>
+      <section class="filter-section" id="filter-dates">
+        <h2>Dates</h2>
+        <div class="field-grid">
+          {{ date_field("created_from", "Created from") }}
+          {{ date_field("created_to", "Created to") }}
+          {{ date_field("pushed_to", "Updated before") }}
+        </div>
+      </section>
+      <section class="filter-section" id="filter-meta">
+        <h2>Meta</h2>
+        <div class="field-grid">
+          {{ text_field("topic", "Topic") }}
+          {{ text_field("license", "License") }}
+        </div>
+      </section>
+      <section class="filter-section" id="filter-flags">
+        <h2>Flags</h2>
+        <div class="field-grid">
+          {{ flag_select("archived", "Archived") }}
+          {{ flag_select("mirror", "Mirror") }}
+          {{ flag_select("template", "Template") }}
+          <label class="field" for="field-visibility">
+            <span class="field-label">Visibility</span>
+            <select class="field-input" id="field-visibility" name="visibility">
+              <option value="any" {{ 'selected' if state.fields.get('visibility', 'any') == 'any' }}>any</option>
+              <option value="public" {{ 'selected' if state.fields.get('visibility') == 'public' }}>public</option>
+              <option value="private" {{ 'selected' if state.fields.get('visibility') == 'private' }}>private</option>
+              <option value="internal" {{ 'selected' if state.fields.get('visibility') == 'internal' }}>internal</option>
+            </select>
+          </label>
+          {{ flag_select("sponsorable", "Sponsorable") }}
+          {{ flag_select("funding_file", "Funding file") }}
+          {{ number_field("good_first_min", "Good first issues min") }}
+          {{ number_field("help_wanted_min", "Help wanted issues min") }}
+        </div>
+      </section>
+      <section class="filter-section" id="filter-props-section">
+        <fieldset id="filter-props" class="field-group" data-props-enabled="{{ 'true' if state.props_enabled else 'false' }}"{{ ' disabled' if not state.props_enabled }}>
+          <legend class="field-label">Custom properties (single org only)</legend>
+          <div class="field-grid">
+            <label class="field" for="field-props-name">
+              <span class="field-label">Property name</span>
+              <input class="field-input" type="text" id="field-props-name" name="props_name" value="{{ state.fields.get('props_name', '') }}">
+            </label>
+            <label class="field" for="field-props-value">
+              <span class="field-label">Property value</span>
+              <input class="field-input" type="text" id="field-props-value" name="props_value" value="{{ state.fields.get('props_value', '') }}">
+            </label>
+          </div>
+        </fieldset>
+      </section>
+      <section class="filter-section" id="filter-virtuals">
+        <h2>Extra rules</h2>
+        <div class="field-grid">
+          {{ text_field("team_topic", "Team topic") }}
+          {{ flag_select("has_dockerfile", "Has Dockerfile") }}
+          {{ text_field("owner_country", "Owner country (ISO2)") }}
+          <label class="field" for="field-min-geo-confidence">
+            <span class="field-label">Min geo confidence</span>
+            <select class="field-input" id="field-min-geo-confidence" name="min_geo_confidence">
+              <option value="" {{ 'selected' if not state.fields.get('min_geo_confidence') }}>any</option>
+              <option value="exact-iso" {{ 'selected' if state.fields.get('min_geo_confidence') == 'exact-iso' }}>exact-iso</option>
+              <option value="name" {{ 'selected' if state.fields.get('min_geo_confidence') == 'name' }}>name</option>
+              <option value="gazetteer-city" {{ 'selected' if state.fields.get('min_geo_confidence') == 'gazetteer-city' }}>gazetteer-city</option>
+              <option value="geocoder" {{ 'selected' if state.fields.get('min_geo_confidence') == 'geocoder' }}>geocoder</option>
+              <option value="weak" {{ 'selected' if state.fields.get('min_geo_confidence') == 'weak' }}>weak</option>
+            </select>
+          </label>
+          {{ number_field("min_commits", "Min commits") }}
+          {{ number_field("max_commits", "Max commits") }}
+          {{ disabled_number_field("min_loc", "Min LOC", "Not available yet — needs full-history analysis (planned)") }}
+          {{ disabled_number_field("max_loc", "Max LOC", "Not available yet — needs full-history analysis (planned)") }}
+        </div>
+      </section>
+      <section class="filter-section" id="filter-result">
+        <h2>Result</h2>
+        <div class="field-grid">
+          <label class="field" for="field-sort">
+            <span class="field-label">Sort</span>
+            <select class="field-input" id="field-sort" name="sort">
+              <option value="" {{ 'selected' if not state.fields.get('sort') }}>best match</option>
+              <option value="stars" {{ 'selected' if state.fields.get('sort') == 'stars' }}>stars</option>
+              <option value="forks" {{ 'selected' if state.fields.get('sort') == 'forks' }}>forks</option>
+              <option value="help-wanted-issues" {{ 'selected' if state.fields.get('sort') == 'help-wanted-issues' }}>help-wanted-issues</option>
+              <option value="updated" {{ 'selected' if state.fields.get('sort') == 'updated' }}>updated</option>
+            </select>
+          </label>
+          <label class="field" for="field-order">
+            <span class="field-label">Order</span>
+            <select class="field-input" id="field-order" name="order">
+              <option value="" {{ 'selected' if not state.fields.get('order') }}>default</option>
+              <option value="desc" {{ 'selected' if state.fields.get('order') == 'desc' }}>desc</option>
+              <option value="asc" {{ 'selected' if state.fields.get('order') == 'asc' }}>asc</option>
+            </select>
+          </label>
+          {{ number_field("per_page", "Per page") }}
+          {{ number_field("max_pages", "Max pages") }}
+        </div>
+      </section>
+    </details>
+    <details class="filter-section" id="filter-controls">
+      <summary>Use a filter file</summary>
       <div class="field-grid">
-        <label class="field" for="field-sort">
-          <span class="field-label">Sort</span>
-          <select class="field-input" id="field-sort" name="sort">
-            <option value="" {{ 'selected' if not state.fields.get('sort') }}>best match</option>
-            <option value="stars" {{ 'selected' if state.fields.get('sort') == 'stars' }}>stars</option>
-            <option value="forks" {{ 'selected' if state.fields.get('sort') == 'forks' }}>forks</option>
-            <option value="help-wanted-issues" {{ 'selected' if state.fields.get('sort') == 'help-wanted-issues' }}>help-wanted-issues</option>
-            <option value="updated" {{ 'selected' if state.fields.get('sort') == 'updated' }}>updated</option>
-          </select>
-        </label>
-        <label class="field" for="field-order">
-          <span class="field-label">Order</span>
-          <select class="field-input" id="field-order" name="order">
-            <option value="" {{ 'selected' if not state.fields.get('order') }}>default</option>
-            <option value="desc" {{ 'selected' if state.fields.get('order') == 'desc' }}>desc</option>
-            <option value="asc" {{ 'selected' if state.fields.get('order') == 'asc' }}>asc</option>
-          </select>
-        </label>
-        {{ number_field("per_page", "Per page") }}
-        {{ number_field("max_pages", "Max pages") }}
-      </div>
-    </section>
-    <section class="filter-section" id="filter-controls">
-      <h2>Run</h2>
-      <div class="field-grid">
-        {{ text_field("name", "Filter name (Save filter)") }}
         <label class="field" for="field-spec-file">
-          <span class="field-label">Upload filter-spec JSON</span>
+          <span class="field-label">Filter file (JSON)</span>
           <input class="field-input" type="file" id="field-spec-file" name="spec_file" accept="application/json">
         </label>
       </div>
       <div class="form-actions">
-        <button class="button primary" type="submit" name="action" value="find">Find</button>
-        <button class="button" type="submit" name="action" value="download">Download as JSON</button>
         <button class="button" type="submit" name="action" value="upload">Upload and run</button>
-        <button class="button" type="submit" name="action" value="save">Save filter</button>
+        <p class="muted">Runs the uploaded filter file. Uses your GitHub allowance.</p>
       </div>
-    </section>
+    </details>
   </form>
 </section>
 <script>

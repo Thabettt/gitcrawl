@@ -253,6 +253,116 @@ def spec_to_query(spec: FilterSpec) -> str:
     return " ".join(part for part in parts if part)
 
 
+_COUNT_LABELS: Mapping[str, str] = {
+    "stars": "stars",
+    "forks": "forks",
+    "size": "KB",
+    "followers": "followers",
+    "topics": "topics",
+    "good-first-issues": "good first issues",
+    "help-wanted-issues": "help wanted issues",
+}
+_VIRTUAL_COUNT_LABELS: Mapping[str, str] = {
+    "min_commits": "commits",
+    "max_commits": "commits",
+    "min_loc": "lines of code",
+    "max_loc": "lines of code",
+}
+
+
+def _describe_count(label: str, raw: str) -> str:
+    if ".." in raw:
+        low, _, high = raw.partition("..")
+        low = low or "*"
+        high = high or "*"
+        if low == "*":
+            return f"up to {high} {label}"
+        if high == "*":
+            return f"{low}+ {label}"
+        return f"{low}–{high} {label}"
+    for prefix, template in (
+        (">=", "{value}+ {label}"),
+        (">", "over {value} {label}"),
+        ("<=", "up to {value} {label}"),
+        ("<", "under {value} {label}"),
+    ):
+        if raw.startswith(prefix):
+            return template.format(value=raw[len(prefix) :], label=label)
+    return f"{raw} {label}"
+
+
+def _describe_date(label: str, raw: str) -> str:
+    if ".." in raw:
+        low, _, high = raw.partition("..")
+        return f"{label} {low or '*'} to {high or '*'}"
+    if raw.startswith(">="):
+        return f"{label} since {raw[2:]}"
+    if raw.startswith(">"):
+        return f"{label} after {raw[1:]}"
+    if raw.startswith("<=") or raw.startswith("<"):
+        return f"{label} before {raw.lstrip('<=')}"
+    return f"{label} {raw}"
+
+
+def _describe_token(token: str) -> str:
+    excluded = token.startswith("-")
+    stripped = token[1:] if excluded else token
+    if stripped in ("AND", "OR", "NOT") or ":" not in stripped:
+        return token
+    key, _, value = stripped.partition(":")
+    lowered = key.lower()
+    if lowered.startswith("props."):
+        described = f"property {key[len('props.') :]} = {value}"
+    elif lowered == "language":
+        described = value.replace("-", " ").title()
+    elif lowered in _COUNT_LABELS:
+        described = _describe_count(_COUNT_LABELS[lowered], value)
+    elif lowered in ("created", "pushed"):
+        described = _describe_date("created" if lowered == "created" else "updated", value)
+    elif lowered == "in":
+        described = "in " + value.replace(",", ", ")
+    elif lowered in ("user", "org", "repo"):
+        described = f"{lowered} {value}"
+    elif lowered in ("topic", "license"):
+        described = f"{lowered} {value}"
+    elif lowered in ("archived", "mirror", "template"):
+        has_flag = (value == "true") != excluded
+        described = lowered if has_flag else f"no {lowered}"
+    elif lowered == "fork":
+        described = {"true": "include forks", "only": "forks only"}.get(value, "no forks")
+    elif lowered == "is":
+        described = value.replace("-", " ")
+    elif lowered == "has":
+        return f"{'no' if excluded else 'has'} {value.replace('-', ' ')}"
+    else:
+        described = f"{lowered} {value}"
+    return f"not {described}" if excluded else described
+
+
+def _describe_virtual(name: str, value: object) -> str | None:
+    if name in _VIRTUAL_COUNT_LABELS:
+        qualifier = "at least" if name.startswith("min_") else "at most"
+        return f"{qualifier} {value} {_VIRTUAL_COUNT_LABELS[name]}"
+    if name == "min_stars":
+        return _describe_count("stars", f">={value}")
+    if name == "team_topic":
+        return f"topic {value}"
+    if name == "has_dockerfile":
+        return "has Dockerfile" if value else "no Dockerfile"
+    if name == "owner_country":
+        return f"owner country {str(value).upper()}"
+    return None
+
+
+def describe_spec(spec: FilterSpec) -> str:
+    parts = [_describe_token(token) for token in tokenize(spec.q)]
+    for name, value in spec.virtual.items():
+        described = _describe_virtual(name, value)
+        if described:
+            parts.append(described)
+    return " · ".join(part for part in parts if part) or "Everything"
+
+
 def spec_to_dict(spec: FilterSpec) -> dict:
     normalized: dict[str, object] = {
         "gitcrawl_filter": FILTER_SPEC_VERSION,

@@ -346,6 +346,7 @@ def create_app(
     redis_ping: Callable[[], object] | None = None,
     token_present: Callable[[], bool] | None = None,
     metrics_redis: Callable[[], object] | None = None,
+    find_count_factory: Callable[[], Callable[[str], int]] | None = None,
 ) -> FastAPI:
     loaders = _LazyLoaders()
     payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
@@ -951,6 +952,7 @@ def create_app(
         token_present=token_present,
         health_snapshot=health_snapshot,
         runner_factory=runner_for,
+        find_count_factory=find_count_factory,
         executor_factory=executor_for,
     )
 

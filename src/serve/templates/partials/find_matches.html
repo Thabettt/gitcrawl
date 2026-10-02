@@ -1,0 +1,13 @@
+{% if errors %}
+<div class="empty-state error-state" role="alert">
+  {% for error in errors %}
+  <p>{{ error }}</p>
+  {% endfor %}
+  {% for hint in hints %}
+  <p class="muted">{{ hint }}</p>
+  {% endfor %}
+</div>
+{% else %}
+<p class="match-count"><strong>~{{ "{:,}".format(count) }}</strong> matching repos</p>
+<p class="muted">{{ sentence }} · One search request. Approximate count of repos GitHub can evaluate; extra rules (files, country) will shrink this when you run.</p>
+{% endif %}

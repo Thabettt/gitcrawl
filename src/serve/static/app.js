@@ -317,6 +317,29 @@
     });
   }
 
+  function syncCountRow(select) {
+    var fieldset = select.closest("[data-count-row]");
+    if (!fieldset) {
+      return;
+    }
+    var mode = applib.countInputsFor(select.value);
+    Array.prototype.forEach.call(fieldset.querySelectorAll("[data-count-mode]"), function (input) {
+      input.hidden = input.getAttribute("data-count-mode") !== mode;
+    });
+  }
+
+  function initCountRows() {
+    Array.prototype.forEach.call(
+      document.querySelectorAll("[data-count-comparator]"),
+      function (select) {
+        select.addEventListener("change", function () {
+          syncCountRow(select);
+        });
+        syncCountRow(select);
+      }
+    );
+  }
+
   var RECENT_FILTERS_KEY = "gc-recent-filters";
 
   function storedRecentFilters() {
@@ -566,6 +589,7 @@
       document.body.addEventListener("htmx:afterRequest", clearBusy);
     }
     syncCloneLimit();
+    initCountRows();
     copyButtons();
     renderRecentFilters();
     document.addEventListener("submit", markBusy);
