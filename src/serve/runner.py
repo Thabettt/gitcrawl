@@ -16,6 +16,7 @@ from discover.pipeline import Deps
 from discover.search_shards import RequestFailed
 from enrich.cost_planner import plan_enrichment
 from enrich.geo_resolver import GeoCache, _cache_key, resolve_many
+from enrich.graphql_file_presence import FilePresenceAdapter
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import RefreshStats, refresh_repos_batched
@@ -31,6 +32,7 @@ from lib.gh_client import (
     request_with_retry,
     token_fingerprint,
 )
+from lib.graphql_batch import fetch_batch
 from limiter.buckets import BucketLimiter
 from scheduler.tiering import order_repos
 from serve.executor import Runner, RunPayload, RunPayloadItem
@@ -370,17 +372,17 @@ def _apply_dockerfile(
     wanted: object,
     budget: int,
     hook: Callable[[httpx.Response, float], None],
+    report: dict,
 ) -> tuple[list[dict], int, int]:
     if not isinstance(wanted, bool):
         return rows, 0, 0
-    kept: list[dict] = []
-    skipped = 0
-    used = 0
-    remaining = budget
-    for row in rows:
-        if remaining <= 0:
-            skipped += 1
-            continue
+    selected = rows[: max(0, budget)]
+    leftover = [row for row in rows[max(0, budget) :]]
+    if not selected:
+        return [], len(leftover), 0
+
+    def fallback(key: str) -> object | None:
+        row = rows_by_key[key]
         try:
             presence = fetch_tree(
                 deps.client,
@@ -391,15 +393,38 @@ def _apply_dockerfile(
                 on_response=hook,
             )
         except (RequestFailed, ThrottledError, PartialResultsError):
-            skipped += 1
+            skipped["n"] += 1
+            return None
+        return presence.has(_DOCKERFILE_PATH)
+
+    rows_by_key = {str(row["id"]): row for row in selected}
+    skipped = {"n": 0}
+    outcome = fetch_batch(
+        FilePresenceAdapter(
+            _DOCKERFILE_PATH, {key: row["full_name"] for key, row in rows_by_key.items()}
+        ),
+        list(rows_by_key),
+        client=deps.client,
+        limiter=deps.limiter,
+        token_id=deps.token_fp,
+        fallback=fallback,
+        on_response=hook,
+        deadline=deps.limiter.deadline if deps.limiter is not None else None,
+    )
+    report["files"] = outcome.stats.as_dict()
+    kept: list[dict] = []
+    skipped_count = len(leftover) + skipped["n"]
+    used = 0
+    for key, row in rows_by_key.items():
+        value = outcome.values.get(key)
+        if value is None:
+            skipped_count += 1
             continue
-        remaining -= 1
         used += 1
-        has_dockerfile = presence.has(_DOCKERFILE_PATH)
-        row["has_dockerfile"] = has_dockerfile
-        if has_dockerfile == wanted:
+        row["has_dockerfile"] = bool(value)
+        if bool(value) == wanted:
             kept.append(row)
-    return kept, skipped, used
+    return kept, skipped_count, used
 
 
 def _record_handler(rows_by_id: dict[int, dict], field: str, virtual: dict):
@@ -423,11 +448,11 @@ def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped):
     return handler
 
 
-def _dockerfile_handler(deps, rows_by_id, wanted, budget, hook, skipped):
+def _dockerfile_handler(deps, rows_by_id, wanted, budget, hook, skipped, report):
     def handler(ids):
         rows = [rows_by_id[repo_id] for repo_id in ids]
         kept, dockerfile_skipped, used = _apply_dockerfile(
-            deps, rows, wanted, budget["remaining"], hook
+            deps, rows, wanted, budget["remaining"], hook, report
         )
         budget["remaining"] = max(0, budget["remaining"] - used)
         skipped["dockerfile"] += dockerfile_skipped
@@ -443,6 +468,7 @@ def _enrich_handlers(
     budget: dict,
     hook: Callable[[httpx.Response, float], None],
     skipped: dict,
+    report: dict,
     *,
     depth: str = "page",
 ) -> tuple[dict, list[str]]:
@@ -461,7 +487,7 @@ def _enrich_handlers(
                 geo_claimed = True
         elif step.field == "has_dockerfile":
             handlers[step.field] = _dockerfile_handler(
-                deps, rows_by_id, virtual.get("has_dockerfile"), budget, hook, skipped
+                deps, rows_by_id, virtual.get("has_dockerfile"), budget, hook, skipped, report
             )
         else:
             unsupported.append(step.field)
@@ -582,7 +608,9 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
     budget = {"remaining": cfg.max_enrich}
     skipped = {"geo": 0, "dockerfile": 0}
-    handlers, unsupported = _enrich_handlers(deps, rows, virtual, budget, hook, skipped)
+    handlers, unsupported = _enrich_handlers(
+        deps, rows, virtual, budget, hook, skipped, graphql_report
+    )
     for field in unsupported:
         warnings.append(
             f"`{field}` requires full-depth enrichment, which is not wired yet; "

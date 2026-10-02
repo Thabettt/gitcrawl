@@ -70,6 +70,7 @@ def repo_item(
 
 
 GRAPHQL_REPO_ALIAS_RE = re.compile(r'(n\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')
+FILE_ALIAS_RE = re.compile(r'(n\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')
 
 
 def rest_item_to_graphql_node(item: dict) -> dict:
@@ -133,6 +134,21 @@ def graphql_batch_response(
     if errors:
         payload["errors"] = errors
     return httpx.Response(200, json=payload)
+
+
+def graphql_file_response(
+    request: httpx.Request, blob_paths: dict[str, list[str]], path: str
+) -> httpx.Response:
+    body = json.loads(request.content)
+    data: dict[str, object] = {}
+    for alias, owner, name in FILE_ALIAS_RE.findall(body["query"]):
+        tree = blob_paths.get(f"{owner}/{name}", [])
+        data[alias] = {"object": {"__typename": "Blob"}} if path in tree else {"object": None}
+    return httpx.Response(200, json={"data": data})
+
+
+def is_file_query(request: httpx.Request) -> bool:
+    return 'object(expression: "HEAD:' in json.loads(request.content)["query"]
 
 
 def count_response(total: int) -> httpx.Response:
@@ -579,10 +595,7 @@ def test_run_filter_owner_country_filters_and_bounds_owner_fetches(clean: Engine
 
 def test_run_filter_has_dockerfile_true_enforces_presence_and_budget(clean: Engine):
     page = [repo_item(1, stars=30), repo_item(2, stars=20)]
-    trees = {
-        "/repos/owner1/repo1/git/trees/main": {"tree": [{"path": "Dockerfile", "type": "blob"}]},
-        "/repos/owner2/repo2/git/trees/main": {"tree": [{"path": "README.md", "type": "blob"}]},
-    }
+    blob_paths = {"owner1/repo1": ["Dockerfile"], "owner2/repo2": ["README.md"]}
 
     def handler(request: httpx.Request):
         path = path_of(request)
@@ -591,10 +604,10 @@ def test_run_filter_has_dockerfile_true_enforces_presence_and_budget(clean: Engi
                 return count_response(2)
             return page_response(page)
         if path == "/graphql":
+            if is_file_query(request):
+                return graphql_file_response(request, blob_paths, "Dockerfile")
             return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
-            if path in trees:
-                return httpx.Response(200, json={**trees[path], "truncated": False})
             repo_id = int(path.rsplit("repo", 1)[1]) if path.rsplit("repo", 1)[1].isdigit() else 0
             return httpx.Response(200, json=repo_item(repo_id))
         return httpx.Response(404)
@@ -612,16 +625,24 @@ def test_run_filter_has_dockerfile_true_enforces_presence_and_budget(clean: Engi
     assert any(
         "Dockerfile presence could not be checked" in warning for warning in payload.warnings
     )
-    tree_requests = [path_of(request) for request in requests if "/git/trees/" in path_of(request)]
-    assert tree_requests == ["/repos/owner1/repo1/git/trees/main"]
+    file_requests = [
+        request for request in requests if request.url.path == "/graphql" and is_file_query(request)
+    ]
+    assert len(file_requests) == 1
+    query = json.loads(file_requests[0].content)["query"]
+    assert 'owner: "owner1", name: "repo1"' in query
+    assert 'name: "repo2"' not in query
+    assert not any("/git/trees/" in path_of(request) for request in requests)
+    files = payload.field_stats["graphql"]["files"]
+    assert files["keys"] == 1
+    assert files["requests"] == 1
+    assert files["values"] == 1
+    assert files["fallbacks"] == 0
 
 
 def test_run_filter_has_dockerfile_false_keeps_absent_repos(clean: Engine):
     page = [repo_item(1, stars=30), repo_item(2, stars=20)]
-    trees = {
-        "/repos/owner1/repo1/git/trees/main": {"tree": [{"path": "Dockerfile", "type": "blob"}]},
-        "/repos/owner2/repo2/git/trees/main": {"tree": [{"path": "README.md", "type": "blob"}]},
-    }
+    blob_paths = {"owner1/repo1": ["Dockerfile"], "owner2/repo2": ["README.md"]}
 
     def handler(request: httpx.Request):
         path = path_of(request)
@@ -630,15 +651,15 @@ def test_run_filter_has_dockerfile_false_keeps_absent_repos(clean: Engine):
                 return count_response(2)
             return page_response(page)
         if path == "/graphql":
+            if is_file_query(request):
+                return graphql_file_response(request, blob_paths, "Dockerfile")
             return graphql_batch_response(request, {item["full_name"]: item for item in page})
-        if path in trees:
-            return httpx.Response(200, json={**trees[path], "truncated": False})
         if path.startswith("/repos/"):
             repo_id = int(path.rsplit("repo", 1)[1])
             return httpx.Response(200, json=repo_item(repo_id))
         return httpx.Response(404)
 
-    client, _ = scripted(handler)
+    client, requests = scripted(handler)
     payload = run_filter(
         make_deps(clean, client),
         spec_for(q="language:python", virtual={"has_dockerfile": False}),
@@ -647,6 +668,14 @@ def test_run_filter_has_dockerfile_false_keeps_absent_repos(clean: Engine):
 
     assert [item.repo_id for item in payload.items] == [2]
     assert payload.items[0].virtuals["has_dockerfile"] is False
+    file_requests = [
+        request for request in requests if request.url.path == "/graphql" and is_file_query(request)
+    ]
+    assert len(file_requests) == 1
+    query = json.loads(file_requests[0].content)["query"]
+    assert 'owner: "owner1", name: "repo1"' in query
+    assert 'owner: "owner2", name: "repo2"' in query
+    assert not any("/git/trees/" in path_of(request) for request in requests)
 
 
 def test_run_filter_tolerates_owner_fetch_failure(clean: Engine):
@@ -688,7 +717,15 @@ def test_run_filter_tolerates_owner_fetch_failure(clean: Engine):
     assert stored == {"alice": (None, None), "bob": ("DE", "name")}
 
 
-def test_run_filter_tolerates_tree_fetch_failure(clean: Engine):
+def test_run_filter_tolerates_tree_fetch_failure(clean: Engine, monkeypatch):
+    real_fetch_tree = runner_module.fetch_tree
+
+    def fast_fetch_tree(*args, **kwargs):
+        kwargs["sleep"] = lambda _seconds: None
+        return real_fetch_tree(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "fetch_tree", fast_fetch_tree)
+
     def handler(request: httpx.Request):
         path = path_of(request)
         if path == SEARCH_PATH:
@@ -696,14 +733,22 @@ def test_run_filter_tolerates_tree_fetch_failure(clean: Engine):
                 return count_response(1)
             return page_response([repo_item(1)])
         if path == "/graphql":
+            if is_file_query(request):
+                return httpx.Response(
+                    200,
+                    json={
+                        "errors": [{"message": "Something went wrong", "path": ["n0"]}],
+                        "data": {"n0": None},
+                    },
+                )
             return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
         if "/git/trees/" in path:
-            return httpx.Response(404)
+            return httpx.Response(500)
         if path == "/repos/owner1/repo1":
             return httpx.Response(200, json=repo_item(1))
         return httpx.Response(404)
 
-    client, _ = scripted(handler)
+    client, requests = scripted(handler)
     payload = run_filter(
         make_deps(clean, client),
         spec_for(q="language:python", virtual={"has_dockerfile": True}),
@@ -715,6 +760,13 @@ def test_run_filter_tolerates_tree_fetch_failure(clean: Engine):
     assert any(
         "Dockerfile presence could not be checked" in warning for warning in payload.warnings
     )
+    file_requests = [
+        request for request in requests if request.url.path == "/graphql" and is_file_query(request)
+    ]
+    assert len(file_requests) == 1
+    tree_requests = [path_of(request) for request in requests if "/git/trees/" in path_of(request)]
+    assert tree_requests
+    assert all(path == "/repos/owner1/repo1/git/trees/main" for path in tree_requests)
 
 
 def test_run_filter_tolerates_owner_fetch_sso_partial_results(clean: Engine):
@@ -830,9 +882,7 @@ def test_make_runner_parses_filter_spec_dicts(clean: Engine):
 
 def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, monkeypatch):
     page = [repo_item(1, login="alice", stars=30), repo_item(2, login="bob", stars=20)]
-    trees = {
-        "/repos/alice/repo1/git/trees/main": {"tree": [{"path": "Dockerfile", "type": "blob"}]},
-    }
+    blob_paths = {"alice/repo1": ["Dockerfile"]}
     events: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request):
@@ -842,10 +892,10 @@ def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, 
                 return count_response(2)
             return page_response(page)
         if path == "/graphql":
+            if is_file_query(request):
+                events.append(("file", json.loads(request.content)["query"]))
+                return graphql_file_response(request, blob_paths, "Dockerfile")
             return graphql_batch_response(request, {item["full_name"]: item for item in page})
-        if path in trees:
-            events.append(("tree", path))
-            return httpx.Response(200, json={**trees[path], "truncated": False})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
             repo_id = int(path.rsplit("repo", 1)[1])
@@ -876,11 +926,12 @@ def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, 
     )
 
     assert plans == [(("has_dockerfile", "owner_country", "min_geo_confidence"), "page")]
-    assert events == [
-        ("user", "alice"),
-        ("user", "bob"),
-        ("tree", "/repos/alice/repo1/git/trees/main"),
-    ]
+    assert [kind for kind, _ in events] == ["user", "user", "file"]
+    assert events[0] == ("user", "alice")
+    assert events[1] == ("user", "bob")
+    file_events = [query for kind, query in events if kind == "file"]
+    assert 'owner: "alice", name: "repo1"' in file_events[0]
+    assert 'name: "repo2"' not in file_events[0]
     assert [item.repo_id for item in payload.items] == [1]
     field_stats = dict(payload.field_stats)
     field_stats.pop("graphql")
@@ -966,6 +1017,7 @@ def test_enrich_handlers_clamp_unsupported_full_depth_fields_without_raising(cle
         {"remaining": 0},
         None,
         {"geo": 0, "dockerfile": 0},
+        {},
         depth="full",
     )
 
