@@ -141,6 +141,22 @@ def test_dot_maps_probes_to_exact_color_and_label():
     )
 
 
+def test_system_page_still_renders_when_metrics_fail(clean: Engine, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("serve.system.metrics_payload", boom)
+
+    response = client.get("/system")
+
+    assert response.status_code == 200
+    assert "Performance metrics are unavailable right now" in response.text
+    assert "Limits" in response.text
+    assert "/settings" in response.text
+
+
 def test_status_dot_reports_ok_when_all_probes_pass(clean: Engine, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
 

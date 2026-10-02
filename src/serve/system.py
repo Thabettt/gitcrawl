@@ -44,13 +44,19 @@ def register_system(
     @application.get("/system", response_class=HTMLResponse)
     def system_page(request: Request):
         status = health_snapshot()
-        payload = metrics_payload(engine_factory(), redis_client=metrics_redis and metrics_redis())
+        try:
+            payload = metrics_payload(
+                engine_factory(), redis_client=metrics_redis and metrics_redis()
+            )
+        except Exception:
+            payload = None
         return pages._templates.TemplateResponse(
             request,
             "system.html",
             {
                 "status": status,
                 "metrics": payload,
+                "metrics_error": payload is None,
                 "plain": _PLAIN,
                 "labels": LABELS,
                 "csrf_token": request.state.csrf_token,

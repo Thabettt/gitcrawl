@@ -34,8 +34,13 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Performance</h2>
+    {% if not metrics_error -%}
     <p class="muted">Rates and response times cover the last 1,000 requests; queue and failed-search counts are live.</p>
+    {%- endif %}
   </div>
+  {%- if metrics_error %}
+  <p class="muted">Performance metrics are unavailable right now. Status and limits are still shown.</p>
+  {%- else %}
   <div class="table-wrap">
     <table class="data-table">
       <thead>
@@ -68,6 +73,7 @@
       </tbody>
     </table>
   </div>
+  {%- endif %}
 </section>
 
 <section class="panel">
