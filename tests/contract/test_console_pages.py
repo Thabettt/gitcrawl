@@ -668,3 +668,15 @@ def test_empty_states_offer_example_queries(client: TestClient):
     assert "Example: stars:&gt;500" in library
     assert 'id="empty-state"' in dashboard
     assert 'href="/find?keywords=language:rust"' in dashboard
+
+
+def test_shortcuts_help_has_a_visible_opener(client: TestClient):
+    html = client.get("/").text
+    script = client.get("/static/app.js").text
+
+    assert 'id="shortcuts-open"' in html
+    assert 'data-open="shortcuts-modal"' in html
+    assert html.index('id="main-nav"') < html.index('id="shortcuts-open"')
+    assert html.index('id="shortcuts-open"') < html.index('id="theme-toggle"')
+    assert script.index("isEditableTarget(event.target)") < script.index('event.key === "?"')
+    assert script.index("event.ctrlKey") < script.index('event.key === "?"')
