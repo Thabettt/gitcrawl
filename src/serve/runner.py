@@ -17,6 +17,7 @@ from discover.search_shards import RequestFailed
 from enrich.cost_planner import plan_enrichment
 from enrich.geo_resolver import GeoCache, _cache_key, resolve_many
 from enrich.graphql_file_presence import FilePresenceAdapter
+from enrich.graphql_owner_location import OwnerLocationAdapter
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import RefreshStats, refresh_repos_batched
@@ -240,6 +241,7 @@ def _load_owners(engine: Engine, owner_ids: list[int]) -> dict[int, dict]:
             select(
                 Owner.id,
                 Owner.login,
+                Owner.type,
                 Owner.location_raw,
                 Owner.country_iso,
                 Owner.geo_confidence,
@@ -284,6 +286,7 @@ def _apply_geo(
     virtual: dict,
     budget: int,
     hook: Callable[[httpx.Response, float], None],
+    report: dict,
 ) -> tuple[list[dict], int, int]:
     country = virtual.get("owner_country")
     threshold = virtual.get("min_geo_confidence")
@@ -292,23 +295,53 @@ def _apply_geo(
     owner_ids = list(dict.fromkeys(row["owner_id"] for row in rows))
     owners = _load_owners(deps.engine, owner_ids)
     cache = GeoCache(deps.engine)
-    used = 0
-    pending: list[tuple[int, str | None]] = []
+    pending_owners: list[tuple[int, str]] = []
+    fetch_targets: list[tuple[int, str]] = []
     for owner_id in owner_ids:
         owner = owners.get(owner_id)
         if owner is None:
             continue
         if owner["country_iso"] is not None or owner["geo_confidence"] == "unmatched":
             continue
+        pending_owners.append((owner_id, owner["login"]))
         if owner["location_raw"] is None:
-            if used >= budget:
-                continue
-            used += 1
-            ok, location = _fetch_owner_location(deps, owner["login"], hook)
-            if not ok:
-                continue
-            owner["location_raw"] = location
-        pending.append((owner_id, owner["location_raw"]))
+            fetch_targets.append((owner_id, owner["login"]))
+    lookups = fetch_targets[: max(0, budget)]
+    rows_by_login = {login: owner_id for owner_id, login in lookups}
+    owner_types = {login: owners[owner_id]["type"] for owner_id, login in lookups}
+    used = {"n": 0}
+
+    def fallback(login: str) -> object | None:
+        ok, location = _fetch_owner_location(deps, login, hook)
+        if not ok or location is None:
+            used["n"] += 1
+        if not ok:
+            return None
+        owners[rows_by_login[login]]["location_raw"] = location
+        return location
+
+    outcome = fetch_batch(
+        OwnerLocationAdapter(owner_types),
+        list(rows_by_login),
+        client=deps.client,
+        limiter=deps.limiter,
+        token_id=deps.token_fp,
+        fallback=fallback,
+        on_response=hook,
+        deadline=deps.limiter.deadline if deps.limiter is not None else None,
+    )
+    report["owners"] = outcome.stats.as_dict()
+    for login, owner_id in rows_by_login.items():
+        if login not in outcome.values:
+            continue
+        used["n"] += 1
+        owners[owner_id]["location_raw"] = outcome.values[login]
+    used_count = used["n"]
+    pending = [
+        (owner_id, owners[owner_id]["location_raw"])
+        for owner_id, _login in pending_owners
+        if owners[owner_id]["location_raw"] is not None
+    ]
     resolved = resolve_many(deps.engine, [raw for _, raw in pending], cache=cache)
     updates: list[dict] = []
     for owner_id, raw in pending:
@@ -363,7 +396,7 @@ def _apply_geo(
         row["country_iso"] = owner["country_iso"]
         row["geo_confidence"] = owner["geo_confidence"]
         kept.append(row)
-    return kept, used, skipped
+    return kept, used_count, skipped
 
 
 def _apply_dockerfile(
@@ -435,10 +468,10 @@ def _record_handler(rows_by_id: dict[int, dict], field: str, virtual: dict):
     return handler
 
 
-def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped):
+def _geo_handler(deps, rows_by_id, virtual, budget, hook, skipped, report):
     def handler(ids):
         rows = [rows_by_id[repo_id] for repo_id in ids]
-        kept, used, geo_skipped = _apply_geo(deps, rows, virtual, budget["remaining"], hook)
+        kept, used, geo_skipped = _apply_geo(deps, rows, virtual, budget["remaining"], hook, report)
         budget["remaining"] = max(0, budget["remaining"] - used)
         skipped["geo"] += geo_skipped
         return [row["id"] for row in kept], used
@@ -480,7 +513,7 @@ def _enrich_handlers(
         elif step.field in ("owner_country", "min_geo_confidence"):
             if not geo_claimed:
                 handlers[step.field] = _geo_handler(
-                    deps, rows_by_id, virtual, budget, hook, skipped
+                    deps, rows_by_id, virtual, budget, hook, skipped, report
                 )
                 geo_claimed = True
         elif step.field == "has_dockerfile":

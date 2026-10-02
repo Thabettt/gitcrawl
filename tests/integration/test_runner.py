@@ -151,6 +151,34 @@ def is_file_query(request: httpx.Request) -> bool:
     return 'object(expression: "HEAD:' in json.loads(request.content)["query"]
 
 
+OWNER_ALIAS_RE = re.compile(r'(n\d+): (?:user|organization)\(login: "([^"]+)"\)')
+
+
+def is_owner_query(request: httpx.Request) -> bool:
+    query = json.loads(request.content)["query"]
+    return "user(login:" in query or "organization(login:" in query
+
+
+def owner_logins(request: httpx.Request) -> list[str]:
+    return [login for _, login in OWNER_ALIAS_RE.findall(json.loads(request.content)["query"])]
+
+
+def graphql_owner_response(request: httpx.Request, locations: dict[str, str | None]):
+    body = json.loads(request.content)
+    data: dict[str, object] = {}
+    errors: list[dict] = []
+    for alias, login in OWNER_ALIAS_RE.findall(body["query"]):
+        if login not in locations:
+            data[alias] = None
+            errors.append({"message": "Could not resolve to a User", "path": [alias]})
+        else:
+            data[alias] = {"location": locations[login]}
+    payload: dict[str, object] = {"data": data}
+    if errors:
+        payload["errors"] = errors
+    return httpx.Response(200, json=payload)
+
+
 def count_response(total: int) -> httpx.Response:
     return httpx.Response(
         200,
@@ -546,6 +574,8 @@ def test_run_filter_owner_country_filters_and_bounds_owner_fetches(clean: Engine
                 return count_response(3)
             return page_response(page)
         if path == "/graphql":
+            if is_owner_query(request):
+                return graphql_owner_response(request, locations)
             return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
@@ -573,12 +603,14 @@ def test_run_filter_owner_country_filters_and_bounds_owner_fetches(clean: Engine
     assert payload.items[0].geo_confidence == "name"
     assert payload.incomplete is True
     assert any("owner country could not be resolved" in warning for warning in payload.warnings)
-    fetched_owners = [
-        path_of(request).rsplit("/", 1)[1]
+    owner_requests = [
+        request
         for request in requests
-        if path_of(request).startswith("/users/")
+        if path_of(request) == "/graphql" and is_owner_query(request)
     ]
-    assert fetched_owners == ["alice", "bob"]
+    assert len(owner_requests) == 1
+    assert owner_logins(owner_requests[0]) == ["alice", "bob"]
+    assert not any(path_of(request).startswith("/users/") for request in requests)
     with clean.connect() as connection:
         stored = {
             row["login"]: (row["country_iso"], row["geo_confidence"])
@@ -688,6 +720,8 @@ def test_run_filter_tolerates_owner_fetch_failure(clean: Engine):
                 return count_response(2)
             return page_response(page)
         if path == "/graphql":
+            if is_owner_query(request):
+                return graphql_owner_response(request, {"bob": "Germany"})
             return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
@@ -699,7 +733,7 @@ def test_run_filter_tolerates_owner_fetch_failure(clean: Engine):
             return httpx.Response(200, json={"login": "bob", "location": "Germany"})
         return httpx.Response(404)
 
-    client, _ = scripted(handler)
+    client, requests = scripted(handler)
     payload = run_filter(
         make_deps(clean, client),
         spec_for(q="language:python", virtual={"owner_country": "DE"}),
@@ -707,6 +741,8 @@ def test_run_filter_tolerates_owner_fetch_failure(clean: Engine):
     )
 
     assert [item.repo_id for item in payload.items] == [2]
+    assert any(path_of(request) == "/users/alice" for request in requests)
+    assert not any(path_of(request) == "/users/bob" for request in requests)
     with clean.connect() as connection:
         stored = {
             row["login"]: (row["country_iso"], row["geo_confidence"])
@@ -783,6 +819,8 @@ def test_run_filter_tolerates_owner_fetch_sso_partial_results(clean: Engine):
                 return count_response(2)
             return page_response(page)
         if path == "/graphql":
+            if is_owner_query(request):
+                return graphql_owner_response(request, {"bob": "Germany"})
             return graphql_batch_response(request, {item["full_name"]: item for item in page})
         if path.startswith("/repos/"):
             login = path.split("/")[2]
@@ -798,7 +836,7 @@ def test_run_filter_tolerates_owner_fetch_sso_partial_results(clean: Engine):
             return httpx.Response(200, json={"login": "bob", "location": "Germany"})
         return httpx.Response(404)
 
-    client, _ = scripted(handler)
+    client, requests = scripted(handler)
     payload = run_filter(
         make_deps(clean, client),
         spec_for(q="language:python", virtual={"owner_country": "DE"}),
@@ -807,6 +845,38 @@ def test_run_filter_tolerates_owner_fetch_sso_partial_results(clean: Engine):
 
     assert [item.repo_id for item in payload.items] == [2]
     assert payload.incomplete is True
+    assert any(path_of(request) == "/users/alice" for request in requests)
+    assert not any(path_of(request) == "/users/bob" for request in requests)
+
+
+def test_run_filter_geo_batches_and_falls_back_per_owner(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(1, login="alice"), repo_item(2, login="bob")])
+        if path == "/graphql":
+            return graphql_owner_response(request, {"alice": "Berlin"})
+        if path == "/users/bob":
+            return httpx.Response(200, json={"location": "Lagos"})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"owner_country": "DE"}),
+    )
+    assert [item.repo_id for item in payload.items] == [1]
+    owner_requests = [
+        request
+        for request in requests
+        if path_of(request) == "/graphql" and is_owner_query(request)
+    ]
+    assert len(owner_requests) == 1
+    assert owner_logins(owner_requests[0]) == ["alice", "bob"]
+    assert [path_of(request) for request in requests].count("/users/bob") == 1
+    owners_stats = payload.field_stats["graphql"]["owners"]
+    assert owners_stats["values"] == 2
+    assert owners_stats["fallbacks"] == 1
 
 
 def test_build_deps_requires_a_token(clean: Engine, monkeypatch):
