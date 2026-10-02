@@ -86,6 +86,8 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
   - Check matches = **one search request**, returns an approximate count (`~4,200`), and covers **GitHub-evaluable filters only**. Copy states: “Has Dockerfile and owner country are applied after fetching, so the final corpus will be smaller.”
 - **Common** section (always open): keywords, language, minimum stars, updated since, include forks.
 - **Advanced** section (collapsible, remembers state): owner/org, size, followers, topics, created between, license, owner country + confidence, has Dockerfile, team topic, custom properties (enabled only with a single `org:`), and the remaining qualifier groups. **All filters live on this one page.**
+- **Unavailable filters stay on the page but render disabled with a one-line reason** (currently `min_loc`/`max_loc`: “Not available yet — needs full-history analysis”). Nothing is silently ignored, and nothing inactive looks active.
+- **Every numeric filter offers min and max where the data allows**: native qualifiers already use ranges (stars, forks, size, followers, topics); `min_commits`/`max_commits` are enforced from default-branch commit counts (batch-engine plan, Task 8); LOC min/max are the disabled pair above. Min-only qualifiers (`good-first-issues`, `help-wanted-issues`) are labelled “minimum”.
 - **Actions, each with its one-line explanation:**
   - *Run search (live)* — finds matching repos now, saves their details, applies file & country filters, freezes the results; uses API allowance; can take minutes.
   - *Save to library* — keeps this filter preset on this machine; no GitHub calls.
@@ -192,7 +194,8 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 | Settings page relabeled to §4.9 (plan already exists) | Plan edit | `2026-10-02-console-settings.md` |
 | Detection pages adopt this IA (plan already exists) | Plan edit | `2026-10-02-agent-detection.md` |
 | Progress-stage state + rough ETA | Optional | Nice-to-have; stages can be derived from counters without new storage |
-| Enforce `min_commits`/`min_loc` | Out of scope — needs the commit/LOC history tier | Known gap: runs keep the “incomplete” warning (R44); never remove or weaken it |
+| Enforce `min_commits`/`max_commits` (default branch only) | Planned — batch-engine plan, Task 8 | Counts commits reachable from the default branch, snapshot at `ran_at` |
+| Enforce `min_loc`/`max_loc` | Out of scope — needs the full-history tier | Greyed in the UI; runs keep the “incomplete” warning (R44); never remove or weaken it |
 
 ## 8. Suggested implementation order
 

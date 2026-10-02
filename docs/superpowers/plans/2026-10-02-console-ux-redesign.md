@@ -359,6 +359,23 @@ def test_check_matches_without_js_renders_a_page(clean, tmp_path, monkeypatch):
     response = client.get("/partials/find/matches?q=language:rust")
     assert response.status_code == 200
     assert "<html" in response.text.lower()  # full page for non-htmx clients
+
+
+def test_unavailable_filters_are_greyed_out_with_a_reason(clean, tmp_path, monkeypatch):
+    import re
+
+    body = healthy_client(clean, tmp_path, monkeypatch).get("/find").text
+    assert re.search(r'<input[^>]*name="min_loc"[^>]*disabled', body)
+    assert re.search(r'<input[^>]*name="max_loc"[^>]*disabled', body)
+    assert "Not available yet" in body
+    assert 'name="max_commits"' in body  # available once Phase 1 lands
+
+
+def test_numeric_count_rows_expose_min_and_max(clean, tmp_path, monkeypatch):
+    body = healthy_client(clean, tmp_path, monkeypatch).get("/find").text
+    assert 'name="range_stars_min"' in body
+    assert 'name="range_stars_max"' in body
+    assert 'name="range_size_min"' in body and 'name="range_size_max"' in body
 ```
 
 - [ ] **Step 2: Implement the route**
@@ -396,6 +413,8 @@ In `pages.py` `register_pages`, add:
 - Add the sticky rail markup: plain summary (`{{ spec_sentence }}` from the route), the Check-matches button (`hx-get="/partials/find/matches" hx-include="closest form" hx-target="#match-result"`), `#match-result`, then Run (primary), Save, Download with the copy deck lines under each.
 - Move upload into `<details><summary>Use a filter file</summary>` with its own submit.
 - Route context adds `spec_sentence = describe_spec(parse_filter_spec(current spec))` when the form is prefilled; empty otherwise.
+- Comparator-aware count rows: show only the inputs the comparator needs — a value for `> >= < <= = eq`, “Minimum”/“Maximum” for `range`. Add a pure helper `countInputsFor(comparator)` in `static/applib.js` (returns `"value"` or `"range"`), unit-test it in `tests/js/applib.test.mjs` + `tests/unit/test_applib_js.py`, and toggle `hidden` on the inputs from `app.js` on `change` of `cmp_*`. All inputs stay in the DOM, so without JS the current all-visible behaviour remains and nothing breaks.
+- Virtual filters: add `max_commits` and `max_loc` number fields; render `min_loc` and `max_loc` as `disabled` with an adjacent note “Not available yet — needs full-history analysis (planned)”. `min_commits`/`max_commits` become active once the Phase 1 commits task lands.
 
 - [ ] **Step 4: Add `describe_spec` to `filter_spec.py`**
 
@@ -410,35 +429,7 @@ def describe_spec(spec: FilterSpec) -> str:
 
 Unit-test it in `tests/unit/test_filter_spec.py` with three representative specs.
 
-Also enforce the `props` coupling server-side here (today the single-`org` rule exists only in the form UI, so uploaded JSON bypasses it). Append to `tests/unit/test_filter_spec.py`:
-
-```python
-def test_props_requires_exactly_one_org():
-    with pytest.raises(FilterSpecError) as excinfo:
-        parse_filter_spec({"gitcrawl_filter": 1, "q": "language:rust props.team:core"})
-    assert any("org" in error for error in excinfo.value.errors)
-
-
-def test_props_with_two_orgs_is_rejected():
-    with pytest.raises(FilterSpecError):
-        parse_filter_spec({"gitcrawl_filter": 1, "q": "org:a org:b props.team:core"})
-
-
-def test_props_with_one_org_is_accepted():
-    spec = parse_filter_spec({"gitcrawl_filter": 1, "q": "org:acme props.team:core"})
-    assert spec.q == "org:acme props.team:core"
-```
-
-Implement in `parse_filter_spec` after the `q` allowlist check (adapt variable names to the function):
-
-```python
-    tokens = tokenize(query)
-    has_props = any(token.startswith("props.") for token in tokens)
-    orgs = [token for token in tokens if token.startswith("org:")]
-    if has_props and len(orgs) != 1:
-        errors.append("`props.` filters require exactly one `org:` in the query")
-        hints.append("add a single `org:NAME` or remove the `props.` filter")
-```
+Note: the single-`org` `props.` rule is **already enforced server-side** by `lib.qualify.validate` (regression-covered by `tests/contract/test_filter_form.py::test_props_require_a_single_org_scope`). Do not duplicate it here.
 
 - [ ] **Step 5: Run the suites**
 

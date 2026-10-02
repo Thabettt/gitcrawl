@@ -2191,7 +2191,186 @@ git commit -m "feat: batched owner location lookups with rest fallback"
 
 ## Phase 3 — Verification, docs, hardening
 
-### Task 8: Full verification, docs, and status flip
+### Task 8: Enforce min/max commits from batched commit counts
+
+**Files:**
+- Modify: `src/hydrate/graphql_repo.py`, `src/hydrate/repo_client.py`, `src/hydrate/tail.py`, `src/serve/runner.py`, `src/serve/virtual_params.py`, `src/serve/forms.py`, `src/enrich/cost_planner.py`
+- Test: `tests/unit/test_graphql_repo_adapter.py`, `tests/integration/test_hydrate_batch.py`, `tests/integration/test_runner.py`
+
+**Interfaces:**
+- Produces: `RepoDetails.commit_count: int | None`; adapter field `defaultBranchRef { name target { ... on Commit { history(first: 1) { totalCount } } } }`; `hydrate.repo_client.fetch_commit_count(client, full_name, ...) -> int | None` (REST `Link rel="last"` page count); `RefreshStats.commit_counts: dict[str, int]`; virtual rules `max_commits`/`max_loc`; `_R44_VIRTUALS = ("min_loc",)`; planner costs `min_commits`/`max_commits` = 2, `min_loc`/`max_loc` = 4; `commit_count` surfaced in `run_items.virtuals`.
+- Scope: default branch only, whatever its name; no branch enumeration. Merged-in commits are included; the number is a snapshot at `ran_at`. Empty repo → 0.
+
+- [ ] **Step 1: Write the failing adapter tests**
+
+Append to `tests/unit/test_graphql_repo_adapter.py`:
+
+```python
+def test_parse_reads_default_branch_commit_count():
+    adapter = RepoDetailsAdapter({"911": "octo/alpha"})
+    node = dict(NODE)
+    node["defaultBranchRef"] = {"name": "main", "target": {"history": {"totalCount": 42}}}
+    parsed = adapter.parse({"data": {"n0": node}}, {"n0": "911"})
+    assert parsed.values["911"].commit_count == 42
+
+
+def test_parse_empty_repository_reports_zero_commits():
+    adapter = RepoDetailsAdapter({"911": "octo/alpha"})
+    node = dict(NODE)
+    node["defaultBranchRef"] = None
+    parsed = adapter.parse({"data": {"n0": node}}, {"n0": "911"})
+    assert parsed.values["911"].commit_count == 0
+```
+
+- [ ] **Step 2: Implement the adapter field**
+
+In `src/hydrate/graphql_repo.py`: add `commit_count: int | None = None` to `RepoDetails`; change the query's `defaultBranchRef { name }` line to:
+
+```
+    defaultBranchRef {
+      name
+      target { ... on Commit { history(first: 1) { totalCount } } }
+    }
+```
+
+Add:
+
+```python
+def _commit_count(node: dict) -> int | None:
+    branch = node.get("defaultBranchRef")
+    if branch is None:
+        return 0
+    if not isinstance(branch, dict):
+        return None
+    target = branch.get("target")
+    history = target.get("history") if isinstance(target, dict) else None
+    total = history.get("totalCount") if isinstance(history, dict) else None
+    return total if isinstance(total, int) and not isinstance(total, bool) else None
+```
+
+and include `commit_count=_commit_count(node)` in the `RepoDetails(...)` construction.
+
+- [ ] **Step 3: Write the failing hydration tests**
+
+In `tests/integration/test_hydrate_batch.py`, extend `graphql_node` with `"defaultBranchRef": {"name": "main", "target": {"history": {"totalCount": repo_id * 10}}}` and assert `stats.commit_counts == {str(repo_id): repo_id * 10 for repo_id in range(1, 26)}`. Add a REST-fallback test: the fallback handler for `/repos/octo/repo2/commits?per_page=1` returns `httpx.Response(200, json=[{}], headers={"Link": '<https://api.github.com/…&page=77>; rel="last"'})` and `stats.commit_counts["2"] == 77`; a response without `Link` counts the returned items (1).
+
+- [ ] **Step 4: Implement `fetch_commit_count` and capture counts**
+
+`src/hydrate/repo_client.py`:
+
+```python
+def fetch_commit_count(
+    client: httpx.Client,
+    full_name: str,
+    *,
+    limiter: BucketLimiter | None = None,
+    token_id: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.time,
+    jitter: Callable[[], float] | None = None,
+    on_response: Callable[[httpx.Response, float], None] | None = None,
+) -> int | None:
+    response = request_with_retry(
+        client, "GET", f"{API_BASE}/repos/{full_name}/commits?per_page=1",
+        limiter=limiter, token_id=token_id, sleep=sleep, now=now, jitter=jitter,
+        on_response=on_response,
+    )
+    if response.status_code != 200:
+        return None
+    for part in (response.headers.get("link") or "").split(","):
+        segments = part.split(";")
+        url_part = segments[0].strip()
+        if not (url_part.startswith("<") and url_part.endswith(">")):
+            continue
+        if any('rel="last"' in segment for segment in segments[1:]):
+            params = dict(parse_qsl(urlparse(url_part[1:-1]).query))
+            page = params.get("page")
+            if page and page.isdigit():
+                return int(page)
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return len(payload) if isinstance(payload, list) else None
+```
+
+(`parse_qsl`, `urlparse` imports already exist in the repo style; add as needed.)
+
+In `src/hydrate/tail.py`: `RefreshStats` gains `commit_counts: dict[str, int] = field(default_factory=dict)`; for GraphQL values record `if details.commit_count is not None: stats.commit_counts[key] = details.commit_count`; in the fallback closure, after a successful hydration, `count = fetch_commit_count(...)` and record it against `str(hydrated.id)` when not None.
+
+- [ ] **Step 5: Wire the virtual filter, planner, and runner**
+
+- `src/serve/virtual_params.py`: add rules `max_commits` (int, post “commit count <= max_commits”) and `max_loc` (int, post “lines of code <= max_loc”).
+- `src/serve/forms.py`: extend the loop to `("min_stars", "min_commits", "max_commits", "min_loc", "max_loc")`.
+- `src/enrich/cost_planner.py`: `min_commits: 2, max_commits: 2, min_loc: 4, max_loc: 4`.
+- `src/serve/runner.py`: `_R44_VIRTUALS = ("min_loc",)`; `run_filter` passes `hydration.commit_counts` into `_enrich_handlers`; add the handler branch and function:
+
+```python
+def _commit_handler(rows_by_id, virtual, commit_counts, skipped):
+    def handler(ids):
+        kept = []
+        for repo_id in ids:
+            count = commit_counts.get(str(repo_id))
+            if count is None:
+                skipped["commits"] += 1
+                continue
+            rows_by_id[repo_id]["commit_count"] = count
+            low = virtual.get("min_commits")
+            high = virtual.get("max_commits")
+            if isinstance(low, int) and count < low:
+                continue
+            if isinstance(high, int) and count > high:
+                continue
+            kept.append(repo_id)
+        return kept, 0
+    return handler
+```
+
+  `skipped` gains `"commits": 0`; after `execute_segments`, add a warning when `skipped["commits"] > 0`: “N repo(s) could not be checked for commit count; results are incomplete”. `_payload_item` adds `badges["commit_count"] = row["commit_count"]` when present.
+
+- [ ] **Step 6: Write the failing runner test**
+
+Append to `tests/integration/test_runner.py` (extend `rest_item_to_graphql_node`/`graphql_batch_response` with an optional `commit_counts: dict[int, int]` that fills `defaultBranchRef.target.history.totalCount`):
+
+```python
+def test_run_filter_enforces_min_and_max_commits(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(index) for index in (1, 2, 3)])
+        if path == "/graphql":
+            return graphql_batch_response(
+                request,
+                {f"owner{i}/repo{i}": repo_item(i) for i in (1, 2, 3)},
+                commit_counts={1: 500, 2: 50, 3: 5000},
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"min_commits": 100, "max_commits": 1000}),
+    )
+    assert [item.repo_id for item in payload.items] == [1]
+    assert not any("min_commits" in warning for warning in payload.warnings)
+    assert payload.items[0].virtuals["commit_count"] == 500
+```
+
+- [ ] **Step 7: Run the suites**
+
+Run: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/unit/test_graphql_repo_adapter.py tests/integration/test_hydrate_batch.py tests/integration/test_runner.py tests/unit/test_virtual_params.py -q`
+Expected: PASS. Existing tests asserting the R44 warning for `min_commits` must be updated to assert it only for `min_loc` (never weaken the warning itself).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/hydrate/graphql_repo.py src/hydrate/repo_client.py src/hydrate/tail.py src/serve/runner.py src/serve/virtual_params.py src/serve/forms.py src/enrich/cost_planner.py tests/unit/test_graphql_repo_adapter.py tests/integration/test_hydrate_batch.py tests/integration/test_runner.py
+git commit -m "feat: enforce min/max commits from batched commit counts"
+```
+
+---
+
+### Task 9: Full verification, docs, and status flip
 
 **Files:**
 - Modify: `docs/development-log.md`
@@ -2237,6 +2416,7 @@ git commit -m "docs: log the graphql batch engine outcome"
 ## Self-Review Checklist (run after implementation)
 
 - [ ] **Scope (saving + current checks):** repo details batch (Task 5), file presence batch (Task 6), owner location batch (Task 7).
+- [ ] **min/max commits:** enforced from default-branch counts (Task 8); `min_loc`/`max_loc` remain recorded-only and are greyed in the UI.
 - [ ] **Parse-first, keep good data:** `test_fetch_batch_never_discards_good_data_when_errors_and_data_share_a_reply`, `test_fetch_batch_keeps_good_results_when_one_alias_errors`.
 - [ ] **Per-repo error attribution by `path`:** Task 3 tests + `_post` alias mapping.
 - [ ] **Split only failures, bounded:** `test_transient_batch_error_splits_and_only_failing_keys_are_resent`, `test_single_key_transient_failure_goes_to_fallback_after_attempts`.
