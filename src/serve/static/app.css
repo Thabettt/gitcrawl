@@ -367,6 +367,14 @@ textarea {
   margin: 0.2rem 0;
 }
 
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
 .error-state {
   border-color: var(--gc-down-text);
   border-style: solid;

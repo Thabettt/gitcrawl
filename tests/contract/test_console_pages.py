@@ -653,3 +653,18 @@ def test_actionable_clone_errors_are_wired(client: TestClient):
         "Clone request failed",
     ):
         assert marker in script
+
+
+def test_empty_states_offer_example_queries(client: TestClient):
+    runs = client.get("/runs").text
+    library = client.get("/filters", headers=HTML).text
+    dashboard = client.get("/").text
+
+    assert 'id="runs-empty"' in runs
+    assert 'href="/find?keywords=language:rust"' in runs
+    assert "Example: language:rust" in runs
+    assert 'id="library-empty"' in library
+    assert "stars%3A%3E500" in library
+    assert "Example: stars:&gt;500" in library
+    assert 'id="empty-state"' in dashboard
+    assert 'href="/find?keywords=language:rust"' in dashboard

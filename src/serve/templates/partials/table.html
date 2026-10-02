@@ -33,7 +33,13 @@
         </td>
       </tr>
     {% else %}
-      <tr id="run-table-empty"><td colspan="7">No results in this run.</td></tr>
+      <tr id="run-table-empty">
+        <td colspan="7">
+          <p>No results in this run.</p>
+          <p class="muted">The filter matched nothing new; broaden it and run again.</p>
+          <p class="empty-actions"><a class="button ghost" href="/find">Start a new find</a></p>
+        </td>
+      </tr>
     {% endfor %}
     </tbody>
   </table>

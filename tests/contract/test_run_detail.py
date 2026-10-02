@@ -593,3 +593,15 @@ def test_app_js_wires_detail_controls(clean: Engine, tmp_path):
         "data-close",
     ):
         assert marker in response.text
+
+
+def test_table_fragment_empty_state_offers_guidance(clean: Engine, tmp_path):
+    run_id = create_run(clean, FILTER, api_version=API_VERSION)
+    client = make_client(clean, tmp_path)
+
+    response = client.get(f"/partials/runs/{run_id}/table")
+
+    assert 'id="run-table-empty"' in response.text
+    assert "No results" in response.text
+    assert 'href="/find"' in response.text
+    assert "Start a new find" in response.text

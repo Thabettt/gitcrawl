@@ -82,6 +82,10 @@
   <div id="runs-empty" class="empty-state">
     <p>No runs match</p>
     <p class="muted">{% if status or hash %}Loosen the filters or clear them.{% else %}Start with a quick find on the <a href="/">dashboard</a> or the full <a href="/find">Find</a> form.{% endif %}</p>
+    <p class="empty-actions">
+      <a class="button ghost" href="/find?keywords=language:rust">Example: language:rust</a>
+      <a class="button ghost" href="/find?keywords=stars%3A%3E1000">Example: stars:&gt;1000</a>
+    </p>
   </div>
   {% endif %}
   <nav id="runs-pagination" class="pagination" aria-label="Run history pages">
