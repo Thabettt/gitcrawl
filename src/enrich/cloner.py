@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -21,6 +23,10 @@ CLONE_URL_TEMPLATE = "https://github.com/{full_name}.git"
 LOW_DISK_THRESHOLD_MB = 2048.0
 
 GitRunner = Callable[[Sequence[str], str], None]
+
+
+class CloneCancelled(Exception):
+    pass
 
 
 class CloneMode(StrEnum):
@@ -164,8 +170,58 @@ def _clone_argv(full_name: str, destination: Path, mode: CloneMode) -> list[str]
     ]
 
 
-def _default_git_runner(argv: Sequence[str], cwd: str, *, timeout: float | None = None) -> None:
-    subprocess.run(list(argv), cwd=cwd, check=True, timeout=timeout)
+def _git_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    return env
+
+
+def _terminate(process: subprocess.Popen) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _default_git_runner(
+    argv: Sequence[str],
+    cwd: str,
+    *,
+    timeout: float | None = None,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    if cancel_event is None:
+        subprocess.run(
+            list(argv),
+            cwd=cwd,
+            check=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            env=_git_env(),
+        )
+        return
+    process = subprocess.Popen(list(argv), cwd=cwd, stdin=subprocess.DEVNULL, env=_git_env())
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        if cancel_event.is_set():
+            _terminate(process)
+            raise CloneCancelled()
+        remaining = 0.1
+        if deadline is not None:
+            remaining = min(remaining, max(0.0, deadline - time.monotonic()))
+        try:
+            process.wait(timeout=remaining)
+            break
+        except subprocess.TimeoutExpired:
+            if deadline is not None and time.monotonic() >= deadline:
+                _terminate(process)
+                raise subprocess.TimeoutExpired(list(argv), timeout) from None
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, list(argv))
 
 
 def _error_message(full_name: str, exc: BaseException) -> str:
@@ -185,6 +241,7 @@ def clone_repos(
     workers: int = 1,
     clone_timeout: float | None = None,
     errors_cap: int = 20,
+    cancel_event: threading.Event | None = None,
 ) -> CloneStats:
     mode = CloneMode(mode)
     run_row = _run_row(engine, run_id)
@@ -214,6 +271,8 @@ def clone_repos(
     def clone_one(row: RowMapping) -> str:
         full_name = str(row["full_name"])
         destination = run_dir / full_name.replace("/", "__")
+        if cancel_event is not None and cancel_event.is_set():
+            return "cancelled"
         with lock:
             progress.current = full_name
             progress.emit()
@@ -223,16 +282,16 @@ def clone_repos(
             try:
                 if runner is not None:
                     runner(_clone_argv(full_name, destination, mode), str(destination.parent))
-                elif clone_timeout is None:
-                    _default_git_runner(
-                        _clone_argv(full_name, destination, mode), str(destination.parent)
-                    )
                 else:
                     _default_git_runner(
                         _clone_argv(full_name, destination, mode),
                         str(destination.parent),
                         timeout=clone_timeout,
+                        cancel_event=cancel_event,
                     )
+            except CloneCancelled:
+                shutil.rmtree(destination, ignore_errors=True)
+                outcome = "cancelled"
             except Exception as exc:
                 shutil.rmtree(destination, ignore_errors=True)
                 outcome = "failed"
@@ -258,11 +317,19 @@ def clone_repos(
 
     if workers <= 1:
         for row in items:
-            clone_one(row)
+            if clone_one(row) == "cancelled":
+                with lock:
+                    progress.status = "cancelled"
+                break
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(clone_one, items))
+            for outcome in pool.map(clone_one, items):
+                if outcome == "cancelled":
+                    with lock:
+                        progress.status = "cancelled"
+                    break
     progress.current = None
-    progress.status = "done"
+    if progress.status != "cancelled":
+        progress.status = "done"
     progress.emit(force=True)
     return stats

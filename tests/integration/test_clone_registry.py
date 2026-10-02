@@ -30,7 +30,9 @@ def test_concurrent_starts_return_the_same_progress_object(clean: Engine, tmp_pa
     release = threading.Event()
     calls: list[int] = []
 
-    def fake_worker(engine, run_id, limit, mode, dest_root, git_runner, progress):
+    def fake_worker(
+        engine, run_id, limit, mode, dest_root, git_runner, progress, registry, timeout, event
+    ):
         calls.append(run_id)
         assert release.wait(10)
 

@@ -27,6 +27,7 @@ from enrich.cloner import (
     estimate_clone_from_totals,
     free_disk_mb,
 )
+from lib.deadlines import clone_timeout_seconds
 from serve.executor import _CSV_HEADER, _csv_cell
 from store.models import Repo, RunItem, Runs
 
@@ -196,6 +197,7 @@ class CloneRegistry:
             raise ValueError("max_entries must be >= 1")
         self._entries: OrderedDict[int, CloneProgress] = OrderedDict()
         self._touched: dict[int, float] = {}
+        self._cancels: dict[int, threading.Event] = {}
         self._lock = threading.Lock()
         self._max_entries = max_entries
         self._ttl = ttl_seconds
@@ -256,6 +258,22 @@ class CloneRegistry:
             self._touched[run_id] = now
             self._evict_locked(now)
             return progress, True
+
+    def set_cancel(self, run_id: int, event: threading.Event) -> None:
+        with self._lock:
+            self._cancels[run_id] = event
+
+    def clear_cancel(self, run_id: int) -> None:
+        with self._lock:
+            self._cancels.pop(run_id, None)
+
+    def cancel(self, run_id: int) -> bool:
+        with self._lock:
+            event = self._cancels.get(run_id)
+        if event is None:
+            return False
+        event.set()
+        return True
 
 
 _EMIT_INTERVAL_SECONDS = 0.25
@@ -380,6 +398,19 @@ def read_clone_progress(
     return CloneProgress(status="done", total=0, completed=0, failed=0)
 
 
+def cancel_clone(
+    engine: Engine,
+    run_id: int,
+    *,
+    registry: CloneRegistry,
+    runs_root: str = "runs",
+) -> CloneProgress:
+    progress = read_clone_progress(engine, run_id, registry=registry, runs_root=runs_root)
+    if progress.status == "running":
+        registry.cancel(run_id)
+    return progress
+
+
 def start_clone(
     engine: Engine,
     run_id: int,
@@ -390,6 +421,8 @@ def start_clone(
     runs_root: str = "runs",
     dest_root: str = "clones",
     git_runner: GitRunner | None = None,
+    clone_timeout: float | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CloneProgress:
     row = _row_for_run(engine, run_id)
     bundle_dir = run_bundle_dir(runs_root, row["filter_hash"], run_id)
@@ -411,9 +444,23 @@ def start_clone(
         progress.status = "done"
         progress.emit(force=True)
         return progress
+    timeout = clone_timeout if clone_timeout is not None else clone_timeout_seconds()
+    event = cancel_event if cancel_event is not None else threading.Event()
+    registry.set_cancel(run_id, event)
     worker = threading.Thread(
         target=_clone_worker,
-        args=(engine, run_id, limit, mode, dest_root, git_runner, progress),
+        args=(
+            engine,
+            run_id,
+            limit,
+            mode,
+            dest_root,
+            git_runner,
+            progress,
+            registry,
+            timeout,
+            event,
+        ),
         daemon=True,
     )
     worker.start()
@@ -428,6 +475,9 @@ def _clone_worker(
     dest_root: str,
     git_runner: GitRunner | None,
     progress: CloneProgress,
+    registry: CloneRegistry,
+    clone_timeout: float,
+    cancel_event: threading.Event,
 ) -> None:
     try:
         clone_repos(
@@ -438,6 +488,8 @@ def _clone_worker(
             dest_root=dest_root,
             git_runner=git_runner,
             progress=progress,
+            clone_timeout=clone_timeout,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         progress.status = "failed"
@@ -445,4 +497,5 @@ def _clone_worker(
         progress.error_count += 1
         progress.errors.append(f"{type(exc).__name__}: {exc}"[:300])
     finally:
+        registry.clear_cancel(run_id)
         progress.emit(force=True)

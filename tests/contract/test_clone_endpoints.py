@@ -196,7 +196,7 @@ def test_clone_start_returns_running_then_progress_completes(clean: Engine, tmp_
     monkeypatch.setattr(
         cloner,
         "_default_git_runner",
-        lambda argv, cwd: calls.append((list(argv), cwd)),
+        lambda argv, cwd, **kwargs: calls.append((list(argv), cwd)),
     )
     client = make_client(clean, tmp_path)
 
@@ -236,7 +236,7 @@ def test_progress_is_live_in_flight_and_persisted_when_done(clean: Engine, tmp_p
     release = threading.Event()
     seen: list[list[str]] = []
 
-    def runner(argv: list[str], cwd: str) -> None:
+    def runner(argv: list[str], cwd: str, **kwargs) -> None:
         seen.append(list(argv))
         if len(seen) == 2:
             assert release.wait(10.0)
@@ -391,3 +391,72 @@ def test_progress_for_a_run_that_never_cloned_is_idle(clean: Engine, tmp_path):
 
     assert response.status_code == 200
     assert response.json() == IDLE_PROGRESS
+
+
+def test_clone_wires_env_timeout_and_cancel_event(clean: Engine, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    captured: dict = {}
+    called = threading.Event()
+
+    def fake_clone_repos(engine, run_id, **kwargs):
+        captured.update(kwargs)
+        called.set()
+        return cloner.CloneStats(requested=0, completed=0, skipped=0, failed=0, dest_root="clones")
+
+    monkeypatch.setattr("serve.runs.clone_repos", fake_clone_repos)
+    monkeypatch.setenv("GITCRAWL_CLONE_TIMEOUT_SECONDS", "42")
+    client = make_client(clean, tmp_path)
+
+    response = client.post(f"/runs/{run_id}/clone", json={"limit": 1, "mode": "shallow"})
+
+    assert response.status_code == 200
+    assert called.wait(10) is True
+    assert captured["clone_timeout"] == 42.0
+    assert isinstance(captured["cancel_event"], threading.Event)
+
+
+def test_clone_cancel_stops_remaining_repos(clean: Engine, tmp_path, monkeypatch):
+    run_id, filter_hash = seed_run(clean, tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], cwd: str, **kwargs) -> None:
+        calls.append(list(argv))
+        started.set()
+        release.wait(10)
+
+    monkeypatch.setattr(cloner, "_default_git_runner", runner)
+    client = make_client(clean, tmp_path)
+
+    started_response = client.post(f"/runs/{run_id}/clone", json={"limit": 2, "mode": "shallow"})
+    assert started_response.json()["status"] == "running"
+    assert started.wait(10) is True
+
+    cancelled = client.delete(f"/runs/{run_id}/clone")
+    assert cancelled.status_code == 200
+    release.set()
+
+    done = wait_for_status(client, run_id)
+    assert done["status"] == "cancelled"
+    assert len(calls) == 1
+    assert done["failed"] == 0
+
+
+def test_clone_cancel_on_an_idle_run_returns_the_idle_progress(clean: Engine, tmp_path):
+    run_id, _ = seed_run(clean, tmp_path)
+    client = make_client(clean, tmp_path)
+
+    response = client.delete(f"/runs/{run_id}/clone")
+
+    assert response.status_code == 200
+    assert response.json() == IDLE_PROGRESS
+
+
+def test_clone_cancel_unknown_run_is_404(clean: Engine, tmp_path):
+    client = make_client(clean, tmp_path)
+
+    response = client.delete("/runs/424242/clone")
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "run_not_found"

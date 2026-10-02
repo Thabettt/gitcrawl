@@ -504,3 +504,84 @@ def test_persisted_progress_retries_transient_replace_failures(tmp_path, monkeyp
     assert attempts["count"] == 2
     assert data["status"] == "running"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_git_env_disables_prompts_and_credential_helpers(monkeypatch):
+    from enrich.cloner import _git_env
+
+    env = _git_env()
+
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+
+
+def test_default_git_runner_closes_stdin_and_sets_the_terminal_env(monkeypatch):
+    import subprocess
+
+    captured: dict = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr("enrich.cloner.subprocess.run", fake_run)
+
+    _default_git_runner(["git", "clone"], ".")
+
+    assert captured["stdin"] == subprocess.DEVNULL
+    assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_default_git_runner_honours_cancellation():
+    import threading
+    import time as time_module
+
+    from enrich.cloner import CloneCancelled
+
+    cancel_event = threading.Event()
+    timer = threading.Timer(0.05, cancel_event.set)
+    timer.start()
+    started = time_module.monotonic()
+    try:
+        with pytest.raises(CloneCancelled):
+            _default_git_runner(
+                ["python", "-c", "import time; time.sleep(5)"],
+                ".",
+                cancel_event=cancel_event,
+            )
+    finally:
+        timer.cancel()
+    assert time_module.monotonic() - started < 4.0
+
+
+def test_clone_repos_cancellation_marks_status_and_stops(clean: Engine, tmp_path):
+    import threading
+
+    run_id, _ = seed_run(
+        clean, [(1, "octo/one", 1024, 20), (2, "octo/two", 1024, 10), (3, "octo/three", 1, 5)]
+    )
+    progress = CloneProgress(status="running", total=0, completed=0, failed=0)
+    cancel_event = threading.Event()
+    calls: list[str] = []
+
+    def runner(argv, cwd):
+        calls.append(argv[-2])
+        cancel_event.set()
+
+    stats = clone_repos(
+        clean,
+        run_id,
+        limit=3,
+        mode=CloneMode.SHALLOW,
+        dest_root=str(tmp_path),
+        git_runner=runner,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
+
+    assert progress.status == "cancelled"
+    assert progress.completed == 1
+    assert stats.failed == 0
+    assert len(calls) == 1

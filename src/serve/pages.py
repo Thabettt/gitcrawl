@@ -30,6 +30,7 @@ from serve.forms import build_spec_from_form, form_state, spec_to_form_values
 from serve.library import LibraryError, create_filter, get_filter, list_filters
 from serve.runs import (
     CloneRegistry,
+    cancel_clone,
     clone_estimate_for_run,
     progress_payload,
     read_clone_progress,
@@ -946,6 +947,16 @@ def register_pages(
         if limit > 0:
             payload["status"] = "running"
         return payload
+
+    @app.delete("/runs/{run_id}/clone")
+    def clone_cancel_route(run_id: int):
+        try:
+            progress = cancel_clone(
+                engine_factory(), run_id, registry=progress_registry, runs_root=runs_root
+            )
+        except KeyError:
+            return _run_not_found(run_id)
+        return progress_payload(progress)
 
     @app.get("/partials/runs/{run_id}/clone-progress")
     def clone_progress_route(request: Request, run_id: int):
