@@ -96,6 +96,7 @@ def allow_testclient_host(monkeypatch: pytest.MonkeyPatch) -> None:
 CleanDbFactory = Callable[..., Engine]
 
 FULL_TRUNCATE_TABLES = (
+    "app_settings",
     "run_items",
     "runs",
     "saved_filters",
@@ -128,6 +129,7 @@ def clean_db(alembic_engine: Engine) -> CleanDbFactory:
                     + " RESTART IDENTITY CASCADE"
                 )
             )
+            connection.execute(text("INSERT INTO app_settings (id) VALUES (1)"))
             if owners:
                 connection.execute(Owner.__table__.insert(), [dict(row) for row in owners])
             if repos:

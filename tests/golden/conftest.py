@@ -39,8 +39,9 @@ DISK_WARNING = re.compile(
 FILTER_SPEC_JSON = '{"gitcrawl_filter": 1, "q": "language:rust", "sort": "stars", "order": "desc"}'
 
 GOLDEN_SEED_SQL = (
-    "TRUNCATE TABLE run_items, runs, saved_filters, audit_log, shards, geo_cache, "
-    "owners, repos, full_name_history RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE app_settings, run_items, runs, saved_filters, audit_log, shards, "
+    "geo_cache, owners, repos, full_name_history RESTART IDENTITY CASCADE",
+    "INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
     """
     INSERT INTO owners (id, login, type, location_raw, country_iso, geo_confidence, company)
     VALUES (901, 'octo', 'User', 'Berlin, Germany', 'DE', 'name', 'GitCrawl Labs')

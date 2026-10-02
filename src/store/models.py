@@ -6,6 +6,7 @@ from sqlalchemy import (
     CHAR,
     BigInteger,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -223,6 +224,38 @@ class SavedFilter(Base):
     filter_spec: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="app_settings_single_row"),
+        CheckConstraint("graphql_batch_size BETWEEN 1 AND 20", name="app_settings_batch_size"),
+        CheckConstraint(
+            "limiter_max_concurrent BETWEEN 1 AND 100", name="app_settings_concurrency"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    max_shards: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("10"))
+    max_candidates: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("500"))
+    max_hydrate: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("200"))
+    max_enrich: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
+    request_deadline_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3600")
+    )
+    graphql_batch: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    graphql_batch_size: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("20")
+    )
+    limiter_max_concurrent: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("10")
     )
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")

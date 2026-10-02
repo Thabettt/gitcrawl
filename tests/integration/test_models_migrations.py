@@ -20,6 +20,7 @@ TABLES = {
     "runs",
     "run_items",
     "saved_filters",
+    "app_settings",
 }
 
 EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
@@ -122,6 +123,18 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "incomplete_results": True,
         "token_fp": False,
         "latency_ms": False,
+    },
+    "app_settings": {
+        "id": False,
+        "max_shards": False,
+        "max_candidates": False,
+        "max_hydrate": False,
+        "max_enrich": False,
+        "request_deadline_seconds": False,
+        "graphql_batch": False,
+        "graphql_batch_size": False,
+        "limiter_max_concurrent": False,
+        "updated_at": False,
     },
 }
 
