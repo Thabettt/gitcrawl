@@ -185,7 +185,7 @@ def test_dashboard_renders_empty_state_and_key_elements(clean: Engine, tmp_path,
     for element_id in DASHBOARD_IDS:
         assert element_id in html
     assert 'id="empty-state"' in html
-    assert "No runs yet" in html
+    assert "Nothing yet — start your first search" in html
     assert "super-secret-token-value" not in html
 
 

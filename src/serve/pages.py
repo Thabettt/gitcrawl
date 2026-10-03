@@ -356,6 +356,37 @@ def _same_hash_runs(engine: Engine, row, *, limit: int = 50) -> list[dict]:
     ]
 
 
+def _previous_same_hash_runs(engine: Engine, row, *, limit: int = 3) -> list[dict]:
+    with engine.connect() as connection:
+        rows = (
+            connection.execute(
+                select(Runs)
+                .where(
+                    Runs.filter_hash == row["filter_hash"],
+                    Runs.id != row["id"],
+                    or_(
+                        Runs.created_at < row["created_at"],
+                        and_(Runs.created_at == row["created_at"], Runs.id < row["id"]),
+                    ),
+                )
+                .order_by(Runs.created_at.desc(), Runs.id.desc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            "id": candidate["id"],
+            "status": candidate["status"],
+            "ran_at": _relative_time(
+                candidate["finished_at"] or candidate["started_at"] or candidate["created_at"]
+            ),
+        }
+        for candidate in rows
+    ]
+
+
 def _previous_same_hash_run(engine: Engine, row) -> int | None:
     with engine.connect() as connection:
         return connection.scalar(
@@ -1071,6 +1102,7 @@ def register_pages(
                 "run_id": run_id,
                 "sentence": _spec_sentence(row["filter_spec"]),
                 "counts": _run_counts(engine, row),
+                "compare_candidates": _previous_same_hash_runs(engine, row),
                 "preview_page_size": PREVIEW_PAGE_SIZE,
                 "clone_root": clone_root,
                 "csrf_token": request.state.csrf_token,

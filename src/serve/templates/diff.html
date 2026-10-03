@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Diff run {{ run_id if run_id is defined and run_id is not none else "not found" }} · gitcrawl{% endblock %}
+{% block title %}Compare search {{ run_id if run_id is defined and run_id is not none else "not found" }} · gitcrawl{% endblock %}
 {% block body %}
 {% if run_id is not defined %}
 <section class="panel" id="diff-not-found">
@@ -10,16 +10,16 @@
 {% else %}
 <section class="panel" id="diff-header" data-run-id="{{ run_id }}"{% if against %} data-against="{{ against }}"{% endif %}>
   <div class="panel-head">
-    <h1>Diff run {{ run_id }}</h1>
-    <a class="button ghost" href="/runs/{{ run_id }}">Back to run</a>
+    <h1>{% if against %}Compare search #{{ against }} with #{{ run_id }}{% else %}Compare search #{{ run_id }}{% endif %}</h1>
+    <a class="button ghost" href="/runs/{{ run_id }}">Back to search</a>
   </div>
   <form id="diff-baseline-form" class="diff-baseline-form" action="/runs/{{ run_id }}/diff" method="get">
     <label class="field" for="diff-baseline">
-      <span class="field-label">Baseline (same filter hash)</span>
+      <span class="field-label">Compare with an earlier search of the same filters</span>
       <select id="diff-baseline" class="field-input" name="against">
-        <option value="" {{ 'selected' if not against }}>— choose a baseline —</option>
+        <option value="" {{ 'selected' if not against }}>— choose an earlier search —</option>
         {% for option in candidates %}
-        <option id="diff-option-{{ option.id }}" value="{{ option.id }}" {{ 'selected' if option.id == against }}>#{{ option.id }} · {{ option.status }} · {{ option.ran_at }} · {{ option.hash_short }}</option>
+        <option id="diff-option-{{ option.id }}" value="{{ option.id }}" {{ 'selected' if option.id == against }}>#{{ option.id }} · {{ status_label(option.status) }} · {{ option.ran_at }}</option>
         {% endfor %}
       </select>
     </label>
@@ -40,12 +40,12 @@
   {% else %}
   <div id="diff-summary" class="summary-grid">
     <div class="card diff-card" data-summary="added">
-      <span class="diff-label">Added</span>
+      <span class="diff-label">New repos</span>
       <strong data-count="added">{{ result["summary"]["added"] }}</strong>
       <p class="muted">Added in viewed #{{ run_id }}, not in baseline #{{ against }}</p>
     </div>
     <div class="card diff-card" data-summary="removed">
-      <span class="diff-label">Removed</span>
+      <span class="diff-label">Gone</span>
       <strong data-count="removed">{{ result["summary"]["removed"] }}</strong>
       <p class="muted">Removed from baseline #{{ against }}, not in viewed #{{ run_id }}</p>
     </div>

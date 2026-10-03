@@ -366,7 +366,7 @@ def test_runs_page_empty_state(client: TestClient):
     html = client.get("/runs").text
 
     assert 'id="runs-empty"' in html
-    assert "No runs" in html
+    assert "No searches yet — start one" in html
     assert 'id="run-history"' in html
 
 
@@ -439,6 +439,22 @@ def test_diff_page_defaults_to_previous_same_hash_run(client: TestClient, clean,
     assert f'id="diff-header" data-run-id="{viewed}" data-against="{baseline}"' in html
     assert f'id="diff-baseline-label" data-run-id="{baseline}"' in html
     assert f'id="diff-baseline-label" data-run-id="{other}"' not in html
+
+
+def test_diff_page_header_and_plain_summary_words(client: TestClient, clean, tmp_path):
+    baseline, viewed, _other = diff_seed(clean, tmp_path)
+
+    html = client.get(f"/runs/{viewed}/diff", params={"against": baseline}).text
+
+    assert f"Compare search #{baseline} with #{viewed}" in html
+    assert ">New repos<" in html
+    assert ">Gone<" in html
+    assert ">Changed<" in html
+    assert ">Added<" not in html
+    assert ">Removed<" not in html
+    assert 'data-count="added">1<' in html
+    assert 'data-count="removed">1<' in html
+    assert 'data-count="changed">1<' in html
 
 
 def test_diff_page_empty_state(client: TestClient, clean, tmp_path):

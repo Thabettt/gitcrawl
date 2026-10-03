@@ -161,9 +161,13 @@ $env:PYTHONPATH = 'src'
 | `/` | Dashboard: health badges, quick find, recent runs |
 | `/find` | Full filter form (Find / Download as JSON / Upload and run / Save filter) |
 | `/runs` | Run history (`?status=`, `?hash=` exact or prefix, `?page=`, 50/page) |
-| `/runs/{id}` | Run detail: status polling, sortable results, flags, export/replay/clone |
-| `/runs/{id}/diff?against={baseline_id}` | Run-to-run diff; baseline defaults to the previous run with the same filter hash |
+| `/runs/{id}` | Run detail: status polling, sortable results, flags, export/replay/clone, compare-with |
+| `/runs/{id}/results` | Full-width result table; every page, sort, and page size lives in the URL (`?page=&per_page=&sort=&dir=`) |
+| `/runs/{id}/diff?against={baseline_id}` | Compare this search with an earlier one; baseline defaults to the previous same-filter run |
+| `/corpora` | Frozen corpora (`/corpora/{id}` detail): name, repos, frozen time, source search |
 | `/filters` | Saved filter library: browsers (Accept `text/html`) get the page, other clients get the JSON API |
+| `/system` | System: Status / Performance / Limits (the human face of `/health`; the header status dot links here) |
+| `/settings` | System → Limits: run caps, request deadline, batching, concurrency |
 | `/health` | DB/Redis/token-present booleans only |
 
 - **No JS**: every read path (dashboard, history, diff, library, run table) is server-rendered, and forms POST normally with the hidden CSRF field; keyboard shortcuts, htmx polling/fragments, and the clone modal are enhancements.

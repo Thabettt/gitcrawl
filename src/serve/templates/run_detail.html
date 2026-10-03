@@ -50,7 +50,21 @@
 {%- if run.status in ('done', 'partial') %}
     <button id="freeze-open" class="button" type="button" data-open="freeze-modal">Freeze as corpus…</button>
 {%- endif %}
+{%- if compare_candidates %}
+    <form id="compare-form" class="inline-form" action="/runs/{{ run.id }}/diff" method="get">
+      <label class="field" for="compare-against">
+        <span class="field-label">Compare with…</span>
+        <select class="field-input" id="compare-against" name="against">
+          {% for option in compare_candidates %}
+          <option value="{{ option.id }}">#{{ option.id }} · {{ status_label(option.status) }} · {{ option.ran_at }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button id="compare-submit" class="button ghost" type="submit">Compare</button>
+    </form>
+{%- else %}
     <a id="compare-with" class="button ghost" href="/runs/{{ run.id }}/diff">Compare with…</a>
+{%- endif %}
     <form id="replay" action="/runs/{{ run.id }}/replay" method="post">
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
       <button class="button primary" type="submit">Search again</button>

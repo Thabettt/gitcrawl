@@ -269,3 +269,20 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Resolution precedence: `GITCRAWL_*` environment variable → persisted row → `RunSettings` default; env-pinned fields render read-only with a "set by environment" badge. Validation bounds plus `max_hydrate ≤ max_candidates`, CSRF enforced, every save writes an `audit_log` row with before/after, and the GitHub token is never stored or rendered.
 - New runs snapshot the settings at submit: `runner_config_from` maps `RunSettings` → `RunnerConfig`; the batching toggle is honored via `fetch_batch(allow_requests=False)`, a fallback-only mode that routes every key through the REST fallback instead of deleting the batching engine; concurrency is passed to `build_deps(max_concurrent=...)`; the request deadline binds from the persisted value.
 - Verification: full suite 1268 tests collected/passed, coverage 95.40% (floor 93); ruff + black clean.
+
+## Console UX redesign Phase 3 (2026-10-03)
+
+- Executed tasks 1–8 (commits `ac7f225`..this one) on `main`: console shell/nav/status dot/error pages, new search page with Common/Advanced split and match check, readable search workspace, full-width results page, run-scoped export, corpora freeze/list/detail, library run-now, and the final Compare-with/empty-state/docs pass.
+- **Naming model**: **Search → Corpus → Detection**. A Search queries GitHub live and freezes its results; a Corpus is a frozen snapshot of a finished Search; Detections will scan a frozen Corpus. Primary nav is `Home · Searches · Corpora · Detections (greyed) · Library · System` plus a status dot linking to System; operator copy never shows raw internal names (statuses, counts, actions from §3.1/§6 of `design/console-ux-redesign.md`).
+- Corpora migration is `0009`; agent detection renumbers to `0010` (settings claimed `0008`).
+- Task 8 copy: run detail lists the previous three same-filter searches in a GET Compare-with form; `diff.html` reads "Compare search #A with #B" with **New repos / Gone / Changed** summaries (tables unchanged); the Searches, Corpora, results-table, and dashboard empty states each state the next action. `docs/environment.md`'s path table gains `/system`, `/runs/{id}/results`, `/corpora`, and `/settings`.
+- Verification: full suite **1355 tests passed**, coverage **95.22%** (floor 93), ruff + black clean; golden snapshots regenerated for `runs_run_id` and `runs_run_id_diff` only; OpenAPI pin unchanged (no new GET route).
+- Key rulings (one line each):
+  - **P1** — every new GET route gets `PATH_PARAMS`/`QUERY` golden coverage and an `openapi.sha256` re-pin after a schema change.
+  - **P3** — one shared `build_health_snapshot` (single-flight probe + 5s cache) feeds `/health`, `/system`, and the header status dot.
+  - **P5** — an invalid partial-table page renders a 400 page with an inline HTML hint instead of a JSON error.
+  - **P6/P16** — export downloads the viewed search and the run-detail and results pages link to that run-scoped route, not the latest run for the hash.
+  - **P7** — corpora brought exact-set test maintenance: the migration/model fixture tables and a seeded golden corpus (`test_models_console` head 0008 → 0009).
+  - **P13** — the system page guards the metrics payload so a Redis/metrics outage renders the page with metrics omitted instead of failing.
+  - **P14** — unavailable `min_loc`/`max_loc` stay on the search form and round-trip through hidden mirrors while still flagging the run incomplete (R44).
+  - **P15** — `describe_spec` states `country match: <tier>` for an explicit `min_geo_confidence`, keeping the gazetteer-city default out of the sentence.

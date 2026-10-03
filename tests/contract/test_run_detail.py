@@ -431,7 +431,7 @@ def test_table_fragment_empty_state(clean: Engine, tmp_path):
 
     assert response.status_code == 200
     assert 'id="run-table-empty"' in response.text
-    assert "No results" in response.text
+    assert "No repos passed your filters" in response.text
     assert 'data-pages="1"' in response.text
 
 
@@ -606,7 +606,7 @@ def test_table_fragment_empty_state_offers_guidance(clean: Engine, tmp_path):
     response = client.get(f"/partials/runs/{run_id}/table")
 
     assert 'id="run-table-empty"' in response.text
-    assert "No results" in response.text
+    assert "No repos passed your filters — try removing the file or country rule" in response.text
     assert 'href="/find"' in response.text
     assert "Start a new search" in response.text
 
@@ -735,3 +735,46 @@ def test_clone_modal_shows_destination_and_tradeoffs(clean, tmp_path, monkeypatc
     assert "latest snapshot only" in body
     assert "no history, smallest disk" in body
     assert "recent history, largest disk" in body
+
+
+def filter_hash_of(engine: Engine, run_id: int) -> str:
+    with engine.connect() as connection:
+        return str(
+            connection.scalar(text("SELECT filter_hash FROM runs WHERE id = :id"), {"id": run_id})
+        )
+
+
+def test_run_detail_compare_form_lists_previous_same_hash_runs(clean: Engine, tmp_path):
+    first = seed_run(clean, tmp_path)
+    second = seed_run(clean, tmp_path)
+    third = seed_run(clean, tmp_path)
+    fourth = seed_run(clean, tmp_path)
+    viewed = seed_run(clean, tmp_path)
+    other = seed_run(clean, tmp_path, spec={"gitcrawl_filter": 1, "q": "language:go"})
+    client = make_client(clean, tmp_path)
+
+    html = client.get(f"/runs/{viewed}").text
+    form = re.search(r'<form id="compare-form".*?</form>', html, re.S).group(0)
+
+    assert f'action="/runs/{viewed}/diff"' in form
+    assert 'method="get"' in form
+    assert 'name="against"' in form
+    options = re.findall(r'<option value="(\d+)"', form)
+    assert options == [str(fourth), str(third), str(second)]
+    assert str(first) not in options
+    assert str(other) not in options
+    assert str(viewed) not in options
+    assert "Compare</button>" in form
+    assert "Finished" in form
+    assert filter_hash_of(clean, viewed)[:8] not in form
+
+
+def test_run_detail_compare_form_needs_no_previous_same_hash_run(clean: Engine, tmp_path):
+    run_id = seed_run(clean, tmp_path)
+    seed_run(clean, tmp_path, spec={"gitcrawl_filter": 1, "q": "language:go"})
+    client = make_client(clean, tmp_path)
+
+    html = client.get(f"/runs/{run_id}").text
+
+    assert f'href="/runs/{run_id}/diff"' in html
+    assert 'id="compare-against"' not in html

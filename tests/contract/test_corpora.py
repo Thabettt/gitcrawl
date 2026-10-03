@@ -240,7 +240,7 @@ def test_corpora_page_lists_name_repos_frozen_source_and_greyed_detect(
 def test_corpora_page_empty_state_offers_a_next_step(clean, tmp_path, monkeypatch):
     body = healthy_client(clean, tmp_path, monkeypatch).get("/corpora").text
     assert 'id="corpora-empty"' in body
-    assert "No corpora yet" in body
+    assert "Freeze a finished search to make a corpus" in body
     assert 'href="/runs"' in body
 
 
