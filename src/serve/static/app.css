@@ -1282,12 +1282,16 @@ a.htmx-request,
   padding: 0.5rem;
 }
 
-.library-actions,
-.history-actions {
+.actions-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
+}
+
+/* the cell must stay a table-cell: flex on a <td> breaks border-collapse */
+.data-table td.actions-cell {
+  white-space: normal;
 }
 
 .library-name {

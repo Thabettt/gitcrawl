@@ -166,6 +166,18 @@ def test_library_page_lists_saved_filters_with_actions(client: TestClient):
     assert 'data-no-run="true"' in html
 
 
+def test_action_cells_keep_table_layout(client: TestClient, clean: Engine, tmp_path):
+    seed_run(clean, tmp_path)
+    client.post("/filters", json={"name": "Layout", "spec": FILTER_A})
+
+    for path in ("/runs", "/filters"):
+        html = client.get(path, headers=HTML).text
+        assert not re.search(
+            r'<td[^>]*class="[^"]*(?:library-actions|history-actions)', html
+        ), path
+        assert '<div class="actions-row">' in html, path
+
+
 def test_library_page_shows_last_run_time(client: TestClient, clean: Engine):
     created = client.post("/filters", json={"name": "Rust Finds", "spec": FILTER_A}).json()
     with clean.begin() as connection:

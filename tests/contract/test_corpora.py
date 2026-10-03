@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 from alembic import command
 from fastapi.testclient import TestClient
@@ -386,3 +388,14 @@ def test_run_detail_offers_freeze_only_when_finished(clean, tmp_path, monkeypatc
         assert f'action="/runs/{run_id}/corpus"' in body
     assert "Freeze as corpus" not in queued
     assert 'id="freeze-modal"' not in queued
+
+
+def test_corpora_action_cells_keep_table_layout(clean, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    freeze(client, run_id, name="layout")
+
+    html = client.get("/corpora").text
+
+    assert not re.search(r'<td[^>]*class="[^"]*(?:library-actions|history-actions)', html)
+    assert '<div class="actions-row">' in html

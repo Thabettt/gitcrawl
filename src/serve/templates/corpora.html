@@ -36,10 +36,12 @@
           <td><a href="/runs/{{ item.source_run_id }}">Search #{{ item.source_run_id }}</a>
             <span class="muted">· {{ item.sentence }}</span></td>
           <td><span class="muted" data-no-detection="true">Not yet</span></td>
-          <td class="library-actions">
-            <a class="button ghost" href="/corpora/{{ item.id }}">Open</a>
-            <button id="corpora-detect-{{ item.id }}" class="button" type="button" disabled
-                    title="Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.">Detect</button>
+          <td class="actions-cell">
+            <div class="actions-row">
+              <a class="button ghost" href="/corpora/{{ item.id }}">Open</a>
+              <button id="corpora-detect-{{ item.id }}" class="button" type="button" disabled
+                      title="Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.">Detect</button>
+            </div>
           </td>
         </tr>
       {% endfor %}

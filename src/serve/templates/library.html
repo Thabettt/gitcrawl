@@ -39,33 +39,35 @@
             <span class="muted" data-no-run="true">never</span>
             {% endif %}
           </td>
-          <td class="library-actions">
-            <form class="inline-form" action="/filters/{{ item.id }}/run" method="post">
-              <input type="hidden" name="csrf" value="{{ csrf_token }}">
-              <button class="button primary" type="submit"
-                      title="Finds matching repos now, saves their details, applies file and country rules, and freezes the results. Uses your GitHub allowance; can take minutes.">Run now</button>
-            </form>
-            <a class="button ghost" href="/find?filter={{ item.id }}"
-               title="Loads this filter into the search form. No GitHub calls.">Open in editor</a>
-            <details class="inline-details">
-              <summary class="button" title="Changes the recipe’s name only.">Rename</summary>
-              <form class="inline-form" action="/filters/{{ item.id }}/rename" method="post">
+          <td class="actions-cell">
+            <div class="actions-row">
+              <form class="inline-form" action="/filters/{{ item.id }}/run" method="post">
                 <input type="hidden" name="csrf" value="{{ csrf_token }}">
-                <label class="sr-only" for="rename-{{ item.id }}">Rename {{ item.name }}</label>
-                <input class="inline-input" type="text" id="rename-{{ item.id }}" name="name" value="{{ item.name }}" aria-label="New name for {{ item.name }}">
-                <button class="button" type="submit">Save name</button>
+                <button class="button primary" type="submit"
+                        title="Finds matching repos now, saves their details, applies file and country rules, and freezes the results. Uses your GitHub allowance; can take minutes.">Run now</button>
               </form>
-            </details>
-            <button class="button danger" type="button" data-open="delete-filter-{{ item.id }}"
-                    data-delete-filter data-name="{{ item.name }}"
-                    aria-label="Delete {{ item.name }}"
-                    title="Removes the recipe only; Searches and Corpora are untouched.">Delete</button>
-            <noscript>
-              <form class="inline-form" action="/filters/{{ item.id }}/delete" method="post">
-                <input type="hidden" name="csrf" value="{{ csrf_token }}">
-                <button class="button danger" type="submit" aria-label="Delete {{ item.name }}">Delete</button>
-              </form>
-            </noscript>
+              <a class="button ghost" href="/find?filter={{ item.id }}"
+                 title="Loads this filter into the search form. No GitHub calls.">Open in editor</a>
+              <details class="inline-details">
+                <summary class="button" title="Changes the recipe’s name only.">Rename</summary>
+                <form class="inline-form" action="/filters/{{ item.id }}/rename" method="post">
+                  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                  <label class="sr-only" for="rename-{{ item.id }}">Rename {{ item.name }}</label>
+                  <input class="inline-input" type="text" id="rename-{{ item.id }}" name="name" value="{{ item.name }}" aria-label="New name for {{ item.name }}">
+                  <button class="button" type="submit">Save name</button>
+                </form>
+              </details>
+              <button class="button danger" type="button" data-open="delete-filter-{{ item.id }}"
+                      data-delete-filter data-name="{{ item.name }}"
+                      aria-label="Delete {{ item.name }}"
+                      title="Removes the recipe only; Searches and Corpora are untouched.">Delete</button>
+              <noscript>
+                <form class="inline-form" action="/filters/{{ item.id }}/delete" method="post">
+                  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                  <button class="button danger" type="submit" aria-label="Delete {{ item.name }}">Delete</button>
+                </form>
+              </noscript>
+            </div>
           </td>
         </tr>
       {% endfor %}
