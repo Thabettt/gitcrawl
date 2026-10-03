@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from serve.settings_spec import SettingsError, parse_settings_form
+from serve.settings_spec import SettingsError, bounds_text, parse_settings_form
 
 
 def form(**overrides: str) -> dict[str, str]:
@@ -57,3 +57,35 @@ def test_pinned_fields_are_ignored():
 
 def test_reset_returns_empty_mapping():
     assert parse_settings_form(form(reset="1")) == {}
+
+
+def test_max_preset_returns_the_upper_bounds():
+    assert parse_settings_form({"preset": "max"}) == {
+        "max_shards": 10_000,
+        "max_candidates": 1_000_000,
+        "max_hydrate": 1_000_000,
+        "max_enrich": 1_000_000,
+        "request_deadline_seconds": 86_400,
+        "graphql_batch_size": 20,
+        "limiter_max_concurrent": 100,
+        "graphql_batch": True,
+    }
+
+
+def test_max_preset_respects_pinned_fields():
+    parsed = parse_settings_form(
+        {"preset": "max"}, pinned=frozenset({"max_shards", "graphql_batch"})
+    )
+    assert "max_shards" not in parsed
+    assert "graphql_batch" not in parsed
+    assert parsed["max_candidates"] == 1_000_000
+
+
+def test_bounds_text_lists_every_bounded_field():
+    text = bounds_text()
+    assert text["max_shards"] == "1–10,000"
+    assert text["max_candidates"] == "1–1,000,000"
+    assert text["request_deadline_seconds"] == "60–86,400"
+    assert text["graphql_batch_size"] == "1–20"
+    assert text["limiter_max_concurrent"] == "1–100"
+    assert "graphql_batch" not in text

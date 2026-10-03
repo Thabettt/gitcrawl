@@ -262,6 +262,74 @@ def test_pinned_candidates_conflict_with_submitted_hydrate_is_rejected(
     assert audits == 0
 
 
+def test_settings_page_shows_every_allowed_range(clean, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    body = client.get("/settings").text
+    for needle in ("1–10,000", "1–1,000,000", "60–86,400", "1–20", "1–100"):
+        assert needle in body
+
+
+def test_set_to_maximum_limits_saves_the_bounds(clean, tmp_path, monkeypatch):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    token = csrf_token(client)
+    response = client.post(
+        "/settings",
+        data={"preset": "max"},
+        headers={"x-csrf-token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert load_run_settings(clean) == RunSettings(
+        max_shards=10_000,
+        max_candidates=1_000_000,
+        max_hydrate=1_000_000,
+        max_enrich=1_000_000,
+        request_deadline_seconds=86_400,
+        graphql_batch=True,
+        graphql_batch_size=20,
+        limiter_max_concurrent=100,
+    )
+    with clean.connect() as connection:
+        params = connection.scalar(
+            text(
+                "SELECT params FROM audit_log "
+                "WHERE token_fp = 'settings' ORDER BY id DESC LIMIT 1"
+            )
+        )
+    assert params["app_settings"]["after"]["max_shards"] == 10_000
+
+
+def test_max_preset_respects_pinned_fields(clean, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_MAX_SHARDS", "3")
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    token = csrf_token(client)
+    response = client.post(
+        "/settings",
+        data={"preset": "max"},
+        headers={"x-csrf-token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with clean.connect() as connection:
+        stored = connection.scalar(text("SELECT max_shards FROM app_settings WHERE id = 1"))
+    assert stored == 10
+    assert load_run_settings(clean).max_shards == 3
+
+
+def test_max_preset_with_pinned_candidates_conflict_is_rejected(clean, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_MAX_CANDIDATES", "100")
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    token = csrf_token(client)
+    response = client.post(
+        "/settings",
+        data={"preset": "max"},
+        headers={"x-csrf-token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert "max_hydrate" in response.text
+
+
 def test_reset_with_pinned_candidates_conflict_is_rejected(clean, tmp_path, monkeypatch):
     monkeypatch.setenv("GITCRAWL_MAX_CANDIDATES", "100")
     client = healthy_client(clean, tmp_path, monkeypatch)

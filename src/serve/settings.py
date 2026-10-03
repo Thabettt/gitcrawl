@@ -10,7 +10,7 @@ from sqlalchemy.engine import Engine
 from lib.audit import query_hash
 from lib.gh_client import load_tokens
 from serve import errors, pages
-from serve.settings_spec import SettingsError, parse_settings_form
+from serve.settings_spec import SettingsError, bounds_text, parse_settings_form
 from store.models import AuditLog
 from store.settings import (
     RunSettings,
@@ -59,6 +59,7 @@ def _render(
         {
             "values": effective.as_dict(),
             "defaults": _DEFAULTS.as_dict(),
+            "ranges": bounds_text(),
             "pinned": env_pinned_fields(),
             "token_present": bool(token_present()),
             "errors": list(errors),

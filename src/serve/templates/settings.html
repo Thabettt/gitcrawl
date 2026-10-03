@@ -29,7 +29,8 @@
           <span class="field-label">Search breadth (slices)</span>
           <input class="field-input" type="number" name="max_shards" value="{{ values["max_shards"] }}"
                  {% if "max_shards" in pinned %}readonly{% endif %}>
-          <span class="muted">How many slices a live search may be split into. Broader = longer.</span>
+          <span class="muted">How many slices a live search may be split into. Broader = longer.
+            Allowed: {{ ranges["max_shards"] }}.</span>
           {% if "max_shards" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
         <label class="field">
@@ -37,7 +38,8 @@
           <input class="field-input" type="number" name="max_candidates"
                  value="{{ values["max_candidates"] }}"
                  {% if "max_candidates" in pinned %}readonly{% endif %}>
-          <span class="muted">How many matching repos the search holds on to.</span>
+          <span class="muted">How many matching repos the search holds on to.
+            Allowed: {{ ranges["max_candidates"] }}.</span>
           {% if "max_candidates" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
         <label class="field">
@@ -45,14 +47,15 @@
           <input class="field-input" type="number" name="max_hydrate" value="{{ values["max_hydrate"] }}"
                  {% if "max_hydrate" in pinned %}readonly{% endif %}>
           <span class="muted">How many of those get current details fetched (uses your allowance).
-            Cannot exceed “Repos to keep”.</span>
+            Cannot exceed “Repos to keep”. Allowed: {{ ranges["max_hydrate"] }}.</span>
           {% if "max_hydrate" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
         <label class="field">
           <span class="field-label">Extra rules to check</span>
           <input class="field-input" type="number" name="max_enrich" value="{{ values["max_enrich"] }}"
                  {% if "max_enrich" in pinned %}readonly{% endif %}>
-          <span class="muted">How many repos get file and country checks.</span>
+          <span class="muted">How many repos get file and country checks.
+            Allowed: {{ ranges["max_enrich"] }}.</span>
           {% if "max_enrich" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
         <label class="field">
@@ -60,7 +63,8 @@
           <input class="field-input" type="number" name="request_deadline_seconds"
                  value="{{ values["request_deadline_seconds"] }}"
                  {% if "request_deadline_seconds" in pinned %}readonly{% endif %}>
-          <span class="muted">Long searches abort past this; raise it for corpus builds.</span>
+          <span class="muted">Long searches abort past this; raise it for corpus builds.
+            Allowed: {{ ranges["request_deadline_seconds"] }} seconds.</span>
           {% if "request_deadline_seconds" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
       </div>
@@ -81,7 +85,8 @@
           <input class="field-input" type="number" name="graphql_batch_size"
                  value="{{ values["graphql_batch_size"] }}"
                  {% if "graphql_batch_size" in pinned %}readonly{% endif %}>
-          <span class="muted">Keep at 20 or below; GitHub cuts off large batches.</span>
+          <span class="muted">Keep at 20 or below; GitHub cuts off large batches.
+            Allowed: {{ ranges["graphql_batch_size"] }}.</span>
           {% if "graphql_batch_size" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
       </div>
@@ -94,16 +99,19 @@
           <input class="field-input" type="number" name="limiter_max_concurrent"
                  value="{{ values["limiter_max_concurrent"] }}"
                  {% if "limiter_max_concurrent" in pinned %}readonly{% endif %}>
-          <span class="muted">How many requests run at once.
-            Keep well under GitHub’s ceiling of 100.</span>
+          <span class="muted">How many requests run at once. Keep well under GitHub’s ceiling of 100;
+            that ceiling is the allowed maximum, not a target. Allowed: {{ ranges["limiter_max_concurrent"] }}.</span>
           {% if "limiter_max_concurrent" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
       </div>
     </section>
     <div class="form-actions">
       <button class="button primary" type="submit">Save</button>
+      <button class="button" type="submit" name="preset" value="max">Set to maximum limits</button>
       <button class="button" type="submit" name="reset" value="1">Reset to defaults</button>
     </div>
+    <p class="muted" id="limits-max-note">Set to maximum limits uses the largest allowed value for
+      every field; environment-pinned fields are left unchanged.</p>
   </form>
 </section>
 {% endblock %}

@@ -12,6 +12,15 @@ _BOUNDS: dict[str, tuple[int, int]] = {
     "limiter_max_concurrent": (1, 100),
 }
 
+_MAX_VALUES: dict[str, object] = {
+    **{name: high for name, (_low, high) in _BOUNDS.items()},
+    "graphql_batch": True,
+}
+
+
+def bounds_text() -> dict[str, str]:
+    return {name: f"{low:,}–{high:,}" for name, (low, high) in _BOUNDS.items()}
+
 
 class SettingsError(ValueError):
     def __init__(self, errors, hints=()):
@@ -25,6 +34,8 @@ def parse_settings_form(
 ) -> dict[str, object]:
     if form.get("reset") == "1":
         return {}
+    if form.get("preset") == "max":
+        return {name: value for name, value in _MAX_VALUES.items() if name not in pinned}
     errors: list[str] = []
     values: dict[str, object] = {}
     for field, (low, high) in _BOUNDS.items():
