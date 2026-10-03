@@ -24,7 +24,6 @@ DASHBOARD_IDS = (
     'id="health-db"',
     'id="health-redis"',
     'id="health-token"',
-    'id="quick-find"',
     'id="recent-runs"',
 )
 

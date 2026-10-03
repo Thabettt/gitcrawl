@@ -17,7 +17,7 @@ from serve.pages import CSRF_COOKIE
 FILTER_A = {"gitcrawl_filter": 1, "q": "language:rust"}
 FILTER_B = {"gitcrawl_filter": 1, "q": "language:go"}
 HTML = {"Accept": "text/html"}
-SHORTCUTS = ("slash", "g-h", "g-f", "g-r", "g-l", "j", "k", "enter", "escape", "question")
+SHORTCUTS = ("g-h", "g-f", "g-r", "g-l", "j", "k", "enter", "escape", "question")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -558,7 +558,6 @@ def test_form_controls_have_labels_or_aria_labels(client: TestClient):
     runs = client.get("/runs").text
     library = client.get("/filters", headers=HTML).text
 
-    assert 'for="quick-find-q"' in dashboard
     assert 'for="field-keywords"' in find
     assert 'for="field-name"' in find
     assert 'for="run-filter-status"' in runs
@@ -617,7 +616,6 @@ def test_shortcuts_modal_and_theme_toggle_markup(client: TestClient):
     for marker in (
         "shortcuts-modal",
         "row-selected",
-        "quick-find-q",
         "keydown",
         "applib.isEditableTarget",
     ):

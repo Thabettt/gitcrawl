@@ -84,7 +84,7 @@
   <p><a href="/runs">All searches</a></p>
 </section>
 <span id="table-loading" class="htmx-indicator muted" role="status">Loading results…</span>
-<div id="run-table">{% include "partials/table.html" %}</div>
+<div id="run-table" class="table-scroll sticky-head">{% include "partials/table.html" %}</div>
 <p id="view-all-results"><a class="button" href="/runs/{{ run.id }}/results">View all results →</a></p>
 {% include "partials/clone_modal.html" %}
 {%- if run.status in ('done', 'partial') %}

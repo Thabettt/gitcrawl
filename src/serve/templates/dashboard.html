@@ -22,16 +22,6 @@
 </section>
 <section class="panel">
   <div class="panel-head">
-    <h2>Quick find</h2>
-  </div>
-  <form id="quick-find" class="quick-find" action="/find" method="get">
-    <label class="sr-only" for="quick-find-q">Search query</label>
-    <input id="quick-find-q" name="q" type="search" placeholder="language:rust min_stars:50" autocomplete="off">
-    <button class="button primary" type="submit">Find</button>
-  </form>
-</section>
-<section class="panel">
-  <div class="panel-head">
     <h2>Recent runs</h2>
   </div>
   <div class="table-wrap">
@@ -69,7 +59,7 @@
   {% if not runs and not runs_error %}
   <div id="empty-state" class="empty-state">
     <p>Nothing yet — start your first search</p>
-    <p class="muted">Quick find is directly above, or open the <a href="/find">full search form</a> to choose filters.</p>
+    <p class="muted">Open the <a href="/find">full search form</a> to choose filters.</p>
     <p class="empty-actions">
       <a class="button ghost" href="/find?keywords=language:rust">Example: language:rust</a>
       <a class="button ghost" href="/find?keywords=stars%3A%3E500">Example: stars:&gt;500</a>

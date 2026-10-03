@@ -277,14 +277,6 @@
       pendingTimer = window.setTimeout(clearPendingG, 1200);
       return;
     }
-    if (event.key === "/") {
-      var search = document.getElementById("quick-find-q");
-      if (search) {
-        event.preventDefault();
-        search.focus();
-      }
-      return;
-    }
     if (event.key === "j") {
       event.preventDefault();
       selectRow(1);

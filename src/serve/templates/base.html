@@ -37,9 +37,9 @@
     <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Home</a>
     <a href="/runs"{% if path.startswith("/runs") %} aria-current="page"{% endif %}>Searches</a>
     <a href="/corpora"{% if path.startswith("/corpora") %} aria-current="page"{% endif %}>Corpora</a>
-    <span class="muted" title="Coming soon">Detections</span>
     <a href="/filters"{% if path.startswith("/filters") %} aria-current="page"{% endif %}>Library</a>
     <a href="/system"{% if path in ("/system", "/settings") %} aria-current="page"{% endif %}>System</a>
+    <span class="nav-soon" aria-disabled="true" title="coming soon..">Detections</span>
   </nav>
   <a class="status-link" href="/system" aria-label="System status"><span hx-get="/partials/status-dot" hx-trigger="load, every 30s" hx-swap="outerHTML"></span></a>
   <button id="shortcuts-open" class="button ghost" type="button" data-open="shortcuts-modal" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>

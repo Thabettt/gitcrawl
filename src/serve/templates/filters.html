@@ -80,7 +80,7 @@
     <aside class="summary-rail" id="find-summary" aria-label="Search summary">
       <div class="summary-rail-block">
         <span class="field-label">Your search</span>
-        <p id="spec-sentence">{{ spec_sentence or "Everything" }}</p>
+        <p id="spec-sentence" class="spec-sentence">{{ spec_sentence or "Everything" }}</p>
       </div>
       <div class="summary-rail-block">
         <button class="button" type="button" id="check-matches" hx-get="/partials/find/matches" hx-include="closest form" hx-target="#match-result" hx-swap="innerHTML">Check matches</button>
@@ -103,6 +103,19 @@
         </div>
       </div>
     </aside>
+    <details class="filter-section" id="filter-controls">
+      <summary>Use a filter file</summary>
+      <div class="field-grid">
+        <label class="field" for="field-spec-file">
+          <span class="field-label">Filter file (JSON)</span>
+          <input class="field-input" type="file" id="field-spec-file" name="spec_file" accept="application/json">
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="button" type="submit" name="action" value="upload">Upload and run</button>
+        <p class="muted">Runs the uploaded filter file. Uses your GitHub allowance.</p>
+      </div>
+    </details>
     <section class="filter-section" id="filter-common">
       <h2>Common</h2>
       <p class="muted">These limit which repos match. GitHub evaluates the first part; extra rules run after fetching.</p>
@@ -252,19 +265,6 @@
           {{ number_field("max_pages", "Max pages") }}
         </div>
       </section>
-    </details>
-    <details class="filter-section" id="filter-controls">
-      <summary>Use a filter file</summary>
-      <div class="field-grid">
-        <label class="field" for="field-spec-file">
-          <span class="field-label">Filter file (JSON)</span>
-          <input class="field-input" type="file" id="field-spec-file" name="spec_file" accept="application/json">
-        </label>
-      </div>
-      <div class="form-actions">
-        <button class="button" type="submit" name="action" value="upload">Upload and run</button>
-        <p class="muted">Runs the uploaded filter file. Uses your GitHub allowance.</p>
-      </div>
     </details>
   </form>
 </section>
