@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ corpus.name if corpus else "Corpus not found" }} · gitcrawl{% endblock %}
+{% block body %}
+{% if not corpus %}
+<section class="panel" id="corpus-not-found">
+  <h1>Corpus not found</h1>
+  <p class="muted">No corpus with this id exists in the database.</p>
+  <p><a href="/corpora">All corpora</a></p>
+</section>
+{% else %}
+<section class="panel" id="corpus-header" data-corpus-id="{{ corpus.id }}">
+  <div class="panel-head">
+    <h1>{{ corpus.name }}</h1>
+    <p class="muted">Frozen {{ corpus.frozen_at }}. These details are exactly what we saw at that
+      moment; later changes on GitHub do not alter this corpus.</p>
+  </div>
+  {% if corpus.note %}<p id="corpus-note">{{ corpus.note }}</p>{% endif %}
+  <p class="muted" id="corpus-source">From search <a href="/runs/{{ corpus.source_run_id }}">#{{ corpus.source_run_id }}</a>
+    · {{ corpus.sentence }} · {{ corpus.repo_count }} repos</p>
+</section>
+<section class="panel" id="corpus-actions">
+  <div class="form-actions">
+    <a id="corpus-export-json" class="button" href="/runs/{{ corpus.source_run_id }}/export?format=json">Export JSON</a>
+    <a id="corpus-export-csv" class="button" href="/runs/{{ corpus.source_run_id }}/export?format=csv">Export CSV</a>
+    <a id="corpus-view-all" class="button" href="/runs/{{ corpus.source_run_id }}/results">View all results</a>
+    <button id="corpus-detect" class="button" type="button" disabled
+            title="Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.">Detect agent use</button>
+    <form id="corpus-delete" action="/corpora/{{ corpus.id }}/delete" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <button class="button danger" type="submit">Delete corpus</button>
+    </form>
+  </div>
+  <p class="muted" id="corpus-detect-note">Detect agent use scans the frozen corpus through GitHub’s
+    API on its own allowance and stores evidence per repo. Coming soon.</p>
+  <p class="muted">Export downloads the frozen result list as JSON or CSV. Deleting a corpus never affects its source search — the search and its results stay exactly as they are.</p>
+  <p><a href="/corpora">All corpora</a></p>
+</section>
+<section class="panel" id="corpus-preview">
+  <div class="panel-head">
+    <h2>Preview</h2>
+    <p class="muted">The first {{ preview_page_size }} repos in this corpus.</p>
+  </div>
+  {% with compact = true, table_hx = false, table_url = "/runs/" ~ corpus.source_run_id ~ "/results" %}
+  {% include "partials/results_table.html" %}
+  {% endwith %}
+</section>
+{% endif %}
+{% endblock %}

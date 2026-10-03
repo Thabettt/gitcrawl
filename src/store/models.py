@@ -216,6 +216,19 @@ class RunItem(Base):
     virtuals: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
 
 
+class Corpus(Base):
+    __tablename__ = "corpora"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    source_run_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("runs.id"), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    repo_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    frozen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class SavedFilter(Base):
     __tablename__ = "saved_filters"
 

@@ -97,6 +97,7 @@ CleanDbFactory = Callable[..., Engine]
 
 FULL_TRUNCATE_TABLES = (
     "app_settings",
+    "corpora",
     "run_items",
     "runs",
     "saved_filters",

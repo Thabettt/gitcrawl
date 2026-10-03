@@ -21,6 +21,7 @@ TABLES = {
     "run_items",
     "saved_filters",
     "app_settings",
+    "corpora",
 }
 
 EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
@@ -136,6 +137,14 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "limiter_max_concurrent": False,
         "updated_at": False,
     },
+    "corpora": {
+        "id": False,
+        "name": False,
+        "source_run_id": False,
+        "note": True,
+        "repo_count": False,
+        "frozen_at": False,
+    },
 }
 
 EXPECTED_INDEXES = {
@@ -198,6 +207,7 @@ def test_primary_keys(migrated: Engine):
         "geo_cache": ["normalized"],
         "shards": ["id"],
         "audit_log": ["id"],
+        "corpora": ["id"],
     }
     for table, columns in expected.items():
         assert inspector.get_pk_constraint(table)["constrained_columns"] == columns
@@ -247,6 +257,23 @@ def test_audit_log_types(migrated: Engine):
     assert audit["ts"]["type"].timezone is True
 
 
+def test_corpora_types_and_constraints(migrated: Engine):
+    corpora = _columns(migrated, "corpora")
+    assert isinstance(corpora["id"]["type"], BigInteger)
+    assert "nextval" in (corpora["id"]["default"] or "")
+    assert isinstance(corpora["source_run_id"]["type"], BigInteger)
+    assert isinstance(corpora["repo_count"]["type"], Integer)
+    assert isinstance(corpora["frozen_at"]["type"], postgresql.TIMESTAMP)
+    assert corpora["frozen_at"]["type"].timezone is True
+    inspector = inspect(migrated)
+    assert inspector.get_pk_constraint("corpora")["constrained_columns"] == ["id"]
+    foreign_keys = inspector.get_foreign_keys("corpora")
+    assert foreign_keys[0]["referred_table"] == "runs"
+    assert foreign_keys[0]["constrained_columns"] == ["source_run_id"]
+    unique = {tuple(item["column_names"]) for item in inspector.get_unique_constraints("corpora")}
+    assert ("name",) in unique
+
+
 def test_server_defaults(migrated: Engine):
     expected = {
         ("repos", "topics"): "'{}'",
@@ -263,6 +290,7 @@ def test_server_defaults(migrated: Engine):
         ("shards", "incomplete"): "false",
         ("shards", "updated_at"): "now()",
         ("audit_log", "ts"): "now()",
+        ("corpora", "frozen_at"): "now()",
     }
     for (table, column), fragment in expected.items():
         assert fragment in (_columns(migrated, table)[column]["default"] or "")

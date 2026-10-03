@@ -47,6 +47,9 @@
     <a id="export-json" class="button" href="/runs/{{ run.id }}/export?format=json">Export JSON</a>
     <a id="export-csv" class="button" href="/runs/{{ run.id }}/export?format=csv">Export CSV</a>
     <button id="clone-open" class="button" type="button" data-open="clone-modal">Clone code…</button>
+{%- if run.status in ('done', 'partial') %}
+    <button id="freeze-open" class="button" type="button" data-open="freeze-modal">Freeze as corpus…</button>
+{%- endif %}
     <a id="compare-with" class="button ghost" href="/runs/{{ run.id }}/diff">Compare with…</a>
     <form id="replay" action="/runs/{{ run.id }}/replay" method="post">
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
@@ -61,12 +64,43 @@
   </div>
   <p id="detect-agent-use-note" class="muted">Detect agent use scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo. Coming soon.</p>
   <p class="muted">Export downloads the frozen result list as JSON or CSV. Clone copies repo contents to this machine — no GitHub API calls; uses disk and time. Search again starts a new search with the same filter; the old results stay frozen.</p>
+{%- if run.status in ('done', 'partial') %}
+  <p class="muted">Freeze as corpus records the exact repos and details as of now. No GitHub calls; does not copy code.</p>
+{%- endif %}
   <p><a href="/runs">All searches</a></p>
 </section>
 <span id="table-loading" class="htmx-indicator muted" role="status">Loading results…</span>
 <div id="run-table">{% include "partials/table.html" %}</div>
 <p id="view-all-results"><a class="button" href="/runs/{{ run.id }}/results">View all results →</a></p>
 {% include "partials/clone_modal.html" %}
+{%- if run.status in ('done', 'partial') %}
+<div id="freeze-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="freeze-modal-title" data-run-id="{{ run.id }}">
+  <div class="modal-panel">
+    <div class="panel-head">
+      <h2 id="freeze-modal-title">Freeze as corpus…</h2>
+      <button id="freeze-close" class="button ghost" type="button" data-close="freeze-modal" aria-label="Close freeze dialog">Close</button>
+    </div>
+    <p id="freeze-explanation" class="muted">Records the exact repos and details as of now. No GitHub calls; does not copy code.</p>
+    <p id="freeze-count" class="muted">{{ run.item_count }} repos will be included.</p>
+    <form id="freeze-form" action="/runs/{{ run.id }}/corpus" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <label class="field" for="freeze-name">
+        <span class="field-label">Corpus name</span>
+        <input class="field-input" id="freeze-name" name="name" type="text" required
+               value="{{ sentence }}{% if run.finished_at and run.finished_at != '—' %} — {{ run.finished_at[:10] }}{% endif %}">
+      </label>
+      <label class="field" for="freeze-note">
+        <span class="field-label">Note (optional)</span>
+        <input class="field-input" id="freeze-note" name="note" type="text">
+      </label>
+      <div class="form-actions">
+        <button id="freeze-submit" class="button primary" type="submit">Freeze corpus</button>
+        <button class="button" type="button" data-close="freeze-modal">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{%- endif %}
 <section class="panel" id="clone-progress-panel">
   <div class="panel-head">
     <h2>Clone progress</h2>

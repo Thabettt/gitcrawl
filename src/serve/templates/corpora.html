@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Corpora · gitcrawl{% endblock %}
+{% block body %}
+<section class="panel" id="corpora-header">
+  <div class="panel-head">
+    <h1>Corpora</h1>
+    <p class="muted">A corpus is a frozen snapshot of a finished search: the exact repos and details
+      as of the freeze. Freezing makes no GitHub calls and does not copy code.</p>
+  </div>
+  {% if error %}
+  <div id="corpora-error" class="empty-state error-state" role="alert">
+    <p>{{ error }}</p>
+    {% for hint in hints %}
+    <p class="muted">{{ hint }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="table-wrap">
+    <table id="corpora-table" class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Repos</th>
+          <th scope="col">Frozen</th>
+          <th scope="col">From search</th>
+          <th scope="col">Last detection</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="corpora-body">
+      {% for item in corpora %}
+        <tr id="corpus-{{ item.id }}" data-corpus-id="{{ item.id }}">
+          <td>{{ item.name }}</td>
+          <td>{{ item.repo_count }}</td>
+          <td>{{ item.frozen_at }}</td>
+          <td><a href="/runs/{{ item.source_run_id }}">Search #{{ item.source_run_id }}</a>
+            <span class="muted">· {{ item.sentence }}</span></td>
+          <td><span class="muted" data-no-detection="true">Not yet</span></td>
+          <td class="library-actions">
+            <a class="button ghost" href="/corpora/{{ item.id }}">Open</a>
+            <button id="corpora-detect-{{ item.id }}" class="button" type="button" disabled
+                    title="Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.">Detect</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not corpora and not error %}
+  <div id="corpora-empty" class="empty-state">
+    <p>No corpora yet</p>
+    <p class="muted">A corpus is a frozen snapshot of a finished search. Open a finished search and
+      choose Freeze as corpus…</p>
+    <p class="empty-actions"><a class="button ghost" href="/runs">Browse searches</a></p>
+  </div>
+  {% endif %}
+  <p class="muted" id="corpora-detect-note">Detect agent use scans the frozen corpus through
+    GitHub’s API on its own allowance and stores evidence per repo. Coming soon.</p>
+</section>
+{% endblock %}

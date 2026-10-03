@@ -43,7 +43,7 @@ CLONE_DESTINATION = re.compile(
 FILTER_SPEC_JSON = '{"gitcrawl_filter": 1, "q": "language:rust", "sort": "stars", "order": "desc"}'
 
 GOLDEN_SEED_SQL = (
-    "TRUNCATE TABLE app_settings, run_items, runs, saved_filters, audit_log, shards, "
+    "TRUNCATE TABLE app_settings, corpora, run_items, runs, saved_filters, audit_log, shards, "
     "geo_cache, owners, repos, full_name_history RESTART IDENTITY CASCADE",
     "INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
     """
@@ -105,11 +105,17 @@ GOLDEN_SEED_SQL = (
     INSERT INTO audit_log (id, ts, params, status, token_fp, latency_ms)
     VALUES (941, '2026-01-02T00:00:02Z', '{}'::jsonb, 200, 'golden', 12)
     """,
+    """
+    INSERT INTO corpora (id, name, source_run_id, note, repo_count, frozen_at)
+    VALUES (951, 'rust thesis frame', 931, 'thesis frame', 3, '2026-01-02T00:06:00Z')
+    """,
 )
 
 PATH_PARAMS = {
     "/settings": {},
     "/system": {},
+    "/corpora": {},
+    "/corpora/{corpus_id}": {"corpus_id": 951},
     "/partials/status-dot": {},
     "/vsearch/runs/{filter_hash}": {"filter_hash": FILTER_HASH},
     "/vsearch/runs/{filter_hash}/export": {"filter_hash": FILTER_HASH},

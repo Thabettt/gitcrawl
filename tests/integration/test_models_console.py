@@ -23,6 +23,7 @@ ALL_TABLES = {
     "run_items",
     "saved_filters",
     "app_settings",
+    "corpora",
 }
 
 RUN_COLUMNS: dict[str, bool] = {
@@ -68,6 +69,15 @@ SAVED_FILTER_COLUMNS: dict[str, bool] = {
     "updated_at": False,
 }
 
+CORPUS_COLUMNS: dict[str, bool] = {
+    "id": False,
+    "name": False,
+    "source_run_id": False,
+    "note": True,
+    "repo_count": False,
+    "frozen_at": False,
+}
+
 
 @pytest.fixture(scope="module", autouse=True)
 def migrated(alembic_config, alembic_engine: Engine) -> Engine:
@@ -93,7 +103,7 @@ def _indexdefs(engine: Engine) -> dict[str, str]:
 
 
 def test_single_alembic_head(alembic_config):
-    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0008"]
+    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0009"]
 
 
 def test_metadata_declares_exactly_the_expected_tables():
@@ -106,6 +116,7 @@ def test_metadata_declares_exactly_the_expected_tables():
         ("runs", RUN_COLUMNS),
         ("run_items", RUN_ITEM_COLUMNS),
         ("saved_filters", SAVED_FILTER_COLUMNS),
+        ("corpora", CORPUS_COLUMNS),
     ],
 )
 def test_console_columns_match_schema(migrated: Engine, table: str, expected: dict[str, bool]):
@@ -164,6 +175,23 @@ def test_saved_filters_unique_name_and_types(migrated: Engine):
         tuple(item["column_names"])
         for item in inspect(migrated).get_unique_constraints("saved_filters")
     }
+    assert ("name",) in unique
+
+
+def test_corpora_foreign_key_unique_name_and_types(migrated: Engine):
+    columns = _columns(migrated, "corpora")
+    assert isinstance(columns["id"]["type"], BigInteger)
+    assert "nextval" in (columns["id"]["default"] or "")
+    assert isinstance(columns["repo_count"]["type"], Integer)
+    assert isinstance(columns["frozen_at"]["type"], postgresql.TIMESTAMP)
+    assert columns["frozen_at"]["type"].timezone is True
+    assert "now()" in (columns["frozen_at"]["default"] or "")
+    inspector = inspect(migrated)
+    assert inspector.get_pk_constraint("corpora")["constrained_columns"] == ["id"]
+    foreign_keys = inspector.get_foreign_keys("corpora")
+    assert foreign_keys[0]["referred_table"] == "runs"
+    assert foreign_keys[0]["constrained_columns"] == ["source_run_id"]
+    unique = {tuple(item["column_names"]) for item in inspector.get_unique_constraints("corpora")}
     assert ("name",) in unique
 
 
@@ -235,5 +263,6 @@ def test_console_migration_round_trip(alembic_config, alembic_engine: Engine):
     command.downgrade(alembic_config, "0002")
     tables = set(inspect(alembic_engine).get_table_names())
     assert not (CONSOLE_TABLES & tables)
+    assert "corpora" not in tables
     command.upgrade(alembic_config, "head")
     assert CONSOLE_TABLES <= set(inspect(alembic_engine).get_table_names())

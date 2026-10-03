@@ -26,6 +26,7 @@ from discover.search_shards import RequestFailed
 from lib.deadlines import DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve import errors, pages
+from serve.corpora import register_corpora
 from serve.diff import diff_runs
 from serve.executor import (
     RunExecutor,
@@ -972,6 +973,8 @@ def create_app(
         health_snapshot=health_snapshot,
         metrics_redis=metrics_redis_client,
     )
+
+    register_corpora(application, engine_factory=engine_for)
 
     return application
 
