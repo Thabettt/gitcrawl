@@ -281,7 +281,7 @@ def test_run_page_reports_updated_unchanged_and_skipped(clean: Engine, tmp_path)
     html = client.get(f"/runs/{run_id}").text
 
     assert 'data-count="updated">Saved <strong>2</strong>' in html
-    assert 'data-count="unchanged">Passed filters <strong>3</strong>' in html
+    assert 'data-count="unchanged">Unchanged <strong>3</strong>' in html
     assert 'data-count="skipped">Unavailable <strong>4</strong>' in html
 
 

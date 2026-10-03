@@ -52,7 +52,7 @@
           <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
           <td class="mono">{{ run.hash_short }}</td>
           <td><span class="pill {{ run.status }}">{{ status_label(run.status) }}</span></td>
-          <td>{{ run.total_count if run.total_count is not none else '—' }} / {{ run.inserted }}</td>
+          <td>{{ run.fetched if run.fetched is not none else '—' }} / {{ run.inserted }}</td>
           <td>{{ run.duration }}</td>
           <td>{{ run.ran_at }}</td>
         </tr>

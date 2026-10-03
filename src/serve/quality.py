@@ -23,6 +23,12 @@ SENTENCES: dict[str, str] = {
     "bundle": "Export bundle readable",
     "field_coverage": "All enriched fields have data",
 }
+WARN_SENTENCES: dict[str, str] = {
+    "count_parity": "Result counts don't match what was stored",
+    "duplicate_full_names": "Duplicate repository names found",
+    "bundle": "Export bundle missing or unreadable",
+    "field_coverage": "Some enriched fields have no data",
+}
 
 
 @dataclass(frozen=True)
@@ -34,7 +40,8 @@ class Check:
 
 
 def sentence_for(check: Check) -> str:
-    template = SENTENCES.get(check.name)
+    source = SENTENCES if check.status == "ok" else WARN_SENTENCES
+    template = source.get(check.name) or SENTENCES.get(check.name)
     if template is None:
         return "Data check"
     if "{percent}" in template:

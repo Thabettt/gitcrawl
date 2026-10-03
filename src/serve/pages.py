@@ -269,6 +269,7 @@ def _run_summary(row) -> dict:
         "hash_short": row["filter_hash"][:8],
         "status": row["status"],
         "total_count": row["total_count"],
+        "fetched": row["fetched"],
         "inserted": row["inserted"],
         "duration": _duration(row["started_at"], row["finished_at"]),
         "ran_at": _relative_time(row["finished_at"] or row["started_at"] or row["created_at"]),
@@ -581,6 +582,15 @@ def _int_or_zero(value: object) -> int:
         return 0
 
 
+def _stored_count(engine: Engine, run_id: int) -> int:
+    with engine.connect() as connection:
+        count = connection.scalar(
+            text("SELECT count(*) FROM run_items WHERE run_id = :run_id"),
+            {"run_id": run_id},
+        )
+    return int(count or 0)
+
+
 def _dockerfile_count(engine: Engine, run_id: int) -> int:
     with engine.connect() as connection:
         count = connection.scalar(
@@ -608,7 +618,7 @@ def _run_counts(engine: Engine, row) -> dict[str, dict]:
         "passed": {
             "label": "Passed filters",
             "explain": "Also met your file and country rules.",
-            "value": _int_or_zero(row["unchanged"]),
+            "value": _stored_count(engine, row["id"]),
         },
     }
     if _virtual_filters(row["filter_spec"]).get("has_dockerfile"):

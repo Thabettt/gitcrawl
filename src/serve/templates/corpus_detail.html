@@ -25,10 +25,14 @@
     <a id="corpus-view-all" class="button" href="/runs/{{ corpus.source_run_id }}/results">View all results</a>
     <button id="corpus-detect" class="button" type="button" disabled
             title="Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.">Detect agent use</button>
-    <form id="corpus-delete" action="/corpora/{{ corpus.id }}/delete" method="post">
-      <input type="hidden" name="csrf" value="{{ csrf_token }}">
-      <button class="button danger" type="submit">Delete corpus</button>
-    </form>
+    <button id="corpus-delete-open" class="button danger" type="button"
+            data-open="corpus-delete-modal">Delete corpus</button>
+    <noscript>
+      <form id="corpus-delete" action="/corpora/{{ corpus.id }}/delete" method="post">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <button class="button danger" type="submit">Delete corpus</button>
+      </form>
+    </noscript>
   </div>
   <p class="muted" id="corpus-detect-note">Detect agent use scans the frozen corpus through GitHub’s
     API on its own allowance and stores evidence per repo. Coming soon.</p>
@@ -44,5 +48,23 @@
   {% include "partials/results_table.html" %}
   {% endwith %}
 </section>
+<div id="corpus-delete-modal" class="modal" role="dialog" aria-modal="true"
+     aria-labelledby="corpus-delete-modal-title" hidden>
+  <div class="modal-panel">
+    <div class="panel-head">
+      <h2 id="corpus-delete-modal-title">Delete “{{ corpus.name }}”?</h2>
+      <button class="button ghost" type="button" data-close="corpus-delete-modal"
+              aria-label="Keep {{ corpus.name }}">Close</button>
+    </div>
+    <p>Deleting a corpus never affects its source search — the search and its results stay exactly as they are.</p>
+    <form action="/corpora/{{ corpus.id }}/delete" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <div class="form-actions">
+        <button class="button danger" type="submit">Delete corpus</button>
+        <button class="button" type="button" data-close="corpus-delete-modal">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endif %}
 {% endblock %}
