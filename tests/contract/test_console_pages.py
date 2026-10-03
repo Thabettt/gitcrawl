@@ -172,9 +172,7 @@ def test_action_cells_keep_table_layout(client: TestClient, clean: Engine, tmp_p
 
     for path in ("/runs", "/filters"):
         html = client.get(path, headers=HTML).text
-        assert not re.search(
-            r'<td[^>]*class="[^"]*(?:library-actions|history-actions)', html
-        ), path
+        assert not re.search(r'<td[^>]*class="[^"]*(?:library-actions|history-actions)', html), path
         assert '<div class="actions-row">' in html, path
 
 
