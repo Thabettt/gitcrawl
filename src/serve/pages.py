@@ -373,17 +373,39 @@ def _previous_same_hash_run(engine: Engine, row) -> int | None:
         )
 
 
-def _last_run_times(engine: Engine, hashes: list[str]) -> dict[str, str]:
+def _last_runs(engine: Engine, hashes: list[str]) -> dict[str, dict]:
     unique = [value for value in dict.fromkeys(hashes) if value]
     if not unique:
         return {}
+    ranked = (
+        select(
+            Runs.id,
+            Runs.filter_hash,
+            Runs.created_at,
+            Runs.total_count,
+            Runs.fetched,
+            func.row_number()
+            .over(
+                partition_by=Runs.filter_hash,
+                order_by=(Runs.created_at.desc(), Runs.id.desc()),
+            )
+            .label("run_rank"),
+        )
+        .where(Runs.filter_hash.in_(unique))
+        .subquery()
+    )
     with engine.connect() as connection:
-        rows = connection.execute(
-            select(Runs.filter_hash, func.max(Runs.created_at))
-            .where(Runs.filter_hash.in_(unique))
-            .group_by(Runs.filter_hash)
-        ).all()
-    return {row[0]: _relative_time(row[1]) for row in rows}
+        rows = connection.execute(select(ranked).where(ranked.c.run_rank == 1)).mappings()
+        return {
+            row["filter_hash"]: {
+                "id": row["id"],
+                "ran_at": _relative_time(row["created_at"]),
+                "count": _int_or_zero(
+                    row["total_count"] if row["total_count"] is not None else row["fetched"]
+                ),
+            }
+            for row in rows
+        }
 
 
 def render_library(
@@ -397,7 +419,7 @@ def render_library(
     library_error = error
     try:
         views = list_filters(engine)
-        last_runs = _last_run_times(engine, [view.filter_hash for view in views])
+        last_runs = _last_runs(engine, [view.filter_hash for view in views])
     except Exception:
         views = []
         last_runs = {}
@@ -407,6 +429,7 @@ def render_library(
         {
             "id": view.id,
             "name": view.name,
+            "sentence": _spec_sentence(view.filter_spec),
             "filter_hash": view.filter_hash,
             "hash_short": view.filter_hash[:8],
             "created_at": _relative_time(view.created_at),

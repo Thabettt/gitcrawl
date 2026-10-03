@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Filters · gitcrawl{% endblock %}
+{% block title %}Library · gitcrawl{% endblock %}
 {% block body %}
 <section class="panel">
   <div class="panel-head">
-    <h1>Saved filters</h1>
-    <a class="button primary" href="/find">Find &amp; save</a>
+    <h1>Library</h1>
+    <a class="button primary" href="/find">New search</a>
   </div>
-  <p class="muted">One-click load into the find form, rename inline, or delete a saved filter.</p>
+  <p class="muted" id="library-framing">A saved filter is the recipe for a search. Running it again searches GitHub live; frozen results stay with each Search.</p>
   {% if error %}
   <div id="library-error" class="empty-state error-state" role="alert">
     <p>{{ error }}</p>
@@ -20,43 +20,65 @@
       <thead>
         <tr>
           <th scope="col">Name</th>
-          <th scope="col">Hash</th>
-          <th scope="col">Created</th>
-          <th scope="col">Last run</th>
+          <th scope="col">Filter in plain words</th>
+          <th scope="col">Last used</th>
           <th scope="col">Actions</th>
         </tr>
       </thead>
       <tbody id="library-body">
       {% for item in filters %}
         <tr id="saved-filter-{{ item.id }}" data-filter-id="{{ item.id }}" data-filter-hash="{{ item.filter_hash }}">
-          <td>{{ item.name }}</td>
-          <td class="mono"><span title="{{ item.filter_hash }}">{{ item.hash_short }}</span></td>
-          <td>{{ item.created_at }}</td>
           <td>
-            {% if item.last_run %}<span data-last-run="true">{{ item.last_run }}</span>{% else %}<span class="muted" data-no-run="true">never</span>{% endif %}
+            <span class="library-name" title="{{ item.filter_hash }}">{{ item.name }}</span>
+          </td>
+          <td class="library-sentence">{{ item.sentence }}</td>
+          <td class="library-last-used">
+            {% if item.last_run %}
+            <span data-last-run="true"><a href="/runs/{{ item.last_run.id }}">{{ item.last_run.ran_at }}</a> · {{ item.last_run.count }} repo{% if item.last_run.count != 1 %}s{% endif %}</span>
+            {% else %}
+            <span class="muted" data-no-run="true">never</span>
+            {% endif %}
           </td>
           <td class="library-actions">
-            <a class="button ghost" href="/find?filter={{ item.id }}">Load</a>
-            <form class="inline-form" action="/filters/{{ item.id }}/rename" method="post">
+            <form class="inline-form" action="/filters/{{ item.id }}/run" method="post">
               <input type="hidden" name="csrf" value="{{ csrf_token }}">
-              <label class="sr-only" for="rename-{{ item.id }}">Rename {{ item.name }}</label>
-              <input class="inline-input" type="text" id="rename-{{ item.id }}" name="name" value="{{ item.name }}" aria-label="New name for {{ item.name }}">
-              <button class="button" type="submit" aria-label="Rename {{ item.name }}">Rename</button>
+              <button class="button primary" type="submit"
+                      title="Finds matching repos now, saves their details, applies file and country rules, and freezes the results. Uses your GitHub allowance; can take minutes.">Run now</button>
             </form>
-            <form class="inline-form" action="/filters/{{ item.id }}/delete" method="post" data-delete-filter data-name="{{ item.name }}">
-              <input type="hidden" name="csrf" value="{{ csrf_token }}">
-              <button class="button danger" type="submit" aria-label="Delete {{ item.name }}">Delete</button>
-            </form>
+            <a class="button ghost" href="/find?filter={{ item.id }}"
+               title="Loads this filter into the search form. No GitHub calls.">Open in editor</a>
+            <details class="inline-details">
+              <summary class="button" title="Changes the recipe’s name only.">Rename</summary>
+              <form class="inline-form" action="/filters/{{ item.id }}/rename" method="post">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                <label class="sr-only" for="rename-{{ item.id }}">Rename {{ item.name }}</label>
+                <input class="inline-input" type="text" id="rename-{{ item.id }}" name="name" value="{{ item.name }}" aria-label="New name for {{ item.name }}">
+                <button class="button" type="submit">Save name</button>
+              </form>
+            </details>
+            <button class="button danger" type="button" data-open="delete-filter-{{ item.id }}"
+                    data-delete-filter data-name="{{ item.name }}"
+                    aria-label="Delete {{ item.name }}"
+                    title="Removes the recipe only; Searches and Corpora are untouched.">Delete</button>
+            <noscript>
+              <form class="inline-form" action="/filters/{{ item.id }}/delete" method="post">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                <button class="button danger" type="submit" aria-label="Delete {{ item.name }}">Delete</button>
+              </form>
+            </noscript>
           </td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if filters %}
+  <p class="muted" id="library-action-help">Run now finds matching repos now, saves their details, applies file and country rules, and freezes the results. Uses your GitHub allowance; can take minutes. Open in editor loads the filter into the search form with no GitHub calls. Rename changes the recipe’s name only. Delete removes the recipe only; Searches and Corpora are untouched.</p>
+  {% endif %}
   {% if not filters and not error %}
   <div id="library-empty" class="empty-state">
     <p>No saved filters</p>
-    <p class="muted">Build a query on the <a href="/find">Find</a> page and use Save filter to keep it here.</p>
+    <p class="muted">A saved filter is the recipe for a search. Build one on the <a href="/find">New search</a> page and use Save to library to keep it here.</p>
     <p class="empty-actions">
       <a class="button ghost" href="/find?keywords=language%3Apython">Example: language:python</a>
       <a class="button ghost" href="/find?keywords=stars%3A%3E500">Example: stars:&gt;500</a>
@@ -64,4 +86,24 @@
   </div>
   {% endif %}
 </section>
+{% for item in filters %}
+<div id="delete-filter-{{ item.id }}" class="modal" role="dialog" aria-modal="true"
+     aria-labelledby="delete-filter-{{ item.id }}-title" hidden>
+  <div class="modal-panel">
+    <div class="panel-head">
+      <h2 id="delete-filter-{{ item.id }}-title">Delete “{{ item.name }}”?</h2>
+      <button class="button ghost" type="button" data-close="delete-filter-{{ item.id }}"
+              aria-label="Keep {{ item.name }}">Close</button>
+    </div>
+    <p>This removes the recipe only; Searches and Corpora are untouched.</p>
+    <form action="/filters/{{ item.id }}/delete" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <div class="form-actions">
+        <button class="button danger" type="submit">Delete recipe</button>
+        <button class="button" type="button" data-close="delete-filter-{{ item.id }}">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endfor %}
 {% endblock %}

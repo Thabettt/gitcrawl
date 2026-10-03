@@ -48,6 +48,7 @@ from serve.library import (
     LibraryError,
     create_filter,
     delete_filter,
+    get_filter,
     list_filters,
     rename_filter,
 )
@@ -747,6 +748,42 @@ def create_app(
         except LibraryError as exc:
             return _library_error_response(exc)
         return Response(status_code=204)
+
+    @application.post("/filters/{filter_id}/run")
+    async def run_saved_filter(request: Request, filter_id: int):
+        if not await validate_csrf(request):
+            return errors.csrf_error_page(request)
+        engine = engine_for()
+        try:
+            view = await run_in_threadpool(get_filter, engine, filter_id)
+        except LibraryError as exc:
+            return await run_in_threadpool(
+                render_library,
+                request,
+                engine,
+                error=exc.message,
+                hints=exc.hints,
+                status_code=_LIBRARY_STATUS.get(exc.code, 400),
+            )
+        except FilterSpecError as exc:
+            return await run_in_threadpool(
+                render_library,
+                request,
+                engine,
+                error=exc.errors[0] if exc.errors else "the saved filter is no longer valid",
+                hints=exc.hints,
+                status_code=400,
+            )
+        spec = parse_filter_spec(view.filter_spec)
+        try:
+            runner = await run_in_threadpool(runner_for)
+        except Exception:
+            return JSONResponse(status_code=500, content={"error": "internal_error"})
+        run_id = await run_in_threadpool(
+            create_run, engine, spec_to_dict(spec), api_version=API_VERSION
+        )
+        executor_for().submit(run_id, runner=runner)
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @application.get("/api/runs/{run_id}/diff")
     def diff_route(run_id: int, against: str | None = None):
