@@ -1,6 +1,6 @@
 # Console Spec (US4) — gitcrawl Operator Console
 
-**Status**: Approved-for-overnight v1 (scope approved in conversation 2026-10-01; written review deferred per operator's overnight instruction). **UX flow revised 2026-10-02** — see `console-ux-redesign.md`; this spec remains authoritative for the backend and route contract. Parents: `spec.md` (Frozen v2), `tasks.md` (T019–T037, T051), `contracts/search-api.md`, `data-model.md`. Plan of record: `console-plan.md`.
+**Status**: Implemented (2026-10-01→03; outcomes in `../docs/development-log.md`). Approved-for-overnight v1; **UX flow revised 2026-10-02** — see `console-ux-redesign.md`. This spec remains authoritative for the backend and route contract; later phases (corpora, settings, system/metrics, quality) extended the route table — those rows are marked below, and the implementation is the final authority. Parents: `spec.md` (Frozen v3), `tasks.md` (T019–T037, T051), `contracts/search-api.md`, `data-model.md`. Plan of record: `console-plan.md`.
 
 ## Goal
 
@@ -48,6 +48,9 @@ CREATE TABLE run_items (
 );
 CREATE INDEX run_items_repo_idx ON run_items (repo_id);
 CREATE INDEX run_items_stars_idx ON run_items (run_id, stargazers DESC);
+-- Amendment (migration 0004, ruling R55): `repo_id` became NULLABLE with
+-- ON DELETE SET NULL and a surrogate `id` was added, so a run snapshot
+-- survives a repo purge; unique (run_id, repo_id) is retained.
 
 CREATE TABLE saved_filters (
   id            BIGSERIAL PRIMARY KEY,
@@ -88,6 +91,13 @@ CREATE TABLE saved_filters (
 | GET | `/partials/runs/{id}/table?sort=&dir=&page=` | htmx results table fragment |
 | GET | `/runs/{id}/clone-estimate?limit=&mode=` | disk estimate preview (R54) |
 | POST | `/runs/{id}/clone` / GET `/partials/runs/{id}/clone-progress` | clone start / progress (R54) |
+| GET | `/runs/{id}/results?page=&per_page=&sort=&dir=` | full-width results page (added post-v1) |
+| GET | `/runs/{id}/quality` + `/partials/runs/{id}/quality` | data-quality report JSON / htmx fragment (added post-v1) |
+| GET | `/corpora`, `/corpora/{id}`; POST `/runs/{id}/corpus`; POST `/corpora/{id}/delete` | frozen corpora (added post-v1) |
+| GET/POST | `/settings` | run limits; env-pinned fields read-only (added post-v1) |
+| GET | `/system`, `/partials/status-dot` | status/performance/limits page + header dot (added post-v1) |
+| GET | `/metrics`, `/api/metrics`, `/partials/metrics` | SLO dashboard / JSON / fragment (added post-v1) |
+| POST | `/filters/{id}/run`, `/filters/{id}/rename` | run / rename a saved filter (added post-v1) |
 
 ## UX requirements
 
@@ -114,7 +124,7 @@ CREATE TABLE saved_filters (
 - Minimal CSRF protection on POSTs (double-submit token cookie + hidden field).
 - Secrets never rendered; `/health` shows only present/absent.
 - Start: `.venv\Scripts\python.exe -m uvicorn serve.app:app --host 127.0.0.1 --port 8000` from a shell with `PYTHONPATH=src`, plus a `src/serve/__main__.py` convenience (`PYTHONPATH=src .venv\Scripts\python.exe -m serve`).
-- htmx, Tailwind CSS output, and the small JS file are **vendored locally** (`src/serve/static/`), committed; no CDN at runtime.
+- htmx and the hand-rolled `app.css`/`app.js` are **vendored locally** (`src/serve/static/`), committed; no CDN, no Node/Tailwind build at runtime (R46).
 
 ## Testing
 

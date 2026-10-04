@@ -1,13 +1,15 @@
 # Contract: `GET /vsearch/repos` (gitcrawl serve API)
 
-**Date**: 2026-09-29. Upstream: `GET /search/repositories` (allowlist enforced — unknown params never forwarded). Versioned with `X-GitHub-Api-Version` pinned server-side. Narrative version of this contract: `../how-the-data-flows.md` (Stages 0–1, 8–9).
+**Date**: 2026-09-29 (updated 2026-10-04). Upstream: `GET /search/repositories` (allowlist enforced — unknown params never forwarded). Versioned with `X-GitHub-Api-Version` pinned server-side. Narrative version of this contract: `../how-the-data-flows.md` (Stages 0–1, 8–9).
+
+**The one-paragraph version**: this is the promise gitcrawl makes to anyone calling its serve API. You may send the upstream search parameters plus gitcrawl's own "virtual" filters; anything unknown is rejected locally with a helpful `400` instead of being forwarded to GitHub (where it would be silently ignored). Responses look like GitHub's shape — `total_count` + `items[]` — but the counts are exact, each owner carries a country with a confidence tier, and any incompleteness is labeled. The rest of this file is the precise table of what's accepted, what it translates to, and what comes back.
 
 ## Request
 
 ```
 GET /vsearch/repos?q={query}&sort={sort}&order={order}&per_page={n}&page={n}
   &min_stars={n}&team_topic={topic}&has_dockerfile={bool}&owner_country={ISO2}
-  [&<future-virtual>=...]
+  &min_geo_confidence={tier}&min_commits={n}&max_commits={n}&min_loc={n}&max_loc={n}
 ```
 
 | Param | Type | Rules |
@@ -17,10 +19,13 @@ GET /vsearch/repos?q={query}&sort={sort}&order={order}&per_page={n}&page={n}
 | `order` | enum, optional | `desc` (default)/`asc`; ignored without `sort` (mirrors upstream) |
 | `per_page` | int, optional | 1–100, default 20 (serve-side; upstream always fetched at 100 then sliced) |
 | `page` | int, optional | ≥1, default 1 (serve-side over stored rows; unbounded by upstream 1000-cap) |
-| `min_stars` | int, optional | Virtual → appends `stars:>=N` to upstream discovery; post-filters stored `stargazers` |
-| `team_topic` | string, optional | Virtual → appends `topic:{value}` upstream + post-filter |
+| `min_stars` | int ≥ 0, optional | Virtual → appends `stars:>=N` to upstream discovery; post-filters stored `stargazers` |
+| `team_topic` | topic slug, optional | Virtual → appends `topic:{value}` upstream + post-filter |
 | `has_dockerfile` | bool, optional | Virtual → post-filter via stored trees/metafiles (`true` = Dockerfile present at default branch) |
-| `owner_country` | ISO-3166-1 alpha-2, optional | Virtual → post-filter on stored `owners.country_iso`; optional `&min_geo_confidence=` threshold (default: gazetteer and above) |
+| `owner_country` | ISO-3166-1 alpha-2, optional | Virtual → post-filter on stored `owners.country_iso`; implies `min_geo_confidence` default (gazetteer and above) |
+| `min_geo_confidence` | enum: `exact-iso` \| `name` \| `gazetteer-city` \| `geocoder` \| `weak`, optional (default `gazetteer-city`) | Confidence floor for `owner_country` |
+| `min_commits` / `max_commits` | int ≥ 0, optional | Virtual → post-filter on hydrated default-branch commit count |
+| `min_loc` / `max_loc` | int ≥ 0, optional | **Accepted and recorded, not yet enforced** — using them flags the run incomplete (R44). A no-clone estimate tier is designed in `../loc-dilemma.md`; until it ships, the UI renders these fields disabled |
 | future virtuals | — | Added only with translation rule + tests here; upstream allowlist NEVER extended ad hoc |
 
 ## Response `200`
@@ -67,6 +72,9 @@ Envelope mirrors upstream shape (`total_count` + `items[]`) but counts are exact
 | `team_topic=T` | `topic:T` appended | `T IN topics` |
 | `has_dockerfile=true/false` | none (broad discovery) | trees/metafiles presence flag |
 | `owner_country=CC` | none (broad discovery) | `owners.country_iso = CC` (+ confidence ≥ threshold) |
+| `min_geo_confidence=T` | none | confidence rank ≥ `T` |
+| `min_commits=N` / `max_commits=N` | none | default-branch commit count compared |
+| `min_loc=N` / `max_loc=N` | none | recorded only (enforcement pending `../loc-dilemma.md`) |
 
 ## Invariants
 
@@ -78,8 +86,8 @@ Envelope mirrors upstream shape (`total_count` + `items[]`) but counts are exact
 
 Picking filters has two doors into the same pipeline — both converge on one validated filter-spec before anything runs:
 
-- **UI form (primary): `GET /vsearch/`** — a server-rendered filter page enumerating every parameter from the `06` matrix, grouped: keywords + `in:` scope; owner (`user:`/`org:`/`repo:`); counts (`stars/forks/size/followers/topics` with comparator + range widgets); dates (`created`/`pushed` with presets + custom ranges); meta (`language` datalist, `topic:`, `license`); flags (`fork/archived/mirror/template/visibility/sponsorable/funding-file/issue-label counts`); `props.*` (enabled only when a single `org:` is set, per the single-org rule); sort/order/page; and the virtual section (`min_stars`, `team_topic`, `has_dockerfile`, `min_commits`, `min_loc`, `owner_country` + confidence threshold). Submitting builds the identical filter-spec the JSON path produces and runs it. No separate frontend project — one template, laptop-native.
-- **JSON upload (optional): `POST /vsearch/run`** — for replication across devices, in the JSON format below. Same validation, same run, same bundle; the form even offers "download these filters as JSON" so any UI search becomes a shareable file.
+- **UI form (primary): `GET /vsearch/`** — a server-rendered filter page enumerating every parameter from the `06` matrix, grouped: keywords + `in:` scope; owner (`user:`/`org:`/`repo:`); counts (`stars/forks/size/followers/topics` with comparator + range widgets); dates (`created`/`pushed` with presets + custom ranges); meta (`language` datalist, `topic:`, `license`); flags (`fork/archived/mirror/template/visibility/sponsorable/funding-file/issue-label counts`); `props.*` (enabled only when a single `org:` is set, per the single-org rule); sort/order/page; and the virtual section (`min_stars`, `team_topic`, `has_dockerfile`, `min_commits`/`max_commits`, `owner_country` + confidence threshold, and the disabled `min_loc`/`max_loc` pair). Submitting builds the identical filter-spec the JSON path produces and runs it. No separate frontend project — one template, laptop-native.
+- **JSON upload (optional): `POST /vsearch/run`** — for replication across devices, in the JSON format below. Same validation, same run, same bundle; the form even offers "download these filters as JSON" so any UI search becomes a shareable file. The endpoint takes the document as a **JSON body**; the browser's file-upload door is the `/find` page.
 
 ### Filter-spec v1 JSON (the upload format)
 
@@ -95,7 +103,7 @@ No built-in preset pack in v1. Instead, any search is fully described by a versi
 }
 ```
 
-- `POST /vsearch/run` accepts the doc (body or file upload), validates against the allowlist + virtual table (typos → `400` with hints, never forwarded), executes, and returns `{filter_hash, ran_at, api_version, total_count, incomplete, items}`.
+- `POST /vsearch/run` accepts the doc (JSON body), validates against the allowlist + virtual table (typos → `400` with hints, never forwarded), executes, and returns `{filter_hash, ran_at, api_version, total_count, incomplete, items}`.
 - `GET /vsearch/runs/{filter_hash}` replays the identical query on any device (tokens stay per-device; results merge by immutable `id`, dedupe-safe).
 - Honest replication: GitHub is live, so reruns may drift (stars move, repos vanish). Every run records `{filter_hash, ran_at, api_version, total_count, incomplete_flags}`; the doc may pin `"as_of"` for audit diffing. Byte-identical reproduction comes from the exported run bundle (filters + metadata + raw upstream JSON), which doubles as the thesis replication-package artifact.
 - `GET /vsearch/runs/{filter_hash}/export` downloads the run bundle (raw JSON + CSV).
@@ -104,8 +112,9 @@ No built-in preset pack in v1. Instead, any search is fully described by a versi
 
 Fetching never clones. After results display, a **Clone** control offers a slider + numeric input for how many of the found repos to clone (default: top-N by current sort; options: shallow `--depth 1`, `--no-checkout` file-only, or windowed-log mode). A disk estimate previews before confirming (per-repo `size_kb` sum × depth factor).
 
-- `GET /vsearch/runs/{filter_hash}/clone-estimate?limit=N&mode=shallow` → `{repos, estimated_mb, warnings[]}` (warns on laptop disk < threshold).
-- `POST /vsearch/runs/{filter_hash}/clone` with `{limit, mode, paths}` → clones into `clones/{run_hash}/{owner}__{repo}/`, resumable (completed repos skipped on retry), progress per repo in run metadata. Zero clones is always valid — the button is never required.
+> **Route note (R54)**: the canonical clone routes are run-scoped — `GET /runs/{id}/clone-estimate?limit=N&mode=shallow` and `POST /runs/{id}/clone` — not the earlier filter-hash variant. The console links to them from the run page; zero clones is always valid.
+
+- `POST /runs/{id}/clone` with `{limit, mode}` → clones into `clones/{filter_hash}/{run_id}/{owner}__{repo}/`, resumable (completed repos skipped on retry), progress per repo in run metadata.
 - UI: slider (1 … result count) synced with a digit input; mode radio; estimate readout; progress bar per batch.
 
 ### Corpus-frame config (filter-spec extension, FR-022)
@@ -125,7 +134,7 @@ Fetching never clones. After results display, a **Clone** control offers a slide
 }
 ```
 
-`buckets` declares old/new sampling frames; `attrition: "count"` records private/deleted/dotfiles drops instead of hiding them; `size_splits` tags every repo; `study_window` bounds commit history; `star_floor` is optional (Dabic frame). All fields optional; all recorded verbatim in the run bundle for cross-stack comparison.
+`buckets` declares old/new sampling frames; `attrition: "count"` records private/deleted/dotfiles drops instead of hiding them; `size_splits` tags every repo; `study_window` bounds commit history; `star_floor` is optional (Dabic frame). All fields optional; all recorded verbatim in the run bundle for cross-stack comparison. Frame config is accepted and recorded now; the downstream thesis tracks that consume it are parked (see `../tasks.md` Phase 6).
 
 ## Console routes (US4)
 

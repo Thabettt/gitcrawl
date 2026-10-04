@@ -1,20 +1,28 @@
 # Quickstart: Golden-Org Validation Runbook
 
-**Date**: 2026-09-29. Proves US1–US3 on fixtures/small scope before scaling tokens. Collect every output as review evidence. New? Read `how-the-data-flows.md` first — each step below maps to its stages.
+**Date**: 2026-09-29 (updated 2026-10-04). Proves US1–US3 on fixtures/small scope before scaling tokens. Collect every output as review evidence. New? Read `how-the-data-flows.md` first — each step below maps to its stages.
+
+**The one-paragraph version**: this runbook is how you convince yourself the system works before spending real API allowance. It walks the four layers in order — discovery completeness on a known org, lifecycle on fixtures, enrichment/serve/geo on fixtures, and the throttle classifier — and names the evidence to record at each step. If all four pass, you can scale tokens and shards with a clear conscience.
+
+> **Note (2026-10-04)**: the original Step 0 walked a stdlib-only skeleton (`src/skeleton.py`). That file was retired under ruling R58 (dead code is a trap; the real loop replaced it). The current equivalent is: start the console, run a small Find, and check the bundle on disk — or simply run the golden-org test in Step 1, which exercises the same loop with assertions.
 
 ## Prerequisites
 
-- Python 3.12+, Docker (Postgres 17 + Redis 7 via `docker-compose up -d`; SQLite suffices for T000 skeleton/laptop), owned PAT(s) via env (fine-grained, `metadata:read` baseline; no extra scopes for public), `X-GitHub-Api-Version: 2022-11-28` pinned. Pool: 1 PAT dev/golden-org, 5–10 for 100k+ runs.
+- Python 3.12+, Docker (Postgres 17 + Redis 7 via `docker-compose up -d`). PostgreSQL is the only supported store — the old SQLite skeleton/laptop path was retired with the skeleton. A project-local PG cluster works too (see `../docs/environment.md`).
+- Owned PAT(s) via env (fine-grained, `metadata:read` baseline; no extra scopes for public). `X-GitHub-Api-Version: 2022-11-28` pinned. Pool: 1 PAT dev/golden-org, 5–10 for 100k+ runs.
 - `export GITHUB_TOKEN=<owned-PAT>` (or `GITHUB_TOKENS=a,b,c` for pool; never commit, never hardcode, never log raw; token fingerprint only in audit).
-- Legal pre-checks done (`docs/legal-gates.md`): token owned/consented, `curl https://github.com/robots.txt` recorded (API-only; no HTML fallback if `/search` disallowed).
+- Legal pre-checks done (`../docs/legal-gates.md`): token owned/consented, `curl https://github.com/robots.txt` recorded (API-only; no HTML fallback if `/search` disallowed).
 
-## Step 0 — Walking skeleton (locked first milestone, ~1 day)
+## Step 0 — First live run (replaces the retired skeleton, ~5 min)
 
 ```bash
-python src/skeleton.py  # one hardcoded filter → live search → display → bundle JSON + CSV
-# Expected: printed results + runs/{hash}/bundle.json + corpus.csv on disk, zero new concepts.
-# Do this before Step 1; everything below layers depth onto this loop.
+# start the console (Postgres + Redis up, DATABASE_URL and GITHUB_TOKEN set)
+PYTHONPATH=src python -m serve
+# then open http://127.0.0.1:8000/ , run a small Find (e.g. language:rust stars:>100),
+# and confirm runs/<filter_hash>/<run_id>/bundle.json + corpus.csv exist when it finishes.
 ```
+
+Expected: the dashboard loads, `/health` shows database/Redis/token present, a Find reaches a terminal status, and the bundle appears on disk. This is the same loop the original skeleton proved, now with the real pipeline.
 
 ## Step 1 — US1: golden-org discovery parity (15 min)
 
@@ -67,13 +75,14 @@ pytest tests/unit/test_classifier.py tests/contract/test_github_pagination.py -v
 
 ## Done criteria
 
-All four steps green + audit_log shows per-request fields (FR-010) + SLO query returns `incomplete_results_ratio`, `422/403+429` rates, geo-unmatched rate. Paste outputs into the review; then scale tokens/shards per plan.md Scale/Scope.
+All four steps green + audit_log shows per-request fields (FR-010) + SLO query returns `incomplete_results_ratio`, `422/403+429` rates, geo-unmatched rate. Paste outputs into the review; then scale tokens/shards per `plan.md` Scale/Scope.
 
 ## Step 5 — Thesis tracks smoke (fixtures only, ~10 min) — DEFERRED (see tasks.md Phase 6)
 
 ```bash
 pytest tests/unit/test_trace_packs.py -v
-# Expected: PASS — frozen pack validates (generic AGENTS.md down-weighted, CONVENTIONS.md excluded),
-# per-agent attribution correct on trace fixtures.
+# Expected (when the track ships): frozen pack validates (generic AGENTS.md down-weighted,
+# CONVENTIONS.md excluded), per-agent attribution correct on trace fixtures.
 ```
-Evidence: frozen pack version recorded; corpus-frame config (`buckets`, `attrition: count`, `size_splits`, `study_window`) validates and round-trips through `POST /vsearch/run`. Full history/PR/inventory/crates/snowball/validation tracks (T040–T045) exercise against fixtures next, not in this smoke pass.
+
+Evidence: frozen pack version recorded; corpus-frame config (`buckets`, `attrition: count`, `size_splits`, `study_window`) validates and round-trips through `POST /vsearch/run`. The full history/PR/inventory/crates/snowball/validation tracks (T040–T045) are parked; they exercise against fixtures when the thesis work resumes, not in this smoke pass.

@@ -1,12 +1,12 @@
 # 01 — GitHub Search Repositories API: Supported Parameters (Canonical Reference)
 
-> Start here after `00-overview.md`. Companion: `02` (how to use these well), `06` (every attribute, searchable or not).
-> Background: gitcrawl lives or dies on knowing exactly what `GET /search/repositories` accepts — the API has only 5 top-level params and packs all filtering into one `q` string with a closed qualifier set, silently ignoring typos as plain text (`200`, not `422`).
-> Goal: give the one table you can trust — every top-level param, every `q` qualifier, headers, limits/errors with per-claim doc links — so later files can build sharding, validation, and workarounds on solid ground.
+**Read this after `00-overview.md`.** Companions: `02` (how to use these well), `06` (every attribute, searchable or not).
 
-> Research date: 2026-09-29 (all sources accessed 2026-09-29 unless noted)
-> Endpoint: `GET /search/repositories`
-> Sources:
+**The one-paragraph version**: this is the file you trust when you need to know exactly what `GET /search/repositories` accepts. The API is small on purpose — five top-level parameters, one query string that carries every filter, and a closed list of qualifiers. The dangerous part is how it handles mistakes: a typo'd qualifier is not an error, it quietly becomes a search word, and you get a `200 OK` full of wrong results. Everything downstream (sharding, validation, workarounds) stands on the tables below, so each claim carries its documentation link.
+
+> **Research date**: 2026-09-29 (all sources accessed 2026-09-29 unless noted)
+> **Endpoint**: `GET /search/repositories`
+> **Sources:**
 > - REST Search reference + query construction + 1000-cap + 4000-scan + timeouts + 422 rules + text-match: https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28 (accessed 2026-09-29)
 > - Repository qualifiers incl. `props.*` single-org rule: https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories (accessed 2026-09-29)
 > - Search syntax (ranges, dates, exclusion, NOT, quotes, @me, AND/OR/NOT ≤5): https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax (accessed 2026-09-29)
@@ -20,7 +20,9 @@
 > - Auth (PAT/OAuth/GitHub App/`GITHUB_TOKEN` buckets; 401→403 escalation): https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api?apiVersion=2026-03-10 (accessed 2026-09-29)
 > - Troubleshooting REST (`422 Invalid request` / `Validation Failed` codes): https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api (accessed 2026-09-29)
 
-## 1. Top-level query parameters
+## 1. Top-level query parameters — five, and only five
+
+Every knob GitHub gives you for repository search is in this table. If you want anything else (a custom filter, an extra option), it has to be handled by *you*, after the response — see `03`.
 
 | Param | Required | Type | Allowed / Default |
 |-------|----------|------|-------------------|
@@ -33,6 +35,8 @@
 No `advanced_search` / `search_type` — those are `/search/issues`-only.
 
 ## 2. `q` qualifiers (full list)
+
+This is the closed set. Anything not listed here — a made-up qualifier, a typo like `updated:` — is not rejected; it becomes a plain-text search term and silently changes nothing about the filtering. That single behavior is why validation matters more here than in a typical API.
 
 Format: `SEARCH_KEYWORD_1 SEARCH_KEYWORD_N QUALIFIER_1 QUALIFIER_N`. Space/`+` = implicit `AND`.
 
@@ -55,6 +59,8 @@ q=org:github is:public mirror:false template:false
 
 ## 3. Headers
 
+Three headers cover almost everything. `Accept` picks the response flavor; `Authorization` unlocks higher limits (and is required for private data); the version header pins behavior so a future API change can't surprise you.
+
 ```http
 Accept: application/vnd.github+json
 Authorization: Bearer <TOKEN>
@@ -67,6 +73,8 @@ X-GitHub-Api-Version: 2022-11-28
 
 ## 4. Limits & errors (with sources, all accessed 2026-09-29)
 
+Three ceilings define how you must crawl, and each failure mode has a different correct response. Read this section as the "physics" of the API.
+
 - Max 100/page, max 1000 total per logical query; max 4000 repos scanned per query ("The REST API will find up to 4,000 repositories that match your filters" — https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28); `incomplete_results:true` on timeout ("Reaching a timeout does not necessarily mean results are incomplete" — same page).
 - `q` >256 chars (excl. operators/qualifiers) or >5 `AND`/`OR`/`NOT` → `422 Validation failed` (same page + https://docs.github.com/en/search-github/getting-started-with-searching-on-github/troubleshooting-search-queries).
 - Search rate limit: **30 req/min authenticated, 10 req/min unauthenticated** (code search separate: 10/min auth-required) — https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28. Check `x-ratelimit-*` + `GET /rate_limit` — https://docs.github.com/en/rest/rate-limit/rate-limit?apiVersion=2026-03-10.
@@ -74,6 +82,8 @@ X-GitHub-Api-Version: 2022-11-28
 - Success `200`: `{ total_count, incomplete_results, items[] }`. Also `304` (conditional, https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api), `403/429` (throttle, https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), `503`.
 
 ## 5. Example
+
+One complete, correct call — note the URL encoding and the explicit version header.
 
 ```bash
 curl -L \
@@ -95,6 +105,8 @@ fetch(`https://api.github.com/search/repositories?${qs}`, {
 ```
 
 ## 6. Last-30-days check (2026-08-29 → 2026-09-29, all accessed 2026-09-29)
+
+A snapshot of what changed (and didn't) around this research date — useful because "the docs said so last month" is not a verification.
 
 No change to `GET /search/repositories` in window (changelog Sep 2026 = Copilot/Actions/CodeQL/Projects — https://github.blog/changelog/).
 

@@ -1,6 +1,6 @@
 # Console UX Redesign — Flow and Interaction Design
 
-**Date**: 2026-10-02. Status: approved in the visual brainstorming session of 2026-10-02; ready for implementation planning.
+**Date**: 2026-10-02. Status: **implemented 2026-10-03** (Phase 3; see `../docs/development-log.md`). This document remains the design record for the information architecture and interaction rules.
 **Companions**: `design/console-spec.md` (backend/route contract — still authoritative), `design/how-the-data-flows.md` (what the system does), `design/corpus-building-efficient-engineering.md` (limits and batching), `design/landscape-comparison.md` (why).
 **Scope**: information architecture and interaction design only. Styling is out of scope (current styling stays). No new GitHub behavior: every cost statement in the copy deck reflects what the backend already does or what the two queued plans (`2026-10-02-graphql-batch-engine.md`, `2026-10-02-console-settings.md`) add.
 
@@ -195,7 +195,7 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 | Detection pages adopt this IA (plan already exists) | Plan edit | `2026-10-02-agent-detection.md` |
 | Progress-stage state + rough ETA | Optional | Nice-to-have; stages can be derived from counters without new storage |
 | Enforce `min_commits`/`max_commits` (default branch only) | Planned — batch-engine plan, Task 8 | Counts commits reachable from the default branch, snapshot at `ran_at` |
-| Enforce `min_loc`/`max_loc` | Out of scope — needs the full-history tier | Greyed in the UI; runs keep the “incomplete” warning (R44); never remove or weaken it |
+| Enforce `min_loc`/`max_loc` | Out of scope for the console pass — needs a LOC tier | Greyed in the UI; runs keep the “incomplete” warning (R44); never remove or weaken it. A no-clone bytes-estimate tier is designed in `loc-dilemma.md` |
 
 ## 8. Suggested implementation order
 

@@ -1,10 +1,10 @@
 # 03 — Can Custom Parameters Be Added? (Definitive Verdict)
 
-> Read after `01–02`. Companion: `06 §6` (per-param workarounds), `06 §7` (typo/validation).
-> Background: gitcrawl wants filters GitHub never built (`has_dockerfile`, coverage, team) — teams instinctively try `&myfilter=x` or `q=myfield:value` and get silent `200`s with unfiltered results, mistaking success for filtering.
-> Goal: settle it with YES/NO verdicts (top-level customs: NO; `q` customs: NO; real customs: `props.*` single-org + `topic:` + client/proxy/own-DB), then give the sanctioned workarounds with proxy/FastAPI/GraphQL/`gh`-extension code and a use-case→approach matrix.
+**Read this after `01–02`.** Companions: `06 §6` (per-param workarounds), `06 §7` (typo/validation).
 
-> Date: 2026-09-29. Scope: `GET /search/repositories` REST + `search(type:REPOSITORY)` GraphQL + `gh search repos`.
+**The one-paragraph version**: gitcrawl wants filters GitHub never built — `has_dockerfile`, coverage, team, owner country. Every team that wants this tries the same two things first: add `&myfilter=x` to the URL, or put `myfield:value` inside `q`. Both appear to work, and that is the trap: GitHub returns `200 OK` and simply ignores what it doesn't know, so you get unfiltered results while your logs say success. This file settles the question with plain YES/NO verdicts, then gives the sanctioned workarounds — `props.*` (single-org only), `topic:` conventions, and client/proxy/own-database post-filtering — with working code.
+
+> **Date**: 2026-09-29. **Scope**: `GET /search/repositories` REST + `search(type:REPOSITORY)` GraphQL + `gh search repos`.
 
 ## TL;DR verdicts
 
@@ -16,11 +16,11 @@
 | GraphQL `search()` custom server filters? | **NO for `query:` syntax. YES for custom field selection + client logic.** |
 | `gh` CLI / proxy / own DB virtual params? | **YES — client/proxy-side only, never GitHub-side.** |
 
-> Docs rule: "A query can contain any combination of search qualifiers **supported** on GitHub" — closed set, same as web UI.
+> Docs rule: "A query can contain any combination of search qualifiers **supported** on GitHub" — a closed set, same as the web UI.
 
 ## 1. Arbitrary top-level params (`&myfilter=x`)
 
-Supported set only: `q` (required), `sort` (`stars|forks|help-wanted-issues|updated`), `order` (`desc|asc`, ignored without `sort`), `per_page` (max 100), `page` (first 1000 only), plus `Accept`/`Authorization`/`X-GitHub-Api-Version` headers. Limits: 4000 repos scanned, `incomplete_results:true` on timeout, 30/min auth (10/min unauth).
+The supported top-level set is exactly: `q` (required), `sort` (`stars|forks|help-wanted-issues|updated`), `order` (`desc|asc`, ignored without `sort`), `per_page` (max 100), `page` (first 1000 only), plus the `Accept`/`Authorization`/`X-GitHub-Api-Version` headers. Limits: 4000 repos scanned, `incomplete_results:true` on timeout, 30/min auth (10/min unauth).
 
 ```bash
 # custom top-level param → 200 OK, zero effect (dangerous silent success)
@@ -28,41 +28,43 @@ curl -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKE
   "https://api.github.com/search/repositories?q=language%3Apython+stars%3A%3E1000&per_page=5&myfilter=x&min_coverage=80"
 ```
 
-`422` is for semantic validation (q>256 chars, >5 AND/OR/NOT, inaccessible `repo:/user:/org:`, bad `sort` enum, spam heuristic) — never for unknown params. OpenAPI has no `additionalProperties` for search; server drops unknowns.
+`422` is for semantic validation (q>256 chars, >5 AND/OR/NOT, inaccessible `repo:/user:/org:`, bad `sort` enum, spam heuristic) — never for unknown params. The OpenAPI schema has no `additionalProperties` for search; the server drops unknowns.
 
-**Fail closed in your client/proxy:** allowlist `q,sort,order,per_page,page`; reject others with your own `400`, don't forward.
+**Fail closed in your client/proxy:** allowlist `q,sort,order,per_page,page`; reject anything else with your own `400` — never forward it.
 
 ## 2. Custom qualifiers inside `q`
 
-**NO.** `myfield:value` → tokenized as keywords, no filtering, inflated `total_count`, no `422`. Typos behave same: `is:archive` vs `archived:true`, `is:fork` vs `fork:true` silently become text search. Must validate qualifier names client-side.
+**NO.** `myfield:value` is tokenized as keywords, filters nothing, inflates `total_count`, and returns no `422`. Typos behave the same way: `is:archive` vs `archived:true`, `is:fork` vs `fork:true` silently become text searches. You must validate qualifier names client-side.
 
 Allowlist for repos: `in:name,description,topics,readme`, `repo:`, `user:`, `org:`, `size:`, `followers:`, `forks:`, `stars:`, `created:`, `pushed:`, `language:`, `topic:`, `topics:`, `license:`, `is:public/private`, `mirror:`, `template:`, `archived:`, `good-first-issues:`, `help-wanted-issues:`, `is:sponsorable`, `has:funding-file`, `fork:true/only`, `deployable:`, `deployed:`, `props.*` (scoped), ranges, `-qualifier`, `AND/OR/NOT` (≤5).
 
 ## 3. What IS supported that feels custom
 
-### 3a. `props.*` — org custom properties (only true custom filter)
+Three things give you something close to a custom filter, and each has a boundary worth understanding.
 
-Org owners define schema (`text|single_select|multi_select|true/false`), set per-repo values, search `props.PROPERTY:VALUE`. **Must include single-org scope** or ignored:
+### 3a. `props.*` — org custom properties (the only true custom filter)
+
+An organization's owners define a property schema (`text|single_select|multi_select|true/false`), set values per repository, and search with `props.PROPERTY:VALUE`. **It must be paired with a single `org:` scope** or it is ignored:
 
 ```text
 org:myorg props.environment:production        # works
 props.environment:production stars:>100       # silently ignored
 ```
 
-Manage via UI (`Org → Settings → Repository → Custom Properties`) + REST `GET/POST/PATCH /orgs/{org}/properties/schema`, `GET/PATCH /repos/{owner}/{repo}/properties/values`, `GET /orgs/{org}/properties/values?repository_query=...`. Names `[a-zA-Z0-9_-$#]`, ≤75 chars. Visibility = repo visibility. Test with/without clause (`total_count` delta).
+Manage via UI (`Org → Settings → Repository → Custom Properties`) + REST `GET/POST/PATCH /orgs/{org}/properties/schema`, `GET/PATCH /repos/{owner}/{repo}/properties/values`, `GET /orgs/{org}/properties/values?repository_query=...`. Names `[a-zA-Z0-9_-$#]`, ≤75 chars. Visibility = repo visibility. Test with and without the clause (`total_count` delta).
 
-### 3b. `topic:` — user taxonomy
+### 3b. `topic:` — a user taxonomy
 
 ```bash
 gh search repos --topic=unix,terminal --language=go
 gh search repos "topic:machine-learning topic:llm stars:>500"
 ```
 
-Anyone with push can tag; co-opt namespaced convention (`topic:myorg-tier-gold`). No enforcement.
+Anyone with push access can tag a repo; a namespaced convention (`topic:myorg-tier-gold`) works but has no enforcement.
 
 ### 3c. Client-side post-processing
 
-`items[]` returns `topics[]`, `language`, `license`, `size`, counts, dates, `archived`, `fork`, `visibility`, `custom_properties{}` — filter anything GitHub can't:
+The search response already includes more than search can filter on: `items[]` returns `topics[]`, `language`, `license`, `size`, counts, dates, `archived`, `fork`, `visibility`, `custom_properties{}` — so you can filter anything GitHub can't, after the response arrives:
 
 ```python
 import requests
@@ -72,13 +74,13 @@ r = requests.get("https://api.github.com/search/repositories",
 hits = [x for x in r["items"] if "myorg-tier-gold" in x.get("topics", []) and not x["archived"]]
 ```
 
-Cost: pagination (max 1k) + extra Contents/Languages calls (burns `core` limit). Cache aggressively.
+Cost: pagination (max 1k) + extra Contents/Languages calls (burns the `core` limit). Cache aggressively.
 
 ## 4. Workarounds
 
-**A. Client filter** — simplest, <1k results, needs file/content checks. Paginate via `Link`, respect `incomplete_results`.
+**A. Client filter** — the simplest path: fetch, then filter in your own code. Fine for <1k results and when you need file/content checks. Paginate via `Link`, respect `incomplete_results`.
 
-**B. Proxy with virtual params (recommended for teams)** — expose `&min_stars`, `&team`, `&has_dockerfile`, translate to legal GitHub calls + post-filter:
+**B. Proxy with virtual params (recommended for teams)** — expose your own parameters (`&min_stars`, `&team`, `&has_dockerfile`), translate them to legal GitHub calls plus post-filtering:
 
 ```js
 // Node/Express: never forward unknown params to GitHub
@@ -120,9 +122,9 @@ async def vsearch(q: str = "", team: str | None = None, min_stars: int | None = 
     return {"total_count": len(r.json()["items"]), "items": r.json()["items"]}
 ```
 
-**C. Pre-index own DB** — nightly crawl (`/orgs/{org}/repos` or `search?q=org:x` + `properties/values` + Languages/Contents) into Postgres/Elastic/SQLite; expose own `/search?coverage_min=80`. Only way for cross-org custom fields or >1k/complex queries.
+**C. Pre-index your own DB** — a nightly crawl (`/orgs/{org}/repos` or `search?q=org:x` + `properties/values` + Languages/Contents) into Postgres/Elastic/SQLite; expose your own `/search?coverage_min=80`. This is the only way to handle cross-org custom fields or queries beyond 1k/complex logic.
 
-**D. GraphQL custom output (not input)** — same `query:` syntax/limits/1k cap, power is field selection:
+**D. GraphQL custom output (not input)** — the same `query:` syntax and 1k cap, but field selection is the power:
 
 ```graphql
 query ($q: String!, $n: Int = 50) {
@@ -141,7 +143,7 @@ query ($q: String!, $n: Int = 50) {
 
 No `language:[go,java]` array — use aliases or separate queries. `semantic`/`hybrid` are issues-only.
 
-**E. `gh` extensions** — `gh search repos` flags just build `q`; write `gh-mysearch` extension wrapping `gh api search/repositories` + post-filter for virtual params:
+**E. `gh` extensions** — `gh search repos` flags just build the `q` string; write a `gh-mysearch` extension wrapping `gh api search/repositories` + post-filter for virtual params:
 
 ```bash
 gh search repos --owner=microsoft --visibility=public --language=go --topic=unix,terminal
@@ -166,12 +168,12 @@ Shortcut: **one org + admin → `props.*`; no admin/cross-org → `topics` + cli
 
 ## 6. Risks
 
-- Undocumented params: ignored today, `400/422`/redefined tomorrow; `X-GitHub-Api-Version` only pins documented behavior.
-- Undocumented `q` qualifiers: parsed as text → wrong `200` results, no alert; validate client-side (CLI deliberately avoids hard-coding list for forward-compat).
-- Rate/abuse: 30/min auth, 10/min anon/code; `403/429` + `retry-after` + exp backoff; `422 "spammed"` ≠ throttle, don't retry as throttle.
-- ToS Section H: no token-sharing to evade limits, no spam/selling personal data, resale/high-throughput may need subscription.
-- Scraping vs API: HTML scraping to dodge limits violates "excessive automated bulk activity" + less reliable; prefer API + caching + `ETag`/`304`.
-- Privacy: public repo props visible to anyone; never put secrets/PII in props/topics/descriptions.
+- **Undocumented params**: ignored today, `400/422`/redefined tomorrow; `X-GitHub-Api-Version` only pins documented behavior.
+- **Undocumented `q` qualifiers**: parsed as text → wrong `200` results, no alert; validate client-side (the CLI deliberately avoids hard-coding the list for forward-compat).
+- **Rate/abuse**: 30/min auth, 10/min anon/code; `403/429` + `retry-after` + exp backoff; `422 "spammed"` ≠ throttle, don't retry it as one.
+- **ToS Section H**: no token-sharing to evade limits, no spam/selling personal data, resale/high-throughput may need a subscription.
+- **Scraping vs API**: HTML scraping to dodge limits violates "excessive automated bulk activity" and is less reliable; prefer API + caching + `ETag`/`304`.
+- **Privacy**: public repo props are visible to anyone; never put secrets/PII in props/topics/descriptions.
 
 ## Sources (all accessed 2026-09-29 unless noted)
 
@@ -186,5 +188,5 @@ Shortcut: **one org + admin → `props.*`; no admin/cross-org → `topics` + cli
 - `gh search repos` flags (no `props` flag, raw qualifier pattern): https://cli.github.com/manual/gh_search_repos (accessed 2026-09-29) and https://github.com/cli/cli/blob/trunk/pkg/cmd/search/repos/repos.go (accessed 2026-09-29)
 - `gh` custom-properties request + search qualifier note: https://github.com/cli/cli/issues/9254 (2024-06-25, accessed 2026-09-29); qualifier-ignored discussion: https://github.com/cli/cli/issues/8984 (2024-04-20, accessed 2026-09-29); Terraform `props.*` unfiltered without scope: https://github.com/integrations/terraform-provider-github/issues/2161 (2024-02-19, accessed 2026-09-29)
 - Issues nested `AND/OR` rebuild (why only issues got `advanced_search`/`semantic`/`hybrid`, repos didn't): https://github.blog/changelog/2025-05-13- (Blog 2025-05-13, accessed 2026-09-29; see also https://github.blog/changelog/2025-03-06-github-issues-projects-api-support-for-issues-advanced-search-and-more and https://github.blog/changelog/2026-04-02-improved-search-for-github-issues-is-now-generally-available/)
-- GraphQL repo filtering client-side pattern: https://stackoverflow.com/questions/ (see "Github GraphQL Search with Filtering" 2018, accessed 2026-09-29 — still accurate for `query:` model)
+- GraphQL repo filtering client-side pattern: https://stackoverflow.com/questions/ (see "Github GraphQL Search with Filtering" 2018, accessed 2026-09-29 — still accurate for the `query:` model)
 - ToS Section H API Terms + scraping distinction: https://docs.github.com/site-policy/github-terms/github-terms-of-service (accessed 2026-09-29) and https://github.com/github/site-policy (scraping policy, acceptable-use "excessive automated bulk activity"; accessed 2026-09-29)

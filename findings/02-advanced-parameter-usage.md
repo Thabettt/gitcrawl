@@ -1,10 +1,10 @@
 # 02 — Advanced / Optimal Use of Search Repositories Parameters
 
-> Read after `01`. Feeds `06 §8` (fetch plan) and `05 §A6` (watermark/ETag/pagination corrections).
-> Background: knowing the params is not enough — at scale you hit the 1000-cap, 4000-scan scope, `incomplete_results` timeouts, and separate `search` (30/min) vs `core` buckets. Naive parallel bursts get throttled; naive `page=11` gets `422`.
-> Goal: the power-user playbook — encoding, qualifier combos, sort/page strategy, headers/ETag, rate/error handling, narrow-first + date-shard + `sort=updated` polling — with full curl/JS/Python code you can run, plus 17 pitfalls that silently corrupt crawls.
+**Read this after `01`.** Feeds `06 §8` (fetch plan) and `05 §A6` (watermark/ETag/pagination corrections).
 
-> Research date: 2026-09-29. Docs live-fetched 2026-09-29; prefer 2025–2026 API versions where noted.
+**The one-paragraph version**: knowing the parameters is not enough. At scale you meet three walls — the 1,000-result cap, the ~4,000-repo scan scope, and `incomplete_results` timeouts — plus two separate rate meters (`search` at 30/min and `core` at 5,000/hr). Naive parallel bursts get throttled; naive `page=11` gets a `422`. This file is the power-user playbook: how to build and encode queries, which qualifiers combine well, how to sort and page, what the headers do, how to handle every failure status correctly, and how to poll for changes. It ends with full curl/JS/Python code you can run and 17 pitfalls that silently corrupt crawls.
+
+> **Research date**: 2026-09-29. Docs live-fetched 2026-09-29; prefer 2025–2026 API versions where noted.
 > Companion to `01-search-repos-parameters.md` (canonical ref). This file is the power-user guide.
 
 ## 0. Endpoint TL;DR
@@ -24,10 +24,12 @@ GET https://api.github.com/search/repositories?q={query}{&sort,order,per_page,pa
 Platform limits to internalize first:
 
 * **1,000 fetchable results per logical query** (`10×100`). `total_count` may be far larger.
-* **4,000-repo scan scope**: API scans up to 4,000 repos matching filters.
-* **Timeout → `incomplete_results: true`**, partial results returned.
+* **4,000-repo scan scope**: the API scans up to 4,000 repos matching your filters.
+* **Timeout → `incomplete_results: true`**, with partial results returned.
 * **256-char query limit** (excluding operators/qualifiers) + **max 5 `AND`/`OR`/`NOT`**.
 * **Search rate limit: 30 req/min authenticated, 10 req/min unauthenticated** (code search separate: 10/min authenticated).
+
+**Plain effect**: any query whose result set is larger than 1,000 must be split (sharded) before you can fetch it all. That single fact shapes every strategy below.
 
 ## 1. Query construction
 
@@ -39,6 +41,8 @@ SEARCH_KEYWORD_1 SEARCH_KEYWORD_N QUALIFIER_1 QUALIFIER_N
 ```
 
 ### 1.2 Encoding — always `encodeURIComponent`
+
+The single most common silent failure: a raw `:` or `>` in the URL changes how the query is parsed. Encode the whole `q` value, every time.
 
 ```javascript
 const queryString = 'q=' + encodeURIComponent('GitHub Octocat in:readme user:defunkt');
@@ -75,6 +79,7 @@ E.g. `stars:10..50`, `size:50..120`, `topics:>3`, `followers:>=10000`.
 ### 1.6 Dates — ISO8601
 
 `YYYY-MM-DD` + optional `THH:MM:SS+00:00` / `Z`. `pushed` = last commit any branch; `created` = repo creation.
+
 ```text
 pushed:2016-04-30..2016-07-04
 created:2017-01-01T01:00:00+07:00..2017-03-01T15:30:15+07:00
@@ -94,13 +99,14 @@ Default scope without `in:` = name+description+topics. README **not** searched u
 | Visibility/custom | `is:public/private`, `is:sponsorable`, `has:funding-file`, `fork:true/only`, `archived:`, `mirror:`, `template:`, `good-first-issues:>n`, `help-wanted-issues:>n`, `props.NAME:VALUE` (single-org only) | `archived:false GNOME`, `org:github props.environment:production` |
 
 High-value crawl seeds:
+
 ```text
 org:github language:python stars:>500 pushed:>2024-01-01 archived:false
 topic:machine-learning language:python license:mit stars:100..5000 pushed:2024-01-01..2025-01-01
 language:typescript stars:>1000 created:2020-01-01..2020-06-30
 ```
 
-`props.*` rule: must pair with single `org:` or silently ignored.
+`props.*` rule: must pair with a single `org:` or it is silently ignored.
 
 ## 3. sort / order / per_page / page
 
@@ -114,7 +120,7 @@ language:typescript stars:>1000 created:2020-01-01..2020-06-30
 
 `order` ignored without `sort`. Always `per_page=100` for crawls; pages `1..10` = 1000 max. `page=11+` → `[]`/empty by design. Follow `Link: rel="next"/"last"`. Octokit `paginate()` must strip `total_count`/`incomplete_results` before concat.
 
-`incomplete_results:true` → log, retry once after backoff, then narrow query (add `org:`/`language:`/date shard). 4000-scan scope means broad `q=python` ranks poorly; narrow queries rank better.
+`incomplete_results:true` → log, retry once after backoff, then narrow the query (add `org:`/`language:`/date shard). The 4000-scan scope means a broad `q=python` ranks poorly; narrow queries rank better.
 
 ## 4. Headers
 
@@ -125,6 +131,8 @@ language:typescript stars:>1000 created:2020-01-01..2020-06-30
 - Rate/pagination headers: `x-ratelimit-{limit,remaining,used,reset,resource}`, `retry-after`, `link`, `etag`, `x-poll-interval`. `GET /rate_limit` → `resources.search/code_search/core`.
 
 ## 5. Rate-limit & error playbook
+
+Every status has exactly one correct response. Treat this table as law — the wrong response (blind retrying a `422`, for example) is how crawlers get suspended.
 
 | Status | Action |
 |---|---|
@@ -141,7 +149,7 @@ Sequential + pacing is correct: ~1 req/2s/token (30/min), max ~10 concurrent (10
 ## 6. Performance tips
 
 1. **Narrow first:** `repo:/org:/user:` > `language:+stars:/forks:` > `created:/pushed:` shard > `topic:/license:` > bare keyword.
-2. **Date-shard to bypass 1000-cap:** if `total_count>1000`, bisect on `created:`/`pushed:` (or `stars:` ranges) until each shard `<1000`; dedupe by `id`/`full_name`; verify `sum(shard counts)==total`.
+2. **Date-shard to bypass the 1000-cap:** if `total_count>1000`, bisect on `created:`/`pushed:` (or `stars:` ranges) until each shard is `<1000`; dedupe by `id`/`full_name`; verify `sum(shard counts)==total`.
 3. **`sort=updated` polling:** `q=org:my-org pushed:>WATERMARK&sort=updated&order=desc&per_page=100`, watermark on `pushed_at`, respect `x-poll-interval`, send `If-None-Match`.
 4. **Avoid >256 chars / >5 operators:** fan out into multiple queries.
 
@@ -197,7 +205,7 @@ curl -s -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITH
 
 ### 7.3 Paginated crawl loop (sequential, 2s pacing, backoff — full code, verified 2026-09-29)
 
-Rules: loop `page=1..10`, stop when `items.length<100`, on `403/429/503` honor `retry-after` or `x-ratelimit-reset` else `60s*2^attempt+jitter` max 5 attempts, warn on `incomplete_results`, if `total_count>1000` shard by date (see §6.2). Sources: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api?apiVersion=2026-03-10 (accessed 2026-09-29), https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api (accessed 2026-09-29), https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api (accessed 2026-09-29).
+Rules: loop `page=1..10`, stop when `items.length<100`, on `403/429/503` honor `retry-after` or `x-ratelimit-reset` else `60s*2^attempt+jitter` max 5 attempts, warn on `incomplete_results`, if `total_count>1000` shard by date (see §6, tip 2). Sources: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api?apiVersion=2026-03-10 (accessed 2026-09-29), https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api (accessed 2026-09-29), https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api (accessed 2026-09-29).
 
 **curl (bash loop, sequential — 2s pacing):**
 
@@ -393,15 +401,17 @@ def poll():
     return items
 ```
 
-Note per `05` gap audit: search `304` hit rate is low (`total_count`/`score` churn, `sort=updated` reorders — https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) — keep ETag code but budget `x-ratelimit-*`, and never mix `pushed_at` watermark with `updated_at` ordering without overlap (see `05` A6).
+Note per the `05` gap audit: search `304` hit rate is low (`total_count`/`score` churn, `sort=updated` reorders — https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) — keep the ETag code but budget `x-ratelimit-*`, and never mix a `pushed_at` watermark with `updated_at` ordering without overlap (see `05` A6).
 
 ## 8. Common pitfalls (17)
 
+Each of these has burned someone. None of them errors loudly — that's the point.
+
 1. Forks excluded by default — add `fork:true`/`fork:only`; don't confuse `fork:` vs `forks:`.
 2. README not in default scope — add `in:readme`.
-3. No `updated:` qualifier — use `pushed:` filter + `sort=updated` param.
+3. No `updated:` qualifier — use a `pushed:` filter + `sort=updated` param.
 4. 256-char keyword limit ≠ 1000-result cap ≠ 4000 scan scope.
-5. `total_count` is estimate, not fetchable — shard, don't `page=11`.
+5. `total_count` is an estimate, not fetchable — shard, don't `page=11`.
 6. `order` ignored without `sort`.
 7. `*` must be encoded (`%2A`).
 8. `NOT` strings-only; use `-qualifier` for exclusion.
@@ -412,7 +422,7 @@ Note per `05` gap audit: search `304` hit rate is low (`total_count`/`score` chu
 13. `422` on `repo:/org:` = no access; multi-resource queries silently filter.
 14. Parallel bursts → `403/429` + `incomplete_results` — go sequential.
 15. Search case-insensitive but use canonical `language:` casing in logs.
-16. Omit version header = implicit `2022-11-28` — send explicitly.
+16. Omitting the version header = implicit `2022-11-28` — send it explicitly.
 17. `sort:created/comments/interactions` are issues/commits sorts, not repos.
 
 ## Sources (accessed 2026-09-29)

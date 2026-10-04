@@ -10,6 +10,22 @@
 
 **Organization**: Grouped by user story for independent implementation, testing, and delivery.
 
+## Status (2026-10-04)
+
+**The checkboxes below are the original plan's, not a status tracker.** Completion is recorded per task/batch in `../docs/development-log.md`; this table is the phase-level summary.
+
+| Phase | Status |
+|---|---|
+| 0 — Walking Skeleton | Done; `src/skeleton.py` later retired under R58 (the live loop now lives in the pipeline/console) |
+| 1 — Setup | Done |
+| 2 — Foundational | Done (paths amended: `limiter/retry.py` deleted R58; audit moved to `src/lib/audit.py`) |
+| 3 — US1 discovery | Done — live golden-org parity A=566/B=566 |
+| 4 — US2 lifecycle | Done |
+| 5 — US3 enrich + serve | Done (including T051 clone) |
+| 6 — Thesis tracks | **Deferred/parked — not built** (FR-015–FR-022) |
+| 7 — Polish | Mostly done; T049 (token vault/OIDC) deferred — env-only tokens + fingerprint logging today |
+| 8 — Operator Console | Done (B1–B10) |
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -20,7 +36,7 @@
 
 **Purpose**: Thinnest live loop — one filter → live GitHub → display → bundle + CSV — before any depth. Locked first milestone.
 
-- [ ] T000 Single hardcoded filter (`language:rust stars:>100`, no enrichment) through validate → live search (≤3 pages) → display → run bundle JSON + CSV export in `src/skeleton.py`; manual run + recorded output is the done proof
+- [x] T000 Single hardcoded filter (`language:rust stars:>100`, no enrichment) through validate → live search (≤3 pages) → display → run bundle JSON + CSV export in `src/skeleton.py`; manual run + recorded output is the done proof (skeleton later retired under R58)
 
 ---
 
@@ -41,11 +57,11 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 Implement Redis per-bucket limiter in `src/limiter/buckets.py` (search/core/code_search HASH+Lua token buckets O(1) — never ZSET logs; `x-ratelimit-*` pacing, per-bucket pausing only, ~10 concurrent/endpoint/token ceiling, 0.5–1ms same-AZ budget) + delayed-retry via sorted sets in `src/limiter/retry.py`
+- [x] T005 Implement Redis per-bucket limiter in `src/limiter/buckets.py` (search/core/code_search HASH+Lua token buckets O(1) — never ZSET logs; `x-ratelimit-*` pacing, per-bucket pausing only, ~10 concurrent/endpoint/token ceiling, 0.5–1ms same-AZ budget); the delayed-retry `src/limiter/retry.py` queue was later deleted under R58 — retry orchestration lives in `src/lib/gh_client.py`
 - [ ] T006 Implement throttle classifier in `src/limiter/classifier.py` (retry-after → reset → `60s×2^n`+jitter max 5; spam-422 backoff vs cap-422 shard vs validation-422 fix; SSO `partial-results` loud-fail)
 - [ ] T007 [P] Implement `q` allowlist + delta-test validation in `src/lib/qualify.py` (06 §2 set, `props.*`-only-with-`org:`, local `400`, CI delta test)
 - [ ] T008 Create base models + Alembic migrations in `src/store/models.py` (repos PK `id`, owners, full_name_history, shards, audit_log, geo_cache per data-model.md)
-- [ ] T009 Configure audit logging + SLO metric emit in `src/serve/audit.py` (FR-010 fields; `search_remaining`, `incomplete_results_ratio`, `422/403+429` rates, p95, coverage, geo-unmatched)
+- [x] T009 Configure audit logging + SLO metric emit in `src/lib/audit.py` (moved from `serve/` during hardening; FR-010 fields; `search_remaining`, `incomplete_results_ratio`, `422/403+429` rates, p95, coverage, geo-unmatched)
 
 **Checkpoint**: Foundation ready — `pytest tests/unit/test_classifier.py tests/unit/test_watermark.py` green; limiter + qualify + models reviewable; user stories can now begin
 
@@ -96,7 +112,7 @@
 - [ ] T021 [US2] Implement live within-run refresh in `src/hydrate/tail.py` (current state at `ran_at`; NO `pushed:>watermark-1h` poller, NO tier cadences)
 - [ ] T022 [US2] Implement hydrate client (`GET /repos/{o}/{r}` + ETag on stable URLs only, never search path) in `src/hydrate/repo_client.py`
 - [ ] T023 [US2] Implement lifecycle handler (301 follow + history row, 404 tombstone + quarantine, retention purge) in `src/store/lifecycle.py`
-- [ ] T024 [US2] CUT (live-only) — GH Archive hourly tail complement REMOVED; `src/enrich/mirrors.py` keeps ecosyste.ms/deps.dev bootstrap only
+- [x] T024 [US2] CUT (live-only) — GH Archive hourly tail complement REMOVED; the ecosyste.ms/deps.dev bootstrap later lost its `src/enrich/mirrors.py` module to R58 (re-add when zero-call mirror enrichment is wired; see `06 §5`)
 
 **Checkpoint**: US1 AND US2 work independently — live run reflects current state with lifecycle proven on fixtures
 
@@ -119,9 +135,9 @@
 ### Implementation for User Story 3
 
 - [ ] T028 [P] [US3] Implement trees-first enrichment (1× `trees?recursive=1` / ecosyste.ms metafiles; `contents` for bytes only) in `src/enrich/trees_first.py`
-- [ ] T029 [P] [US3] Implement GraphQL batch (funding/discussions/sponsors, `first≤50`, ≤10–20 aliases/query shallow-only, `dryRun` cost gate, split-on-timeout never retry-same-shape) in `src/enrich/graphql_batch.py`
+- [x] T029 [P] [US3] Implement GraphQL batch (funding/discussions/sponsors, `first≤50`, ≤10–20 aliases/query shallow-only, `dryRun` cost gate, split-on-timeout never retry-same-shape) in `src/lib/graphql_batch.py` (moved from `enrich/`; adapters live in `hydrate/graphql_repo.py`, `enrich/graphql_file_presence.py`, `enrich/graphql_owner_location.py`)
 - [ ] T030 [P] [US3] Implement geo resolver (flag decode → normalize/split → gazetteer → aliases → cached geocoder → tiebreakers → `{country_iso, confidence, raw}`) in `src/enrich/geo_resolver.py` per `06 §6.1`
-- [ ] T031 [P] [US3] Implement mirror enrichers (ecosyste.ms polite-pool `?mailto=` + `POST /packages/bulk_lookup`, deps.dev batch endpoints first, releases/commits/issues/SBOM/OSV/Scorecard-weekly — `criticality_score` bulk is dead — per `06 §6` cost notes) in `src/enrich/mirrors.py`
+- [ ] T031 [P] [US3] Implement mirror enrichers (ecosyste.ms polite-pool `?mailto=` + `POST /packages/bulk_lookup`, deps.dev batch endpoints first, releases/commits/issues/SBOM/OSV/Scorecard-weekly — `criticality_score` bulk is dead — per `06 §6` cost notes) in `src/enrich/mirrors.py` — **not wired**; the module was deleted under R58 (design survives in `06 §5`)
 - [ ] T032 [US3] Implement FastAPI `GET /vsearch/repos` + virtual-param translation + upstream allowlist in `src/serve/app.py` and `src/serve/virtual_params.py` per `contracts/search-api.md` (depends on T028–T031)
 - [ ] T033 [P] [US3] Implement filter-spec v1 schema validation (version gate, qualifier allowlist + typo hints, virtual table check, no tokens/state accepted) in `src/serve/filter_spec.py`
 - [ ] T034 [P] [US3] Implement run/replay/export (`POST /vsearch/run` → `{filter_hash, ran_at, api_version, ...}`, `GET /vsearch/runs/{filter_hash}`, `GET .../export` run bundle with raw upstream JSON) in `src/serve/runs.py` (depends on T033)

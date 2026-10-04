@@ -45,7 +45,7 @@ Each surviving match gets its full record (1 call each, separate budget). This i
 
 ### Stage 4 — Virtual filters (gitcrawl's own screening room)
 
-Now the filters GitHub can't express run per repo, cheapest first: counts from the hydrated record (`min_commits` via commit count, `min_loc` via size/languages), then file checks (`has_dockerfile` via one file-tree fetch covering all paths — never one call per file; this same machinery later becomes the agent-detection file channel), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable. The full cost-order table (free → mirrors → single-call → batched → deep) lives in `research.md` D12; the scheduler behind it segments candidates across tokens survivors-first, so even a stopped-early run stays useful.
+Now the filters GitHub can't express run per repo, cheapest first: counts from the hydrated record (`min_commits` via commit count; `min_loc` is accepted but recorded-only until an estimate tier ships — see `loc-dilemma.md`), then file checks (`has_dockerfile` via one file-tree fetch covering all paths — never one call per file; this same machinery later becomes the agent-detection file channel), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable. The full cost-order table (free → mirrors → single-call → batched → deep) lives in `research.md` D12; the scheduler behind it segments candidates across tokens survivors-first, so even a stopped-early run stays useful.
 
 ### Stage 5 — Enrichment (detail only for survivors)
 

@@ -8,6 +8,8 @@
 
 **Input**: Ultimate crawler design per `findings/00–06` (SEART-style crawl → store → serve, hardened with `05` gap fixes + efficiency review). Scope: cross-GitHub public · Stack: Python + Postgres · Freshness: live-at-fetch only (no background polling — entire job runs on the go at `ran_at`).
 
+> **Status note (2026-10-04)**: US1–US4 are implemented (see `../docs/development-log.md`). The thesis tracks **FR-015–FR-022 are parked** — designed, not built — and their entities (`TracePack`, `CorpusFrame`) exist as design intent only; `tasks.md` Phase 6 stays deferred. `min_loc`/`max_loc` are accepted but recorded-only (R44); a no-clone estimate path is designed in `loc-dilemma.md`. This spec's requirement text stays frozen; the status note is the pointer.
+
 **New here? Read `how-the-data-flows.md` first** — it narrates every stage below (filters → Find → hydrate → enrich → display → bundle) with each GitHub limitation explained.
 
 ## User Scenarios & Testing *(mandatory)*

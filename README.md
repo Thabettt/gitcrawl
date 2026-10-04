@@ -588,6 +588,7 @@ Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests
 | [`design/gitcrawl-vs-seart.md`](design/gitcrawl-vs-seart.md) | The closest-prior-art comparison, in depth |
 | [`design/plan.md`](design/plan.md), [`design/tasks.md`](design/tasks.md) | Stack decisions and task breakdown |
 | [`design/data-model.md`](design/data-model.md) | Schema rationale and indexing notes |
+| [`design/loc-dilemma.md`](design/loc-dilemma.md) | How to filter by lines of code without cloning — the LOC dilemma, measured |
 | [`findings/00–06`](findings/00-overview.md) | Deep research on GitHub search limits, parameters, existing solutions, gaps, and the exhaustive capability matrix |
 | [`docs/development-log.md`](docs/development-log.md) | What was built, when, with which rulings and verification numbers |
 | [`docs/environment.md`](docs/environment.md) | Windows/local environment: services, credentials, commands, troubleshooting, console manual pass |

@@ -1,17 +1,26 @@
 # 06 — Exhaustive Repository Parameters: Searchable, Enrichable, and Unavailable + How to Get Each
 
-> Read last as the build matrix, after `01–05`. Implements the `05` patch plan and `04` dual-path recommendation.
-> Background: gitcrawl needs *every* repo attribute — but GitHub splits them across search `q` (closed set), REST/GraphQL objects (nullable, fork/admin-gated), list-enumeration (no 1000-cap), org-props APIs (single-org), enrichment endpoints (per-repo cost), and mirrors (stale but bulk) — with ~30 desired filters (Dockerfile, coverage, CI, LOC, Scorecard…) available nowhere natively.
-> Goal: the master S/R/G/L/C/E/M/X matrix — every param's availability plus, for each X, the cheapest working workaround with endpoint + snippet + rate/freshness — ending in the `§8` fetch plan (since-bootstrap → hydrate → enrich → store on immutable `id`).
+**Read this last, as the build matrix, after `01–05`.** It implements the `05` patch plan and the `04` dual-path recommendation.
 
-> Date: 2026-09-29. Method: 3 parallel agents (A: official REST/Search/GraphQL, B: mirrors, C: unavailable+workarounds) + live docs verification.
-> Companion: `01` (canonical ref), `02` (power guide), `03` (custom verdicts), `04` (landscape), `05` (gaps). This file is the master matrix.
+**The one-paragraph version**: gitcrawl needs every repo attribute — but GitHub spreads them across five different worlds. Some are searchable inside `q` (a closed set). Some live on the REST/GraphQL repo object (nullable, sometimes gated by access). Some come from list/enumeration endpoints (no 1000-cap). Some are org custom properties (single-org only). Some need a per-repo enrichment call. Some exist only in mirrors and datasets (stale, but bulk). And roughly thirty of the things you actually want — Dockerfile, coverage, CI status, LOC, Scorecard — are available nowhere natively and need a workaround. This file is the master matrix: every parameter, its availability code, and for each unavailable one the cheapest working way to get it.
+
+> **Date**: 2026-09-29. **Method**: 3 parallel agents (A: official REST/Search/GraphQL, B: mirrors, C: unavailable+workarounds) + live docs verification.
+> **Companion**: `01` (canonical ref), `02` (power guide), `03` (custom verdicts), `04` (landscape), `05` (gaps). This file is the master matrix.
 
 ## 0. How to read this file
 
-Availability codes: **S** = `GET /search/repositories` `q` qualifier / top-level param · **R** = `GET /repos/{o}/{r}` REST field · **G** = GraphQL `Repository` field · **L** = list/enumeration (`GET /repositories?since=`, `/orgs/{o}/repos`) · **C** = custom-properties API · **E** = per-repo enrichment REST (contents/languages/stats/etc.) · **M** = mirror/dataset (GH Archive/BQ/WoC/SWH/Stack/ecosyste.ms/deps.dev) · **X** = not available anywhere native → workaround in §6.
+Availability codes — think of them as "where does this fact live?":
 
-Rule: if it's not in §1–§5 tables, treat it as X and use §6. Unknown `&foo=bar` top-level → ignored `200`; unknown `q` qualifier → becomes free-text `200` (never `422`). See §7.
+- **S** = `GET /search/repositories` `q` qualifier / top-level param
+- **R** = `GET /repos/{o}/{r}` REST field
+- **G** = GraphQL `Repository` field
+- **L** = list/enumeration (`GET /repositories?since=`, `/orgs/{o}/repos`)
+- **C** = custom-properties API
+- **E** = per-repo enrichment REST (contents/languages/stats/etc.)
+- **M** = mirror/dataset (GH Archive/BQ/WoC/SWH/Stack/ecosyste.ms/deps.dev)
+- **X** = not available anywhere native → workaround in §6
+
+The rule: if it's not in the §1–§5 tables, treat it as X and use §6. Unknown `&foo=bar` top-level params are ignored with a `200`; an unknown `q` qualifier becomes free text with a `200` (never `422`). See §7.
 
 ## 1. Top-level search params (S)
 
@@ -49,7 +58,7 @@ Comparators `> >= < <=`, ranges `n..n`/`n..*`/`*..n`, dates `YYYY-MM-DD[THH:MM:S
 | `props.NAME:VALUE` | `org:github props.environment:production` | Single-org only. Types `string/single_select/multi_select/true_false/url`. |
 | `mirror:/template:/archived:` | `mirror:true GNOME`, `archived:false` | `archived` read-only flag. |
 | `fork:true/only` | `github fork:true` | **Forks excluded by default.** Code search uses `is:fork` instead. |
-| `good-first-issues:>n`, `help-wanted-issues:>n` | `good-first-issues:>2` | Min labeled-issue counts; latter also `sort=` value. |
+| `good-first-issues:>n`, `help-wanted-issues:>n` | `good-first-issues:>2` | Min labeled-issue counts; the latter is also a `sort=` value. |
 | `is:sponsorable`, `has:funding-file` | `is:sponsorable` | Bool only (tiers/urls need §6). |
 | `deployable:/deployed:` | org linked-artifacts | Org-scoped storage/deployment records. |
 
@@ -93,7 +102,7 @@ Path params `owner/repo` (case-insensitive, no `.git`); `301` on rename, `403/40
 | `GET /repositories` | `since=<id>` cursor only, `Link` next, creation-ID order | **Bulk backfill without search.** `~2M pages` for ~200M repos; shard ID ranges × tokens. |
 | `GET /user/repos` | `visibility`, `affiliation=owner,collaborator,organization_member`, `type` (**422 with visibility/affiliation**), `sort/direction/per_page/page` | Auth repos only. |
 | `GET /users/{u}/repos`, `GET /users?since=` | `type/sort/direction/per_page/page`, `since` cursor | Seed expansion. |
-| Props schema/values | schema: `property_name/value_type/required/default_value/allowed_values[≤200]/values_editable_by/source_type`; values: `repository_names[≤30]+properties[{property_name,value}]` (`null` unsets); bulk `GET /orgs/{org}/properties/values?repository_query=`; external App routes `/installations[/schema|/values]` | Single-org search rule; cross-org needs own DB (per-org loop → SQLite/Postgres). |
+| Props schema/values | schema: `property_name/value_type/required/default_value/allowed_values[≤200]/values_editable_by/source_type`; values: `repository_names[≤30]+properties[{property_name,value}]` (`null` unsets); bulk `GET /orgs/{org}/properties/values?repository_query=`; external App routes `/installations[/schema|/values]` | Single-org search rule; cross-org needs your own DB (per-org loop → SQLite/Postgres). |
 
 ## 5. Mirror / third-party fields (M)
 
@@ -114,7 +123,7 @@ Enrichment REST (E) needed for full params: `GET .../languages` (bytes), `/contr
 
 ## 6. NOT searchable — workaround per param (X → how to get)
 
-`NO` = no `q` filter/rank. Pattern: search candidates → hydrate per-repo (`core` 5000/hr) → store locally.
+`NO` = no `q` filter/rank. The pattern throughout: search candidates → hydrate per-repo (`core` 5000/hr) → store locally.
 
 | Desired param | Why not | Workaround (cheapest first) | Cost / Freshness |
 |---|---|---|---|
@@ -132,7 +141,7 @@ Enrichment REST (E) needed for full params: `GET .../languages` (bytes), `/contr
 | dependencies (direct+transitive) | Graph not indexed | `GET .../dependency-graph/sbom` (async post-2026-11-13) + manifest `GET .../contents/{package.json,...}` | `core` 1–2; per-push. |
 | dependents (`used-by`) | No API field (UI `>100` only) | Scrape `GET https://github.com/{o}/{r}/network/dependents` (`Box-row`) or ecosys/npm/PyPI APIs | HTML `~60/hr` IP, fragile, private hidden; use ecosys/deps.dev. |
 | vulns | Needs access | `GET .../dependabot/alerts` (scope) else `api.osv.dev/v1/query` by SBOM + `/advisories` | `core` / OSV free; live if enabled else inferred. |
-| Scorecard / criticality | External | `GET https://api.scorecard.dev/projects/github.com/{o}/{r}` (+badge/CLI); weekly Scorecard feed (1M critical projects) | External weekly; CLI on-demand fresh. **Note: `criticality_score` bulk feed (GCS+BQ) is DEAD since 2026-08-29 — do not depend on it** (https://github.com/ossf/criticality_score/blob/main/README.md, accessed 2026-09-29). |
+| Scorecard / criticality | External | `GET https://api.scorecard.dev/projects/github.com/{o}/{r}` (+badge/CLI); weekly Scorecard feed (1M critical projects) | External weekly; CLI on-demand fresh. **Note: the `criticality_score` bulk feed (GCS+BQ) is DEAD since 2026-08-29 — do not depend on it** (https://github.com/ossf/criticality_score/blob/main/README.md, accessed 2026-09-29). |
 | funding exact urls | `has:funding-file` bool only | `GET .../contents/.github/FUNDING.yml` decode YAML; GQL `fundingLinks{platform,url}` | `core` 1 / 1pt; live. |
 | traffic views/clones | Owner-only 14d | `GET .../traffic/views|clones|paths|referrers` (push access); persist daily (14d retention) | `core`; `403` non-collab; UTC buckets. |
 | sponsor tiers | `is:sponsorable` bool only | GQL `user|organization(login:){sponsorsListing{tiers{monthlyPriceInDollars}}}` | GQL points; live. |
@@ -156,22 +165,22 @@ Enrichment REST (E) needed for full params: `GET .../languages` (bytes), `/contr
 
 ### 6.1 Owner location → country pipeline (mitigating emojis, cities, multi-values)
 
-Native availability: `location: string|null` on `GET /users/{login}` / `GET /orgs/{org}` (https://docs.github.com/en/rest/users/users#get-a-user, accessed 2026-09-29); substring `location:` qualifier exists only on `GET /search/users` (https://docs.github.com/en/search-github/searching-on-github/searching-users, accessed 2026-09-29), not on repo search — so resolve client-side per owner and cache by user `id`.
+Native availability: `location: string|null` on `GET /users/{login}` / `GET /orgs/{org}` (https://docs.github.com/en/rest/users/users#get-a-user, accessed 2026-09-29); the substring `location:` qualifier exists only on `GET /search/users` (https://docs.github.com/en/search-github/searching-on-github/searching-users, accessed 2026-09-29), not on repo search — so resolve client-side per owner and cache by user `id`.
 
-1. **Flag emojis first (deterministic).** Regional-indicator pairs map 1:1 to ISO alpha-2 — regex out, highest confidence, zero API cost.
+1. **Flag emojis first (deterministic).** Regional-indicator pairs map 1:1 to ISO alpha-2 — regex them out, highest confidence, zero API cost.
 2. **Normalize, then split.** Lowercase, strip non-flag emojis/punctuation, split on `/ | , • ( )` ("Berlin / NYC" → candidates scored separately).
-3. **Gazetteer before geocoder.** Offline city→country (e.g. GeoNames cities1000 with population threshold) in O(1); collisions (Paris FR vs Paris TX) resolved by population + co-occurring country token.
+3. **Gazetteer before geocoder.** An offline city→country table (e.g. GeoNames cities1000 with a population threshold) in O(1); collisions (Paris FR vs Paris TX) resolved by population + co-occurring country token.
 4. **Country alias table.** ISO names + alpha-2/alpha-3 + demonyms + variants ("USA", "UK", "UAE", "Nederland", "Deutschland").
-5. **Geocoder for residue only** (Nominatim/Photon), cached by normalized string — repeated locations cost 1 call ever.
+5. **Geocoder for residue only** (Nominatim/Photon), cached by normalized string — a repeated location costs one call ever.
 6. **Weak tiebreakers, never primaries.** Blog/company domain TLD, commit `tz_offset` (UTC band only, never country).
 7. **Persist confidence tiers** `{country_iso, confidence, raw_location}` (exact-ISO > name > gazetteer-city > geocoder > TLD/timezone > unmatched) and dashboard the unmatched rate with spot-check sampling.
 
 ## 7. Unknown / typo behavior + validation
 
-- Top-level `&foo=bar` → ignored `200` (only `q,sort,order,per_page,page` honored). Never forward customs — allowlist + own `400`.
-- `q` unknown qualifier (`has_dockerfile:true`, `updated:>...`, `is:archived`) → free-text `200` with drifted `total_count`. Only `422` for `>256 chars`, `>5 ops`, inaccessible `repo:/user:/org:`.
+- Top-level `&foo=bar` → ignored `200` (only `q,sort,order,per_page,page` honored). Never forward customs — allowlist + your own `400`.
+- `q` unknown qualifier (`has_dockerfile:true`, `updated:>...`, `is:archived`) → free-text `200` with drifted `total_count`. The only `422`s are for `>256 chars`, `>5 ops`, and inaccessible `repo:/user:/org:`.
 - Typo table: `is:archive→archived:`, `is:fork/forks:true→fork:true/only (+forks:>N)`, `updated:/push:→pushed: (+sort=updated)`, `is:sponsor/has:funding→is:sponsorable/has:funding-file`, `props.*` alone→`org:O props.*`, `is:mirror/template→mirror:/template:`.
-- CI validation (Python): parse `q` tokens `(\w[\w\.-]*):`, assert ⊆ allowlist + `props.*` only with `org:/user:`; delta test `total(base+cand) < total(base)` (real filter narrows; text doesn't); assert `incomplete_results==False`; log `q/total/incomplete`. `gh search repos` + Terraform `data.github_repositories{query,sort}` pass through same `q` — same rule.
+- CI validation (Python): parse `q` tokens `(\w[\w\.-]*):`, assert ⊆ allowlist + `props.*` only with `org:/user:`; delta test `total(base+cand) < total(base)` (a real filter narrows; text doesn't); assert `incomplete_results==False`; log `q/total/incomplete`. `gh search repos` + Terraform `data.github_repositories{query,sort}` pass through the same `q` — same rule.
 
 ```python
 ALLOWED = {"in","repo","user","org","size","followers","forks","stars","created","pushed","language","topic","topics","license","is","mirror","template","archived","good-first-issues","help-wanted-issues","has","props","fork","deployable","deployed"}
@@ -182,7 +191,7 @@ ALLOWED = {"in","repo","user","org","size","followers","forks","stars","created"
 1. **Discover:** `GET /repositories?since=` backfill (or sharded `search` `created:` bisect if filtered) → candidate `full_name+id`.
 2. **Hydrate:** `GET /repos/{o}/{r}` (+`ETag`) → R fields; GQL batch for `fundingLinks/discussions/scorecard-linkage` in one shot.
 3. **Enrich:** `languages/contents/trees/releases/commits/issues+search-issues/stats/community/traffic(if owner)/SBOM/OSV/deps.dev+ecosyste.ms` per need; file-existence via ecosyste.ms metafiles to save `core`.
-4. **Mirror-bootstrap:** BQ/WoC/SWH/Stack for history/content without burn; GH Archive/ClickHouse for trends (envelope fields survive cliff).
+4. **Mirror-bootstrap:** BQ/WoC/SWH/Stack for history/content without burn; GH Archive/ClickHouse for trends (envelope fields survive the cliff).
 5. **Store:** PK `id`, `full_name` history, `deleted_at`, `custom_properties`, watermark `max(pushed_at)` per shard + 1h overlap, `id` dedupe, audit log per §A11 of `05`.
 
 ## Sources — full clickable references (all accessed 2026-09-29 unless noted)

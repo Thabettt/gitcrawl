@@ -1,12 +1,14 @@
 # gitcrawl Console Implementation Plan (overnight run)
 
+> **Status: executed 2026-10-01 → 2026-10-03** (batches B1–B10 + one fix wave). This file is the plan of record; outcomes, rulings R32–R58, and verification numbers live in `../docs/development-log.md`. Two plan details were superseded during execution and are corrected inline: the console migration is `0003` (R38) and the CSS is hand-rolled (R46).
+>
 > **For the executor (me):** execute the batch queue below with subagent-driven development — fresh implementer per batch, task review, fix loop, commit, ledger. Briefs quote exact task text/interfaces. Do not stop between batches; the operator is asleep and instructed a continuous run.
 
 **Goal:** Complete US2 + US3 (backend) and add the US4 console (run persistence, operator extras, server-rendered UI) so gitcrawl is a startable local application.
 
 **Architecture:** Live-only engine (already built through US1) + hydration/enrichment/geo layers + FastAPI serve layer (JSON contract + server-rendered Jinja2/htmx pages) + single-worker run executor with Postgres persistence.
 
-**Tech Stack:** Python 3.12, FastAPI, Jinja2, htmx (vendored), Tailwind CSS compiled once via standalone CLI (vendored output), PostgreSQL 18 (:5433), Redis (WSL), pytest.
+**Tech Stack:** Python 3.12, FastAPI, Jinja2, htmx (vendored), hand-rolled CSS (vendored, R46 — the Tailwind output path was dropped), PostgreSQL 18 (:5433), Redis (WSL), pytest.
 
 **Spec:** `design/console-spec.md` (US4) + `design/spec.md` (v2) + `design/tasks.md` (T019–T037, T051) + `design/contracts/search-api.md`.
 
@@ -27,7 +29,7 @@
 | B1 | T019, T020, T021, T022, T023 | US2: within-run dedupe tests, lifecycle test, refresh driver, hydrate client (ETag/301/404), lifecycle handler |
 | B2 | T026, T028, T029 | trees-first enrichment (+equivalence test), GraphQL batch (funding/discussions/sponsors) |
 | B3 | T031, T030, T027 | mirrors (ecosyste.ms/deps.dev/Scorecard), geo resolver (+fixture tests) |
-| B4 | T052, T053 | runs/run_items/saved_filters models + migration 0002; single-worker run executor |
+| B4 | T052, T053 | runs/run_items/saved_filters models + migration 0003 (R38); single-worker run executor |
 | B5 | T032, T033, T034, T025, T035, T056 | serve JSON API + virtual params, filter-spec validation, runs/replay/export, contract tests, filter form, UI shell (base/static/dashboard/health) |
 | B6 | T036, T037, T051 | cost planner, segment executor, clone control (estimate/resume) |
 | B7 | T054, T055 | saved-filter CRUD + library backend, run diff computation + JSON endpoint |
@@ -78,7 +80,7 @@
 - Tests: `tests/integration/test_diff.py` on fixture runs.
 
 ### T056 — UI shell + dashboard
-- Create: `src/serve/templates/{base.html,dashboard.html}`, `src/serve/static/{htmx.min.js,app.css,app.js}` (htmx vendored; Tailwind standalone CLI compiled once into `app.css`, committed), `src/serve/pages.py` (HTML routes), `src/serve/__main__.py` (dev server convenience).
+- Create: `src/serve/templates/{base.html,dashboard.html}`, `src/serve/static/{htmx.min.js,app.css,app.js}` (htmx vendored; `app.css` hand-rolled and committed per R46), `src/serve/pages.py` (HTML routes), `src/serve/__main__.py` (dev server convenience).
 - Modify: `src/serve/app.py` (app factory wiring, static mount, health).
 - Tests: `tests/contract/test_pages.py` (dashboard/health render, static assets 200, CSRF cookie set).
 - `/health` returns DB/Redis/token-present booleans only.

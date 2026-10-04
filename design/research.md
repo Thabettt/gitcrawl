@@ -2,6 +2,8 @@
 
 **Date**: 2026-09-29 (sources accessed 2026-09-29; numbers "as of" that date, re-verify quarterly). Each decision cites its finding; full URLs live in the finding cited. For the narrative behind these decisions, see `how-the-data-flows.md`.
 
+**The one-paragraph version**: this file is the decision record distilled from the findings — what we chose, why, and what we rejected. Read it as the rules of the build: dual discovery, immutable IDs, per-bucket pacing, live-only freshness, cost-ordered enrichment, and the legal invariants. Where a later ruling superseded a decision, the ruling wins and `../docs/development-log.md` is the record.
+
 ## D1. Dual discovery: sharded search + `since` scan + org enum (not search-only)
 
 - Sharded `GET /search/repositories` (`created:` bisect to <1000 fetchable and <<4000 scanned, `per_page=100`, `Link` verbatim) is the only path for *filtered* queries — but unfiltered cross-GitHub backfill via `created:`-bisect costs ~1,111 hr/PAT vs `GET /repositories?since=` at ~400 hr/PAT (2.8×), plus scan distortion (`findings/02 §6`, `05` A1/A6, efficiency review C2).

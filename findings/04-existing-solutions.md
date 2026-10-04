@@ -1,29 +1,34 @@
 # 04 — Existing Solutions Using Search APIs (Landscape, Pros/Cons, Recommendations)
 
-> Read after `01–03` when choosing build-vs-borrow. Feeds `06 §5` (mirror fields) and `06 §8` (dual-path architecture).
-> Background: you don't have to crawl from zero — official surfaces (`gh`, REST, GraphQL), SDKs, dataset mirrors (GH Archive, SEART GHS, ecosyste.ms), code-search indexes (Sourcegraph), and paid wrappers each solve a slice (live discovery, history, enrichment, code-content) with different freshness, cost, and ToS constraints.
-> Goal: an honest landscape with pros/cons, a comparison table, and (a)/(b)/(c)/(d) recommendations — converging on the gitcrawl pattern: sharded REST discover → local DB → GraphQL/ecosyste.ms enrich (SEART-style), with burst vendors only for one-offs.
+**Read this after `01–03` when choosing build-vs-borrow.** Feeds `06 §5` (mirror fields) and `06 §8` (dual-path architecture).
 
-> Research date: 2026-09-29. Bias 2025–2026 docs/changelogs/activity. Scope: repo-discovery at scale (gitcrawl use-case).
+**The one-paragraph version**: you don't have to crawl from zero. Official surfaces (`gh`, REST, GraphQL), SDKs, dataset mirrors (GH Archive, SEART GHS, ecosyste.ms), code-search indexes (Sourcegraph), and paid wrappers each solve one slice of the problem — live discovery, history, enrichment, or code content — with different freshness, cost, and terms-of-service constraints. This file surveys them honestly, compares them in one table, and ends with (a)/(b)/(c)/(d) recommendations. The conclusion: for a continuous crawl, copy the SEART pattern — sharded REST discovery → local database → GraphQL/ecosyste.ms enrichment — and use burst vendors only for one-offs.
+
+> **Research date**: 2026-09-29. Bias 2025–2026 docs/changelogs/activity. Scope: repo-discovery at scale (the gitcrawl use-case).
 
 ## 1. Official GitHub surfaces
 
 ### 1.1 GitHub Web Search UI
-`https://github.com/search?q=...&type=repositories` + Advanced search (docs: https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories, accessed 2026-09-29). Same qualifiers as API. Internal search (Blackbird for code — https://github.blog/engineering/architecture-optimization/the-technology-behind-githubs-new-code-search/), web-only. Must be logged in for code. No bulk export; scraping violates ToS expectations (https://docs.github.com/site-policy/github-terms/github-terms-of-service). Best for: prototyping qualifiers before coding. Free/proprietary.
+
+`https://github.com/search?q=...&type=repositories` + Advanced search (docs: https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories, accessed 2026-09-29). Same qualifiers as the API. The code side is internal (Blackbird — https://github.blog/engineering/architecture-optimization/the-technology-behind-githubs-new-code-search/), web-only, and requires login. No bulk export; scraping violates ToS expectations (https://docs.github.com/site-policy/github-terms/github-terms-of-service). Best for: prototyping qualifiers before coding. Free/proprietary.
 
 ### 1.2 GitHub CLI `gh search repos`
-Thin CLI over REST (manual: https://cli.github.com/manual/gh_search_repos; source: https://github.com/cli/cli/blob/trunk/pkg/cmd/search/repos/repos.go, both accessed 2026-09-29). Flags mirror qualifiers: `--language`, `--stars`, `--topic`, `--created`, `--archived`, `--limit 1..1000`, `--sort stars|forks|updated`, `--json`, `--web`. Inherits 30/min auth. `SearchMaxResults=1000` enforced client-side. Strengths: zero-code, pipeable to `jq`, good for cron prototypes. Weaknesses: same 1000-cap, no date-splitting/checkpointing. Best for one-off discovery. OSS MIT `cli/cli`, very active.
+
+A thin CLI over REST (manual: https://cli.github.com/manual/gh_search_repos; source: https://github.com/cli/cli/blob/trunk/pkg/cmd/search/repos/repos.go, both accessed 2026-09-29). Flags mirror qualifiers: `--language`, `--stars`, `--topic`, `--created`, `--archived`, `--limit 1..1000`, `--sort stars|forks|updated`, `--json`, `--web`. Inherits 30/min auth. `SearchMaxResults=1000` enforced client-side. Strengths: zero-code, pipeable to `jq`, good for cron prototypes. Weaknesses: same 1000-cap, no date-splitting/checkpointing. Best for one-off discovery. OSS MIT `cli/cli`, very active.
 
 ### 1.3 GitHub REST `GET /search/repositories`
-Canonical discovery (ref: https://docs.github.com/en/rest/search/search, accessed 2026-09-29): `q`, `sort` (stars|forks|help-wanted-issues|updated), `order`, `per_page` max 100, `page` max 10 → 1000 total. Auth 30/min, unauth 10/min (code separate 10/min auth-required; rate docs: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api). Max 4000 scanned, `total_count` approximate, `incomplete_results` on timeout. Beyond 1000 → `422 "Only the first 1000..."` (measured 2026-09-13: https://saas-diary.com/tech-log/github-search-api-422-first-1000-results-only/). Workaround: narrow via `created:`/`stars:` intervals recursively, verify `sum(shards)==total`. Strengths: rich qualifiers, stable versioning (`2022-11-28` → `2026-03-10`; versions: https://docs.github.com/en/rest/about-the-rest-api/api-versions). Weaknesses: 7 shards × 10 pages = 70 calls ≈ 3 min minimum per broad query; `total_count` unstable; no history. Best for authoritative live discovery — gitcrawl shard strategy builds on this. Free (PAT, no scope for public).
+
+The canonical discovery path (ref: https://docs.github.com/en/rest/search/search, accessed 2026-09-29): `q`, `sort` (stars|forks|help-wanted-issues|updated), `order`, `per_page` max 100, `page` max 10 → 1000 total. Auth 30/min, unauth 10/min (code separate 10/min auth-required; rate docs: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api). Max 4000 scanned, `total_count` approximate, `incomplete_results` on timeout. Beyond 1000 → `422 "Only the first 1000..."` (measured 2026-09-13: https://saas-diary.com/tech-log/github-search-api-422-first-1000-results-only/). Workaround: narrow via `created:`/`stars:` intervals recursively, verify `sum(shards)==total`. Strengths: rich qualifiers, stable versioning (`2022-11-28` → `2026-03-10`; versions: https://docs.github.com/en/rest/about-the-rest-api/api-versions). Weaknesses: 7 shards × 10 pages = 70 calls ≈ 3 min minimum per broad query; `total_count` unstable; no history. Best for authoritative live discovery — gitcrawl's shard strategy builds on this. Free (PAT, no scope for public).
 
 ### 1.4 GitHub GraphQL `search(type:REPOSITORY, query:)`
-Same index, field-selectable; `repositoryCount`, `edges{node{...}}`, max 100/page, max 1000 total. Auth required. Points model: PAT 5000/hr (10k GHE Cloud org app), App install 5000–12500/hr, Actions `GITHUB_TOKEN` 1000/hr, min 1/query, scales with `first/last` fan-out; secondary 2000 pts/min; 2025-09-01 single-query resource caps → partials on large `first`+nesting. Strengths: avoids over-fetch, `rateLimit{cost,remaining}` introspectable, one-shot enrichment. Weaknesses: same 1000-cap, cost math punishes `first:100`+nested connections. Best for metadata enrichment (SEART GHS uses GraphQL exclusively). Free/proprietary.
+
+The same index, but you choose the fields; `repositoryCount`, `edges{node{...}}`, max 100/page, max 1000 total. Auth required. Points model: PAT 5000/hr (10k GHE Cloud org app), App install 5000–12500/hr, Actions `GITHUB_TOKEN` 1000/hr, min 1/query, scales with `first/last` fan-out; secondary 2000 pts/min; the 2025-09-01 single-query resource caps → partials on large `first`+nesting. Strengths: avoids over-fetch, `rateLimit{cost,remaining}` introspectable, one-shot enrichment. Weaknesses: same 1000-cap, cost math punishes `first:100`+nested connections. Best for metadata enrichment (SEART GHS uses GraphQL exclusively). Free/proprietary.
 
 ### 1.5 Code Search (legacy REST vs Blackbird web-only)
+
 Legacy `/search/code`: keyword + `language:/extension:/in:file`, 100/page, best-match only (sort deprecated 2023-04-10), auth mandatory 10/min. New Blackbird (Rust, 115TB→25TB index, 15.5B docs beta): `github.com/search?type=code` regex/boolean/`symbol:/path:` — **no public REST parity**. Indexed subset only (default branch, <384KB, UTF-8, <500k files/repo, active last year, forks only if stars>parent+push, archived excluded); web capped 100 (5 pages); ≤1000 chars. Best for manual spot checks; at scale use Sourcegraph/grep.app or BigQuery mirrors. Free w/ login, closed-source (blog 2023-02-06).
 
-## 2. SDKs / wrappers (inherit limits)
+## 2. SDKs / wrappers (they inherit every limit)
 
 | SDK | Lang | Stars/activity | Strengths | Weaknesses | Best for |
 |---|---|---|---|---|---|
@@ -32,42 +37,50 @@ Legacy `/search/code`: keyword + `language:/extension:/in:file`, 100/page, best-
 | go-github | Go | 11.3k★ 2.6k forks v92 | Typed `RateLimitError` vs `AbuseRateLimitError`, `SleepUntil...`, iterators, `go-github-ratelimit` | Still 1000-cap; GraphQL via separate lib | Go continuous crawler |
 | octocrab | Rust | 1349★ v0.49.7 2026-03-30 | Async, `search` module, raw HTTP escape hatch | Typed API behind GitHub; smaller community | Rust crawler |
 
-No SDK bypasses caps — they smooth retries only.
+No SDK bypasses the caps — they smooth retries only.
 
 ## 3. Crawling / dataset tools
 
 ### 3.1 GHTorrent — DEAD
-MySQL/Mongo mirror, stopped ~2019–2021, `ghtorrent.org` down/hijacked. Only legacy reproducibility. BigQuery snapshot frozen 2019-06.
+
+A MySQL/Mongo mirror that stopped updating around 2019–2021; `ghtorrent.org` is down/hijacked. Useful only for legacy reproducibility. Its BigQuery snapshot froze in 2019-06.
 
 ### 3.2 GH Archive + BigQuery — historical stream, not search
-Hourly `*.json.gz` since 2011 (`igrigorik/gharchive.org`) + BigQuery. Polls `/events` pages 1–3 with ETag, not search API. Oct 2025 caching bug dropped to ~18k rows/day (vs 2.7M, #312); May 2025 completeness drop (#310). **Payload cliff:** 2025-08-08 changelog (https://github.blog/changelog/2025-08-08-upcoming-changes-to-github-events-api-payloads/) → brownout 2025-09-08 → permanent 2025-10-07 removed slow fields: `PullRequestEvent.pull_request` 48→5 fields, `PushEvent.commits/size` removed; PR share 8%→<1% 2026 samples. Upside: prior latency up to 8h → near-realtime + faster endpoints (trade IDs survive, rehydrate via REST). Strengths: only global history, no 1000-cap, hourly, SQL. Weaknesses: events ≠ criteria search; post-Oct-2025 needs per-repo refetch. Best for backfill/trends, complement to live search. OSS crawler, data public + BQ query cost (BQ 2026: $6.25/TiB US, 1TiB/mo free, 10MB minimum per query/table, `LIMIT` does NOT reduce scan — dry-run + prune with bare `WHERE event_date=` or die; https://cloud.google.com/bigquery/pricing).
+
+Hourly `*.json.gz` since 2011 (`igrigorik/gharchive.org`) + BigQuery. It polls `/events` pages 1–3 with ETag, not the search API. An Oct 2025 caching bug dropped it to ~18k rows/day (vs 2.7M, #312); May 2025 saw a completeness drop (#310). **The payload cliff:** the 2025-08-08 changelog (https://github.blog/changelog/2025-08-08-upcoming-changes-to-github-events-api-payloads/) → brownout 2025-09-08 → permanent 2025-10-07 removed slow fields: `PullRequestEvent.pull_request` 48→5 fields, `PushEvent.commits/size` removed; PR share 8%→<1% in 2026 samples. Upside: prior latency up to 8h → near-realtime + faster endpoints (trade IDs survive, rehydrate via REST). Strengths: the only global history, no 1000-cap, hourly, SQL. Weaknesses: events ≠ criteria search; post-Oct-2025 needs per-repo refetch. Best for backfill/trends, a complement to live search. OSS crawler, data public + BQ query cost (BQ 2026: $6.25/TiB US, 1TiB/mo free, 10MB minimum per query/table, `LIMIT` does NOT reduce scan — dry-run + prune with bare `WHERE event_date=` or die; https://cloud.google.com/bigquery/pricing).
 
 ### 3.3 GrimoireLab / Perceval — enrichment, not discovery
-CHAOSS Python: Perceval `github` backends → SirMordred → ES/MariaDB. REST+git, PAT/App tokens, `from-date` incremental, identity merging. 322★, Perceval 1.4.6 (2026-03-03). You feed repo list; no 1000-cap solver; heavyweight. Best for longitudinal per-repo enrichment. GPL-3.0.
+
+CHAOSS Python: Perceval `github` backends → SirMordred → ES/MariaDB. REST+git, PAT/App tokens, `from-date` incremental, identity merging. 322★, Perceval 1.4.6 (2026-03-03). You feed it a repo list; it does not solve the 1000-cap and is heavyweight. Best for longitudinal per-repo enrichment. GPL-3.0.
 
 ### 3.4 Boa + MSR — frozen corpus
-DSL over TB snapshots. No rate limits, reproducible, but stale, fixed langs, no live filter. Best for frozen code-content studies. Academic.
 
-### 3.5 SEART / GHS + Data Hub — closest prior art to gitcrawl
-Spring Boot crawler mines GitHub for repos **≥10 stars** into MySQL, serves REST+UI (`seart-ghs.si.usi.ch`); Data Hub shallow-clones ≥10★ Java/Python (316k repos, 22M files, 2024 paper) at ~1.3k/day, tree-sitter parsed. **GraphQL**, multi-PAT rotation (`ghs.github.tokens`), `minimum-stars=10`, `start-date=2008-01-01`, `delay PT6H`, Docker Compose + ≤15-day dumps. Solves 1000-cap by never re-searching broadly — crawl once, query locally. Weaknesses: ≥10★ floor, Java/Python code focus, MySQL ops. **Template for gitcrawl: crawl → store → serve.** MIT, self-hostable, active v1.17.1 (2024–2025), paper arxiv 2409.18658.
+A DSL over TB-scale snapshots. No rate limits, reproducible, but stale, fixed languages, no live filtering. Best for frozen code-content studies. Academic.
+
+### 3.5 SEART / GHS + Data Hub — the closest prior art to gitcrawl
+
+A Spring Boot crawler mines GitHub for repos **≥10 stars** into MySQL, serving REST+UI (`seart-ghs.si.usi.ch`); the Data Hub shallow-clones ≥10★ Java/Python (316k repos, 22M files, 2024 paper) at ~1.3k/day, tree-sitter parsed. **GraphQL**, multi-PAT rotation (`ghs.github.tokens`), `minimum-stars=10`, `start-date=2008-01-01`, `delay PT6H`, Docker Compose + ≤15-day dumps. It solves the 1000-cap by never re-searching broadly — crawl once, query locally. Weaknesses: ≥10★ floor, Java/Python code focus, MySQL ops. **Template for gitcrawl: crawl → store → serve.** MIT, self-hostable, active v1.17.1 (2024–2025), paper arxiv 2409.18658.
 
 ## 4. Third-party discovery
 
 ### 4.1 Sourcegraph — scalable code→repo
-Zoekt index, streaming SSE API, `src-cli`, MCP (`list_repos` to 10k, `keyword_search`). Syntax `repo:`, `lang:`, `select:repo`, `count:all`, `fork:yes`, `archived:only`, `repo:has.topic()`. Public small queries unauth; token for `count:all`; self-hosted bounded by corpus. Only scalable regex/symbol code search; `select:repo` turns hits into discovery. Corpus ≠ all GitHub (lag); metadata weaker than stars/pushed. Best for code-content + code-signal discovery. Freemium, `zoekt` OSS.
 
-### 4.2 grep.app — fastest zero-setup grep
-Regex over ~1M+ repos, free, throttled heavy use. No star/date filters, smaller index, no SLA. Best for seed lists by import/string. Free (Vercel).
+A Zoekt index, streaming SSE API, `src-cli`, MCP (`list_repos` to 10k, `keyword_search`). Syntax `repo:`, `lang:`, `select:repo`, `count:all`, `fork:yes`, `archived:only`, `repo:has.topic()`. Public small queries need no auth; a token unlocks `count:all`; self-hosted is bounded by your corpus. The only scalable regex/symbol code search; `select:repo` turns hits into discovery. Corpus ≠ all GitHub (lag); metadata weaker than stars/pushed. Best for code-content + code-signal discovery. Freemium, `zoekt` OSS.
+
+### 4.2 grep.app — the fastest zero-setup grep
+
+Regex over ~1M+ repos, free, throttled on heavy use. No star/date filters, smaller index, no SLA. Best for seed lists by import/string. Free (Vercel).
 
 ### 4.3 Libraries.io / Ecosyste.ms / deps.dev — enrichment
-- **Libraries.io API:** package→repo, deps/dependents, needs key. Freemium (Tidelift).
-- **Ecosyste.ms:** **343M repos (336M GitHub) / 406M manifests / 25B deps as of 2026** (was 287M/1952 hosts), OpenAPI 3.0.1, CC-BY-SA-4.0, mostly public. Closest bulk metadata without GitHub tokens. Polite-pool: 5000 req/hr/IP, join via `?mailto=you@x` / `User-Agent: mailto:` for prioritized latency (https://blog.ecosyste.ms/2025/09/01/rate-limiting-the-right-way.html); `POST /packages/bulk_lookup` for batch; zero-token local path via `npx @ecosyste-ms/mcp` (bundled SQLite). Timeline 7B events / Commits 889M indexes.
-- **deps.dev v3:** package versions + OSV advisories + Scorecard; project stars/forks only for package-associated projects. Free (Google). Batch-first: `GetVersionBatch`/`GetProjectBatch` (1 req for N identifiers) + hash→versions lookup; 2025 coverage jumps (RubyGems, Gradle Plugins, Sigstore). **Note: `criticality_score` bulk feed (GCS+BQ) is DEAD since 2026-08-29 (infra down since 2026-05) — use the Scorecard weekly feed instead** (https://github.com/ossf/criticality_score/blob/main/README.md).
-Package-centric — can't discover non-packaged repos. Best for dependency/metadata enrichment.
+
+- **Libraries.io API:** package→repo, deps/dependents, needs a key. Freemium (Tidelift).
+- **Ecosyste.ms:** **343M repos (336M GitHub) / 406M manifests / 25B deps as of 2026** (was 287M/1952 hosts), OpenAPI 3.0.1, CC-BY-SA-4.0, mostly public. The closest thing to bulk metadata without GitHub tokens. Polite-pool: 5000 req/hr/IP; join via `?mailto=you@x` / `User-Agent: mailto:` for prioritized latency (https://blog.ecosyste.ms/2025/09/01/rate-limiting-the-right-way.html); `POST /packages/bulk_lookup` for batch; a zero-token local path via `npx @ecosyste-ms/mcp` (bundled SQLite). Timeline 7B events / Commits 889M indexes.
+- **deps.dev v3:** package versions + OSV advisories + Scorecard; project stars/forks only for package-associated projects. Free (Google). Batch-first: `GetVersionBatch`/`GetProjectBatch` (1 req for N identifiers) + hash→versions lookup; 2025 coverage jumps (RubyGems, Gradle Plugins, Sigstore). **Note: the `criticality_score` bulk feed (GCS+BQ) is DEAD since 2026-08-29 (infra down since 2026-05) — use the Scorecard weekly feed instead** (https://github.com/ossf/criticality_score/blob/main/README.md).
+- Package-centric — it can't discover non-packaged repos. Best for dependency/metadata enrichment.
 
 ## 5. Commercial / scraping — ToS notes
 
-> ToS: **Scraping = automated extraction via bot/crawler, NOT via API** (§C.5). API = §H (no abuse, suspension at discretion). Both forbid spam/selling personal info, require Privacy compliance. Researchers: public non-personal only with open-access outputs. Prefer API+tokens; HTML scraping only for public non-personal metadata, never PII.
+> ToS: **Scraping = automated extraction via bot/crawler, NOT via API** (§C.5). API = §H (no abuse, suspension at discretion). Both forbid spam/selling personal info and require Privacy compliance. Researchers: public non-personal only, with open-access outputs. Prefer API+tokens; HTML scraping only for public non-personal metadata, never PII.
 
 | Vendor | Rate/cost (Sep 2026) | Strengths | Weaknesses |
 |---|---|---|---|
@@ -75,7 +88,7 @@ Package-centric — can't discover non-packaged repos. Best for dependency/metad
 | Bright Data | 5k free; $1.5/1k; $499/mo 384k (2026-09-15) | No proxy ops, webhook/S3 | 1M repos ≈ $1300–1500; still 1000-cap/query |
 | Apify `bovi` / `dami_studio` | $2/1k repos $3/1k profiles / **$0.90/1k flat** + compute | Cheapest managed, full syntax, 429 handling | Still 1000/query — split yourself |
 
-Verdict: useful for bursty one-offs, strictly pricier than PAT rotation for continuous crawl, no cap escape.
+Verdict: useful for bursty one-offs, strictly pricier than PAT rotation for a continuous crawl, and no cap escape.
 
 ## 6. Comparison table
 
@@ -99,18 +112,18 @@ Verdict: useful for bursty one-offs, strictly pricier than PAT rotation for cont
 
 ## 7. Recommendations
 
-**(a) One-off:** Web UI prototype → `gh search repos --limit 100 --json` / Octokit snippet. Code-signal: grep.app → Sourcegraph `select:repo`. Burst only: Apify `dami_studio` $0.90/1k.
+**(a) One-off:** prototype in the Web UI → `gh search repos --limit 100 --json` / an Octokit snippet. For code signals: grep.app → Sourcegraph `select:repo`. Burst only: Apify `dami_studio` at $0.90/1k.
 
-**(b) Continuous crawl like gitcrawl — copy SEART GHS:** 1) **Discover:** sharded REST (`created:` bisect until `<1000`, sum==parent, 100/pg, `X-RateLimit` headers, 422→split, 403/429→backoff, multi-PAT, 6h cadence). 2) **Store:** Postgres/MySQL (PK owner/name, stars, pushedAt, license, topics) + Compose + dumps. 3) **Enrich:** GraphQL batched, GH Archive trends (accept field loss), ecosyste.ms/deps.dev linkage. Avoid GHTorrent (dead), pure Apify/Bright at scale (cost), HTML PII scrape (ToS).
+**(b) Continuous crawl like gitcrawl — copy SEART GHS:** 1) **Discover:** sharded REST (`created:` bisect until `<1000`, sum==parent, 100/pg, `X-RateLimit` headers, 422→split, 403/429→backoff, multi-PAT, 6h cadence). 2) **Store:** Postgres/MySQL (PK owner/name, stars, pushedAt, license, topics) + Compose + dumps. 3) **Enrich:** GraphQL batched, GH Archive trends (accept the field loss), ecosyste.ms/deps.dev linkage. Avoid GHTorrent (dead), pure Apify/Bright at scale (cost), and HTML PII scraping (ToS).
 
-**(c) Code-content:** Official API can't at scale → Sourcegraph streaming/MCP + `select:repo` → feed repo list; grep.app seeds; Boa frozen only.
+**(c) Code-content:** the official API can't do it at scale → Sourcegraph streaming/MCP + `select:repo` to produce a repo list; grep.app for seeds; Boa only for frozen corpora.
 
 **(d) Enrichment:** ecosyste.ms Repos/Packages first (343M repos as of 2026, open, no burn), deps.dev v3 Scorecard/OSV, Libraries.io dependents, GrimoireLab for longitudinal issues/PRs.
 
 ## 8. Sources (all accessed 2026-09-29 unless noted — full clickable URLs)
 
 - REST Search (`/search/repositories`, 30/min auth, 10/min unauth, 1000 results, 4000 scanned): https://docs.github.com/en/rest/search/search (accessed 2026-09-29)
-- Rate limits for REST (primary + secondary) : https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api (accessed 2026-09-29); Rate Limit endpoint (`resources.search/code_search/core`): https://docs.github.com/en/rest/rate-limit/rate-limit (accessed 2026-09-29)
+- Rate limits for REST (primary + secondary): https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api (accessed 2026-09-29); Rate Limit endpoint (`resources.search/code_search/core`): https://docs.github.com/en/rest/rate-limit/rate-limit (accessed 2026-09-29)
 - GraphQL rate/query limits (5000 pts/hr, 2000/min secondary): https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api (accessed 2026-09-29)
 - GraphQL resource limits changelog 2025-09-01: https://github.blog/changelog/2025-09-01-graphql-api-resource-limits/ (accessed 2026-09-29)
 - REST vs GraphQL guidance 2025-04-22: https://github.blog/developer-skills/github/exploring-github-cli-how-to-interact-with-githubs-graphql-api-endpoint/ (accessed 2026-09-29)
@@ -130,7 +143,7 @@ Verdict: useful for bursty one-offs, strictly pricier than PAT rotation for cont
 - grep.app: https://grep.app (accessed 2026-09-29; Vercel-owned, free UI)
 - ecosyste.ms API: https://ecosyste.ms/api (accessed 2026-09-29); Repos: https://repos.ecosyste.ms (accessed 2026-09-29); Packages: https://packages.ecosyste.ms (accessed 2026-09-29); docs: https://docs.ecosyste.ms/ (accessed 2026-09-29); rate-limit polite-pool (2025-09-01): https://blog.ecosyste.ms/2025/09/01/rate-limiting-the-right-way.html (accessed 2026-09-29); MCP zero-token local: https://github.com/ecosyste-ms/mcp (accessed 2026-09-29)
 - deps.dev v3 + batch API: https://docs.deps.dev/api/v3/ (accessed 2026-09-29); https://blog.deps.dev/api-v3/index.html (2024-03-11, accessed 2026-09-29)
-- `criticality_score` bulk feed DEAD (GCS+BQ killed 2026-08-29; use Scorecard weekly feed): https://github.com/ossf/criticality_score/blob/main/README.md (accessed 2026-09-29); Scorecard repo: https://github.com/ossf/scorecard (accessed 2026-09-29)
+- `criticality_score` bulk feed DEAD (GCS+BQ killed 2026-08-29; use the Scorecard weekly feed): https://github.com/ossf/criticality_score/blob/main/README.md (accessed 2026-09-29); Scorecard repo: https://github.com/ossf/scorecard (accessed 2026-09-29)
 - BQ pricing 2026 ($6.25/TiB, 10MB min, LIMIT doesn't prune): https://cloud.google.com/bigquery/pricing (accessed 2026-09-29)
 - DuckDB hourly-poller template (T-3h safety): https://github.com/Harishankar1988/gharchive-duckdb-pipeline (accessed 2026-09-29)
 - Libraries.io API: https://libraries.io/api (accessed 2026-09-29); repo: https://github.com/librariesio/libraries.io (accessed 2026-09-29)
