@@ -256,6 +256,10 @@ class AppSettings(Base):
         CheckConstraint(
             "limiter_max_concurrent BETWEEN 1 AND 100", name="app_settings_concurrency"
         ),
+        CheckConstraint(
+            "discovery_concurrency BETWEEN 1 AND 64",
+            name="app_settings_discovery_concurrency",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
@@ -274,6 +278,9 @@ class AppSettings(Base):
     )
     limiter_max_concurrent: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("10")
+    )
+    discovery_concurrency: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("32")
     )
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")

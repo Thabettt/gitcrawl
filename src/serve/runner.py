@@ -64,6 +64,7 @@ class RunnerConfig:
     graphql_batch: bool = True
     graphql_batch_size: int = 20
     concurrency: int = 1
+    discovery_concurrency: int = 32
 
 
 def runner_config_from(settings: RunSettings) -> RunnerConfig:
@@ -76,6 +77,7 @@ def runner_config_from(settings: RunSettings) -> RunnerConfig:
         graphql_batch=settings.graphql_batch,
         graphql_batch_size=settings.graphql_batch_size,
         concurrency=min(settings.limiter_max_concurrent, 20),
+        discovery_concurrency=settings.discovery_concurrency,
     )
 
 

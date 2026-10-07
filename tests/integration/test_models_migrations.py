@@ -7,6 +7,7 @@ from sqlalchemy import CHAR, BigInteger, Integer, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from store.models import Base
 
@@ -135,6 +136,7 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "graphql_batch": False,
         "graphql_batch_size": False,
         "limiter_max_concurrent": False,
+        "discovery_concurrency": False,
         "updated_at": False,
     },
     "corpora": {
@@ -291,9 +293,29 @@ def test_server_defaults(migrated: Engine):
         ("shards", "updated_at"): "now()",
         ("audit_log", "ts"): "now()",
         ("corpora", "frozen_at"): "now()",
+        ("app_settings", "discovery_concurrency"): "32",
     }
     for (table, column), fragment in expected.items():
         assert fragment in (_columns(migrated, table)[column]["default"] or "")
+
+
+def test_discovery_concurrency_check_constraint(migrated: Engine):
+    with migrated.begin() as connection:
+        connection.execute(
+            text("INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
+        )
+    with migrated.connect() as connection:
+        transaction = connection.begin()
+        connection.execute(text("UPDATE app_settings SET discovery_concurrency = 1 WHERE id = 1"))
+        connection.execute(text("UPDATE app_settings SET discovery_concurrency = 64 WHERE id = 1"))
+        transaction.rollback()
+    for value in (0, 65):
+        with pytest.raises(IntegrityError):
+            with migrated.begin() as connection:
+                connection.execute(
+                    text("UPDATE app_settings SET discovery_concurrency = :value WHERE id = 1"),
+                    {"value": value},
+                )
 
 
 def test_foreign_keys(migrated: Engine):

@@ -2,7 +2,7 @@
 
 **Date**: 2026-10-04. Companions: `corpus-building-efficient-engineering.md` (the meters), `console-ux-redesign.md` §4.9 (the page), `docs/environment.md` (operations), `../docs/superpowers/plans/2026-10-02-console-settings.md` (the implementation plan). Platform numbers re-verified 2026-10-04 against GitHub's docs.
 
-**Purpose of this document**: the Limits page (`/settings`, System → Limits) has eight fields. Until now, nobody had written down where their values come from — the defaults were inherited from the console build, the bounds were round ceilings, and the "maximum" preset pushed every dial to its limit at once, which is not an operating point any real run should use. This file derives each limit from the rate budget, defines three coherent presets, and states the rules that keep a run from being configured into nonsense.
+**Purpose of this document**: the Limits page (`/settings`, System → Limits) has nine fields. Until now, nobody had written down where their values come from — the defaults were inherited from the console build, the bounds were round ceilings, and the "maximum" preset pushed every dial to its limit at once, which is not an operating point any real run should use. This file derives each limit from the rate budget, defines three coherent presets, and states the rules that keep a run from being configured into nonsense.
 
 ---
 
@@ -12,7 +12,7 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 
 ---
 
-## 1. The eight fields, in plain words
+## 1. The nine fields, in plain words
 
 | Field (code name) | Plain label | Default | Allowed (bounds) | What it bounds |
 |---|---|---|---|---|
@@ -24,14 +24,16 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 | `graphql_batch` | Batch repo lookups | on | on/off | Whether GraphQL batching is used (off = one REST call per repo) |
 | `graphql_batch_size` | Repos per batch | 20 | 1–20 | Aliases per GraphQL query; GitHub cuts off large batches |
 | `limiter_max_concurrent` | Simultaneous requests | 10 | 1–100 | In-flight requests per endpoint/token |
+| `discovery_concurrency` | Discovery workers | 32 | 1–64 | Discovery pages fetched in parallel (one GraphQL connection each) |
 
 **Two numbers, two jobs.** The *Allowed* column is a fence — the most the field will accept, there to stop typos and keep a run sane. The *Default* column is where the app starts. Neither is a recommendation for a big run; the presets in §5 are. The old "maximum" preset confused the three by pushing every field to its fence at once.
 
 ## 2. What backs them today (the honest audit)
 
-- **Defaults (10 / 500 / 200 / 100 / 3,600 / on / 20 / 10)** — inherited, not derived. The settings plan states it explicitly: "defaults equal today's values, so nothing changes until an operator edits." They are sensible interactive values (a run measured in minutes), but no document derived them from the meters. They survive this audit: keep them.
+- **Defaults (10 / 500 / 200 / 100 / 3,600 / on / 20 / 10 / 32)** — inherited, not derived. The settings plan states it explicitly: "defaults equal today's values, so nothing changes until an operator edits." They are sensible interactive values (a run measured in minutes), but no document derived them from the meters. They survive this audit: keep them.
 - **`graphql_batch_size` 1–20** — backed. GitHub's GraphQL resource caps punish large `first` + nesting; the batch engine's own design says 20–50, and the project uses 20. The bound matches the implementation (`MAX_BATCH_SIZE=20`) and the DB check constraint. Env overrides are clamped to the bound at settings load: an override above 20 clamps down to 20, and a non-positive value falls back to the default.
 - **`limiter_max_concurrent` 1–100** — backed, but read it carefully: 100 is GitHub's *documented hard ceiling*, shared across REST and GraphQL. It is not a target. The page's own help text says so. The operational value is ~10 per endpoint per token (900 points/min ÷ ~700 ms p50). Keep the bound at 100 (platform truth); never preset it to 100. Hydration itself runs at `min(limiter_max_concurrent, 20)` workers, so raising the setting past 20 does not raise hydration parallelism.
+- **`discovery_concurrency` 1–64** — backed by the 2026-10-08 measurement: GraphQL discovery rides the points meter with one page per connection, and 32 pages in flight was the measured operating point (`corpus-building-efficient-engineering.md` §9.4) — comfortably under GitHub's 100-concurrent ceiling.
 - **`request_deadline_seconds` 60–86,400** — a product choice: 24 hours is the longest a single run may take. Fine.
 - **`max_shards` 1–10,000 and the three count limits 1–1,000,000** — round safety ceilings. Not wrong as guardrails, but they are not "proper limits": they ignore the rate budget entirely. The proper operating values are derived below.
 

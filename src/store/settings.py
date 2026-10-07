@@ -20,6 +20,7 @@ SETTINGS_ENV: Mapping[str, str] = {
     "graphql_batch": "GITCRAWL_GRAPHQL_BATCH",
     "graphql_batch_size": "GITCRAWL_GRAPHQL_BATCH_SIZE",
     "limiter_max_concurrent": "GITCRAWL_MAX_CONCURRENT",
+    "discovery_concurrency": "GITCRAWL_DISCOVERY_CONCURRENCY",
 }
 
 _BOOL_FIELDS = frozenset({"graphql_batch"})
@@ -35,6 +36,7 @@ class RunSettings:
     graphql_batch: bool = True
     graphql_batch_size: int = 20
     limiter_max_concurrent: int = 10
+    discovery_concurrency: int = 32
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)

@@ -1408,13 +1408,21 @@ def test_runner_config_from_maps_settings(clean: Engine):
     from store.settings import update_run_settings
 
     settings = update_run_settings(
-        clean, {"max_shards": 1, "max_candidates": 2, "max_hydrate": 1, "graphql_batch": False}
+        clean,
+        {
+            "max_shards": 1,
+            "max_candidates": 2,
+            "max_hydrate": 1,
+            "graphql_batch": False,
+            "discovery_concurrency": 48,
+        },
     )
     config = runner_config_from(settings)
     assert config.max_shards == 1
     assert config.max_candidates == 2
     assert config.max_hydrate == 1
     assert config.graphql_batch is False
+    assert config.discovery_concurrency == 48
 
 
 def test_build_deps_honors_max_concurrent(clean: Engine):

@@ -10,6 +10,7 @@ _BOUNDS: dict[str, tuple[int, int]] = {
     "request_deadline_seconds": (60, 86_400),
     "graphql_batch_size": (1, 20),
     "limiter_max_concurrent": (1, 100),
+    "discovery_concurrency": (1, 64),
 }
 
 _CORPUS_VALUES: dict[str, object] = {
@@ -20,6 +21,7 @@ _CORPUS_VALUES: dict[str, object] = {
     "request_deadline_seconds": 86_400,
     "graphql_batch_size": 20,
     "limiter_max_concurrent": 10,
+    "discovery_concurrency": 32,
     "graphql_batch": True,
 }
 

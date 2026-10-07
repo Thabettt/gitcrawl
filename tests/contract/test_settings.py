@@ -97,6 +97,7 @@ def valid_form(**overrides: str) -> dict[str, str]:
         "graphql_batch": "on",
         "graphql_batch_size": "10",
         "limiter_max_concurrent": "4",
+        "discovery_concurrency": "32",
     }
     data.update(overrides)
     return data
@@ -108,6 +109,8 @@ def test_settings_page_renders_current_values(clean, tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "max_hydrate" in response.text
     assert "limiter_max_concurrent" in response.text
+    assert "discovery_concurrency" in response.text
+    assert "Discovery workers" in response.text
     assert "Run limits for new searches" in response.text
     assert "Part of System" in response.text
     assert "Search breadth (slices)" in response.text
@@ -129,7 +132,7 @@ def test_post_saves_values_and_redirects(clean, tmp_path, monkeypatch):
     token = csrf_token(client)
     response = client.post(
         "/settings",
-        data=valid_form(),
+        data=valid_form(discovery_concurrency="48"),
         headers={"x-csrf-token": token},
         follow_redirects=False,
     )
@@ -139,6 +142,7 @@ def test_post_saves_values_and_redirects(clean, tmp_path, monkeypatch):
     assert saved.max_shards == 50
     assert saved.max_hydrate == 4000
     assert saved.limiter_max_concurrent == 4
+    assert saved.discovery_concurrency == 48
 
 
 def test_pinned_fields_render_read_only_and_are_not_written(clean, tmp_path, monkeypatch):
@@ -174,6 +178,20 @@ def test_invalid_settings_are_a_local_400(clean, tmp_path, monkeypatch):
     assert "max_shards" in response.text
 
 
+@pytest.mark.parametrize("value", ["0", "65"])
+def test_discovery_concurrency_out_of_range_is_a_local_400(clean, tmp_path, monkeypatch, value):
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    token = csrf_token(client)
+    response = client.post(
+        "/settings",
+        data=valid_form(discovery_concurrency=value),
+        headers={"x-csrf-token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert "discovery_concurrency" in response.text
+
+
 def test_missing_csrf_is_403(clean, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
     response = client.post("/settings", data={"max_shards": "5"}, follow_redirects=False)
@@ -193,6 +211,7 @@ def test_save_writes_an_audit_row(clean, tmp_path, monkeypatch):
             request_deadline_seconds="3600",
             graphql_batch_size="20",
             limiter_max_concurrent="10",
+            discovery_concurrency="32",
         ),
         headers={"x-csrf-token": token},
         follow_redirects=False,
@@ -266,7 +285,7 @@ def test_pinned_candidates_conflict_with_submitted_hydrate_is_rejected(
 def test_settings_page_shows_every_allowed_range(clean, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
     body = client.get("/settings").text
-    for needle in ("1–10,000", "1–1,000,000", "60–86,400", "1–20", "1–100"):
+    for needle in ("1–10,000", "1–1,000,000", "60–86,400", "1–20", "1–100", "1–64"):
         assert needle in body
 
 
@@ -289,6 +308,7 @@ def test_set_to_corpus_build_limits_saves_the_profile(clean, tmp_path, monkeypat
         graphql_batch=True,
         graphql_batch_size=20,
         limiter_max_concurrent=10,
+        discovery_concurrency=32,
     )
     with clean.connect() as connection:
         params = connection.scalar(

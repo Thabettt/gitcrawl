@@ -206,6 +206,7 @@ shows it read-only):
 | GraphQL batching | `GITCRAWL_GRAPHQL_BATCH` | on | on |
 | Batch size | `GITCRAWL_GRAPHQL_BATCH_SIZE` | 20 | 20 |
 | Concurrency | `GITCRAWL_MAX_CONCURRENT` | 10 | 10 |
+| Discovery workers | `GITCRAWL_DISCOVERY_CONCURRENCY` | 32 | 32 |
 
 These are the values the **Set to corpus-build limits** button applies; the ranges shown on the page are safety limits, and the preset sits well inside them. The derivation (and the multi-token scale-up) lives in `design/run-limits.md`.
 
@@ -220,7 +221,7 @@ resumable.
 
 ## Migrations
 
-Current head is **`0011`**: `0010` adds the nullable `runs.progress_*` live-progress columns, and `0011` adds `progress_started_at` for the phase-relative ETA clock. Both are plain nullable column additions — no constraint or index rewrites — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
+Current head is **`0012`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, and `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64). None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
 
 ### Migration locking
 

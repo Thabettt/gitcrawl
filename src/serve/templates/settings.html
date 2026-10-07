@@ -105,6 +105,16 @@
             that ceiling is the allowed maximum, not a target. Allowed: {{ ranges["limiter_max_concurrent"] }}.</span>
           {% if "limiter_max_concurrent" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>
+        <label class="field">
+          <span class="field-label">Discovery workers</span>
+          <input class="field-input" type="number" name="discovery_concurrency"
+                 value="{{ values["discovery_concurrency"] }}"
+                 {% if "discovery_concurrency" in pinned %}readonly{% endif %}>
+          <span class="muted">How many discovery pages are fetched at once — one page per connection.
+            Together with simultaneous requests, stays well under GitHub’s ceiling of 100.
+            Allowed: {{ ranges["discovery_concurrency"] }}.</span>
+          {% if "discovery_concurrency" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
       </div>
     </section>
     <div class="form-actions">
