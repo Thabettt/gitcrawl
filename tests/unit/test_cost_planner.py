@@ -26,6 +26,8 @@ D12_TABLE = {
     "max_loc": 4,
     "min_commits": 2,
     "max_commits": 2,
+    "min_language_bytes": 2,
+    "max_language_bytes": 2,
 }
 
 

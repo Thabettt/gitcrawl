@@ -112,6 +112,7 @@ def test_settings_page_renders_current_values(clean, tmp_path, monkeypatch):
     assert "Part of System" in response.text
     assert "Search breadth (slices)" in response.text
     assert "Repos to save details for" in response.text
+    assert "safety limits" in response.text
     assert re.search(r"keep well under GitHub’s ceiling", response.text, re.IGNORECASE)
     assert '<a href="/system" aria-current="page">System</a>' in response.text
 
@@ -269,25 +270,25 @@ def test_settings_page_shows_every_allowed_range(clean, tmp_path, monkeypatch):
         assert needle in body
 
 
-def test_set_to_maximum_limits_saves_the_bounds(clean, tmp_path, monkeypatch):
+def test_set_to_corpus_build_limits_saves_the_profile(clean, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
     token = csrf_token(client)
     response = client.post(
         "/settings",
-        data={"preset": "max"},
+        data={"preset": "corpus"},
         headers={"x-csrf-token": token},
         follow_redirects=False,
     )
     assert response.status_code == 303
     assert load_run_settings(clean) == RunSettings(
-        max_shards=10_000,
-        max_candidates=1_000_000,
-        max_hydrate=1_000_000,
-        max_enrich=1_000_000,
+        max_shards=1_000,
+        max_candidates=100_000,
+        max_hydrate=100_000,
+        max_enrich=100_000,
         request_deadline_seconds=86_400,
         graphql_batch=True,
         graphql_batch_size=20,
-        limiter_max_concurrent=100,
+        limiter_max_concurrent=10,
     )
     with clean.connect() as connection:
         params = connection.scalar(
@@ -296,16 +297,16 @@ def test_set_to_maximum_limits_saves_the_bounds(clean, tmp_path, monkeypatch):
                 "WHERE token_fp = 'settings' ORDER BY id DESC LIMIT 1"
             )
         )
-    assert params["app_settings"]["after"]["max_shards"] == 10_000
+    assert params["app_settings"]["after"]["max_shards"] == 1_000
 
 
-def test_max_preset_respects_pinned_fields(clean, tmp_path, monkeypatch):
+def test_corpus_preset_respects_pinned_fields(clean, tmp_path, monkeypatch):
     monkeypatch.setenv("GITCRAWL_MAX_SHARDS", "3")
     client = healthy_client(clean, tmp_path, monkeypatch)
     token = csrf_token(client)
     response = client.post(
         "/settings",
-        data={"preset": "max"},
+        data={"preset": "corpus"},
         headers={"x-csrf-token": token},
         follow_redirects=False,
     )
@@ -316,13 +317,13 @@ def test_max_preset_respects_pinned_fields(clean, tmp_path, monkeypatch):
     assert load_run_settings(clean).max_shards == 3
 
 
-def test_max_preset_with_pinned_candidates_conflict_is_rejected(clean, tmp_path, monkeypatch):
+def test_corpus_preset_with_pinned_candidates_conflict_is_rejected(clean, tmp_path, monkeypatch):
     monkeypatch.setenv("GITCRAWL_MAX_CANDIDATES", "100")
     client = healthy_client(clean, tmp_path, monkeypatch)
     token = csrf_token(client)
     response = client.post(
         "/settings",
-        data={"preset": "max"},
+        data={"preset": "corpus"},
         headers={"x-csrf-token": token},
         follow_redirects=False,
     )

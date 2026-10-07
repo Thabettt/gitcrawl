@@ -59,26 +59,26 @@ def test_reset_returns_empty_mapping():
     assert parse_settings_form(form(reset="1")) == {}
 
 
-def test_max_preset_returns_the_upper_bounds():
-    assert parse_settings_form({"preset": "max"}) == {
-        "max_shards": 10_000,
-        "max_candidates": 1_000_000,
-        "max_hydrate": 1_000_000,
-        "max_enrich": 1_000_000,
+def test_corpus_preset_returns_the_coherent_profile():
+    assert parse_settings_form({"preset": "corpus"}) == {
+        "max_shards": 1_000,
+        "max_candidates": 100_000,
+        "max_hydrate": 100_000,
+        "max_enrich": 100_000,
         "request_deadline_seconds": 86_400,
         "graphql_batch_size": 20,
-        "limiter_max_concurrent": 100,
+        "limiter_max_concurrent": 10,
         "graphql_batch": True,
     }
 
 
-def test_max_preset_respects_pinned_fields():
+def test_corpus_preset_respects_pinned_fields():
     parsed = parse_settings_form(
-        {"preset": "max"}, pinned=frozenset({"max_shards", "graphql_batch"})
+        {"preset": "corpus"}, pinned=frozenset({"max_shards", "graphql_batch"})
     )
     assert "max_shards" not in parsed
     assert "graphql_batch" not in parsed
-    assert parsed["max_candidates"] == 1_000_000
+    assert parsed["max_candidates"] == 100_000
 
 
 def test_bounds_text_lists_every_bounded_field():

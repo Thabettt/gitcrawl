@@ -165,6 +165,7 @@ All are validated locally with actionable hints; the table says where each is en
 | `owner_country` | ISO 3166-1 alpha-2 (e.g. `DE`) | Owner location → geo resolver → confidence tier |
 | `min_geo_confidence` | `exact-iso` \| `name` \| `gazetteer-city` \| `geocoder` \| `weak` (default `gazetteer-city`) | Confidence floor for `owner_country` |
 | `min_commits` / `max_commits` | integer ≥ 0 | Hydrated default-branch commit count |
+| `min_language_bytes` / `max_language_bytes` | integer ≥ 0 | Live `/languages` primary-language byte size (one call per repo) |
 | `min_loc` / `max_loc` | integer ≥ 0 | **Recorded only — not enforceable yet**; a run using them is flagged incomplete |
 
 ### The operator console
@@ -589,6 +590,8 @@ Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests
 | [`design/plan.md`](design/plan.md), [`design/tasks.md`](design/tasks.md) | Stack decisions and task breakdown |
 | [`design/data-model.md`](design/data-model.md) | Schema rationale and indexing notes |
 | [`design/loc-dilemma.md`](design/loc-dilemma.md) | How to filter by lines of code without cloning — the LOC dilemma, measured |
+| [`design/adoption-window.md`](design/adoption-window.md) | When the agent-adoption study starts, and why commits (not repos) are the unit of exclusion |
+| [`design/run-limits.md`](design/run-limits.md) | What the Limits page fields mean, the rate-budget math behind them, and the coherent presets |
 | [`findings/00–06`](findings/00-overview.md) | Deep research on GitHub search limits, parameters, existing solutions, gaps, and the exhaustive capability matrix |
 | [`docs/development-log.md`](docs/development-log.md) | What was built, when, with which rulings and verification numbers |
 | [`docs/environment.md`](docs/environment.md) | Windows/local environment: services, credentials, commands, troubleshooting, console manual pass |

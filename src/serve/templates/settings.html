@@ -24,6 +24,8 @@
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
     <section class="filter-section">
       <h2>Search limits</h2>
+      <p class="muted">The ranges shown are safety limits — the most you may enter. The
+        corpus-build button picks a recommended profile well inside them.</p>
       <div class="field-grid">
         <label class="field">
           <span class="field-label">Search breadth (slices)</span>
@@ -107,11 +109,13 @@
     </section>
     <div class="form-actions">
       <button class="button primary" type="submit">Save</button>
-      <button class="button" type="submit" name="preset" value="max">Set to maximum limits</button>
+      <button class="button" type="submit" name="preset" value="corpus">Set to corpus-build limits</button>
       <button class="button" type="submit" name="reset" value="1">Reset to defaults</button>
     </div>
-    <p class="muted" id="limits-max-note">Set to maximum limits uses the largest allowed value for
-      every field; environment-pinned fields are left unchanged.</p>
+    <p class="muted" id="limits-corpus-note">Set to corpus-build limits picks a coherent overnight
+      profile — 1,000 slices, 100,000 repos per stage, a 24-hour deadline, batching on, 10
+      simultaneous requests — not the largest value of every field; environment-pinned fields are
+      left unchanged. The math behind it lives in <code>design/run-limits.md</code>.</p>
   </form>
 </section>
 {% endblock %}

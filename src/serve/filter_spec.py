@@ -265,6 +265,8 @@ _COUNT_LABELS: Mapping[str, str] = {
 _VIRTUAL_COUNT_LABELS: Mapping[str, str] = {
     "min_commits": "commits",
     "max_commits": "commits",
+    "min_language_bytes": "language bytes",
+    "max_language_bytes": "language bytes",
     "min_loc": "lines of code",
     "max_loc": "lines of code",
 }

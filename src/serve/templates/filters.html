@@ -236,8 +236,12 @@
           </label>
           {{ number_field("min_commits", "Min commits") }}
           {{ number_field("max_commits", "Max commits") }}
-          {{ disabled_number_field("min_loc", "Min LOC", "Not available yet — needs full-history analysis (planned)") }}
-          {{ disabled_number_field("max_loc", "Max LOC", "Not available yet — needs full-history analysis (planned)") }}
+          {{ number_field("min_language_bytes", "Min language bytes") }}
+          {{ number_field("max_language_bytes", "Max language bytes") }}
+          <div class="field-pair" role="group" aria-label="Lines of code range">
+            {{ disabled_number_field("min_loc", "Min LOC", "Not available yet — needs full-history analysis (planned)") }}
+            {{ disabled_number_field("max_loc", "Max LOC", "Not available yet — needs full-history analysis (planned)") }}
+          </div>
         </div>
       </section>
       <section class="filter-section" id="filter-result">

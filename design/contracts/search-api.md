@@ -9,7 +9,8 @@
 ```
 GET /vsearch/repos?q={query}&sort={sort}&order={order}&per_page={n}&page={n}
   &min_stars={n}&team_topic={topic}&has_dockerfile={bool}&owner_country={ISO2}
-  &min_geo_confidence={tier}&min_commits={n}&max_commits={n}&min_loc={n}&max_loc={n}
+  &min_geo_confidence={tier}&min_commits={n}&max_commits={n}
+  &min_language_bytes={n}&max_language_bytes={n}&min_loc={n}&max_loc={n}
 ```
 
 | Param | Type | Rules |
@@ -25,6 +26,7 @@ GET /vsearch/repos?q={query}&sort={sort}&order={order}&per_page={n}&page={n}
 | `owner_country` | ISO-3166-1 alpha-2, optional | Virtual → post-filter on stored `owners.country_iso`; implies `min_geo_confidence` default (gazetteer and above) |
 | `min_geo_confidence` | enum: `exact-iso` \| `name` \| `gazetteer-city` \| `geocoder` \| `weak`, optional (default `gazetteer-city`) | Confidence floor for `owner_country` |
 | `min_commits` / `max_commits` | int ≥ 0, optional | Virtual → post-filter on hydrated default-branch commit count |
+| `min_language_bytes` / `max_language_bytes` | int ≥ 0, optional | Virtual → post-filter on the primary language's byte size from `GET /repos/{o}/{r}/languages` (one call per repo) |
 | `min_loc` / `max_loc` | int ≥ 0, optional | **Accepted and recorded, not yet enforced** — using them flags the run incomplete (R44). A no-clone estimate tier is designed in `../loc-dilemma.md`; until it ships, the UI renders these fields disabled |
 | future virtuals | — | Added only with translation rule + tests here; upstream allowlist NEVER extended ad hoc |
 
@@ -74,6 +76,7 @@ Envelope mirrors upstream shape (`total_count` + `items[]`) but counts are exact
 | `owner_country=CC` | none (broad discovery) | `owners.country_iso = CC` (+ confidence ≥ threshold) |
 | `min_geo_confidence=T` | none | confidence rank ≥ `T` |
 | `min_commits=N` / `max_commits=N` | none | default-branch commit count compared |
+| `min_language_bytes=N` / `max_language_bytes=N` | none | primary-language bytes compared (live `/languages`) |
 | `min_loc=N` / `max_loc=N` | none | recorded only (enforcement pending `../loc-dilemma.md`) |
 
 ## Invariants

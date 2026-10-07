@@ -85,6 +85,18 @@ VIRTUAL_FILTERS: Mapping[str, VirtualRule] = {
         to_query=None,
         post="commit count <= max_commits",
     ),
+    "min_language_bytes": VirtualRule(
+        name="min_language_bytes",
+        kind="int",
+        to_query=None,
+        post="primary-language bytes >= min_language_bytes",
+    ),
+    "max_language_bytes": VirtualRule(
+        name="max_language_bytes",
+        kind="int",
+        to_query=None,
+        post="primary-language bytes <= max_language_bytes",
+    ),
     "min_loc": VirtualRule(
         name="min_loc",
         kind="int",

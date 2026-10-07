@@ -12,8 +12,14 @@ _BOUNDS: dict[str, tuple[int, int]] = {
     "limiter_max_concurrent": (1, 100),
 }
 
-_MAX_VALUES: dict[str, object] = {
-    **{name: high for name, (_low, high) in _BOUNDS.items()},
+_CORPUS_VALUES: dict[str, object] = {
+    "max_shards": 1_000,
+    "max_candidates": 100_000,
+    "max_hydrate": 100_000,
+    "max_enrich": 100_000,
+    "request_deadline_seconds": 86_400,
+    "graphql_batch_size": 20,
+    "limiter_max_concurrent": 10,
     "graphql_batch": True,
 }
 
@@ -34,8 +40,8 @@ def parse_settings_form(
 ) -> dict[str, object]:
     if form.get("reset") == "1":
         return {}
-    if form.get("preset") == "max":
-        return {name: value for name, value in _MAX_VALUES.items() if name not in pinned}
+    if form.get("preset") == "corpus":
+        return {name: value for name, value in _CORPUS_VALUES.items() if name not in pinned}
     errors: list[str] = []
     values: dict[str, object] = {}
     for field, (low, high) in _BOUNDS.items():

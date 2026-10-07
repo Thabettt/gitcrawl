@@ -183,7 +183,7 @@ shows it read-only):
 
 | Field | Environment variable | Default | Corpus-build example |
 |---|---|---|---|
-| Run shards | `GITCRAWL_MAX_SHARDS` | 10 | 10000 |
+| Run shards | `GITCRAWL_MAX_SHARDS` | 10 | 1000 |
 | Candidates | `GITCRAWL_MAX_CANDIDATES` | 500 | 100000 |
 | Hydrations | `GITCRAWL_MAX_HYDRATE` | 200 | 100000 |
 | Enrichment checks | `GITCRAWL_MAX_ENRICH` | 100 | 100000 |
@@ -191,6 +191,8 @@ shows it read-only):
 | GraphQL batching | `GITCRAWL_GRAPHQL_BATCH` | on | on |
 | Batch size | `GITCRAWL_GRAPHQL_BATCH_SIZE` | 20 | 20 |
 | Concurrency | `GITCRAWL_MAX_CONCURRENT` | 10 | 10 |
+
+These are the values the **Set to corpus-build limits** button applies; the ranges shown on the page are safety limits, and the preset sits well inside them. The derivation (and the multi-token scale-up) lives in `design/run-limits.md`.
 
 A corpus run occupies the single executor for its whole duration; run it overnight, and note that
 progress is not checkpointed inside a run (resume re-fetches from the start).

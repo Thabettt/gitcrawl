@@ -339,7 +339,7 @@ A `graphql_batch` module existed before and was deleted as unused (R58). It had 
 | 128,000 repos, save + checks | personal + batching engine | hours (bounded by checks that cannot batch) |
 | Refresh an unchanged corpus | personal + ETags | nearly free |
 
-**Current code caveats** (as of this document): one run caps itself at 500 candidates, 200 saved, 100 checked (`RunnerConfig`), so today's single run yields hundreds, not thousands; those caps are now operator-tunable at `/settings` (env-pinnable); defaults remain the interactive values. The token loader accepts a list but the runner uses the first token; rotation adds nothing on one account anyway.
+**Current code caveats** (as of this document): one run caps itself at 500 candidates, 200 saved, 100 checked (`RunnerConfig`), so today's single run yields hundreds, not thousands; those caps are now operator-tunable at `/settings` (env-pinnable); defaults remain the interactive values, and the derivation plus presets live in `run-limits.md`. The token loader accepts a list but the runner uses the first token; rotation adds nothing on one account anyway.
 
 ---
 

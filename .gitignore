@@ -23,6 +23,9 @@ htmlcov/
 runs/
 clones/
 
+# Local corpus exports (operator data, never committed)
+repos_rust.csv
+
 # SDD scratch workspace (git-ignored by design)
 .superpowers/
 

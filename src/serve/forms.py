@@ -135,7 +135,15 @@ def build_query_from_form(form: Mapping[str, str]) -> str:
 
 def _virtual_from_form(form: Mapping[str, str]) -> dict[str, object]:
     virtual: dict[str, object] = {}
-    for name in ("min_stars", "min_commits", "max_commits", "min_loc", "max_loc"):
+    for name in (
+        "min_stars",
+        "min_commits",
+        "max_commits",
+        "min_language_bytes",
+        "max_language_bytes",
+        "min_loc",
+        "max_loc",
+    ):
         value = _clean(form, name)
         if value:
             virtual[name] = _int_or_raw(value)
