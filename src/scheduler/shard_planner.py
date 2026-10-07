@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 
+_MAX_DEPTH = 40
 _CREATED_TOKEN = re.compile(r"(?<!\S)created:(\S+)", re.IGNORECASE)
 
 
@@ -89,6 +90,83 @@ def _merge_windows(
         else:
             merged.append((start, end))
     return merged
+
+
+class ShardPlanner:
+    def __init__(
+        self,
+        count_fn: Callable[[str], int],
+        *,
+        max_fetchable: int = 1000,
+        scan_target: int = 4000,
+        min_date: date = date(2008, 1, 1),
+        root_count: int | None = None,
+    ) -> None:
+        self._count_fn = count_fn
+        self._max_fetchable = max_fetchable
+        self._scan_target = scan_target
+        self._min_date = min_date
+        self._root_count = root_count
+
+    def iter_plan(self, query: str, *, now: datetime | None = None) -> Iterator[ShardSpec]:
+        current = now if now is not None else datetime.now(UTC)
+        ceiling = current.date()
+        if ceiling < self._min_date:
+            raise ValueError("min_date is after now; there is no window to bisect")
+        root = self._root_count if self._root_count is not None else self._count_fn(query)
+        if root == 0:
+            return
+        if self._fetchable(root):
+            yield ShardSpec(query=query, range_start=None, range_end=None, total_count=root)
+            return
+        base, windows = split_created(query)
+        if not windows:
+            windows = [(None, None)]
+        for start, end in _merge_windows(windows, floor=self._min_date, ceiling=ceiling):
+            window_count = root if start != end else self._count_fn(range_query(base, start, end))
+            if start == end:
+                yield self._leaf(
+                    base, start, end, window_count, oversized=not self._fetchable(window_count)
+                )
+            else:
+                yield from self._bisect(base, start, end, window_count, 0)
+
+    def plan(self, query: str, *, now: datetime | None = None) -> list[ShardSpec]:
+        return list(self.iter_plan(query, now=now))
+
+    def _fetchable(self, count: int) -> bool:
+        return count < self._max_fetchable and count <= self._scan_target
+
+    def _bisect(
+        self, base_query: str, start: date, end: date, count: int, depth: int
+    ) -> Iterator[ShardSpec]:
+        if depth > _MAX_DEPTH:
+            raise RuntimeError("shard planner exceeded the recursion depth cap")
+        if start == end:
+            yield self._leaf(base_query, start, end, count, oversized=not self._fetchable(count))
+            return
+        middle = start + (end - start) // 2
+        for half_start, half_end in ((start, middle), (middle + timedelta(days=1), end)):
+            if half_start > half_end:
+                continue
+            half_count = self._count_fn(range_query(base_query, half_start, half_end))
+            if half_count == 0:
+                continue
+            if self._fetchable(half_count):
+                yield self._leaf(base_query, half_start, half_end, half_count)
+            else:
+                yield from self._bisect(base_query, half_start, half_end, half_count, depth + 1)
+
+    def _leaf(
+        self, base_query: str, start: date, end: date, count: int, *, oversized: bool = False
+    ) -> ShardSpec:
+        return ShardSpec(
+            query=range_query(base_query, start, end),
+            range_start=datetime.combine(start, time.min, tzinfo=UTC),
+            range_end=datetime.combine(end, time.max, tzinfo=UTC),
+            total_count=count,
+            oversized=oversized,
+        )
 
 
 def _fetchable(count: int, max_fetchable: int, scan_target: int) -> bool:
