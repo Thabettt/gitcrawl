@@ -438,8 +438,8 @@ def test_run_filter_applies_db_filters_and_builds_payload(clean: Engine):
 
     assert payload.total_count == 3
     assert payload.fetched == 3
-    assert payload.incomplete is False
-    assert payload.warnings == []
+    assert payload.incomplete is True
+    assert any("were deleted or private" in warning for warning in payload.warnings)
     assert [item.repo_id for item in payload.items] == [1]
     item = payload.items[0]
     assert item.full_name == "owner1/repo1"
@@ -586,6 +586,87 @@ def test_run_filter_warns_when_commit_counts_are_missing(clean: Engine):
     assert payload.items == []
     assert (
         "1 repo(s) could not be checked for commit count; results are incomplete"
+        in payload.warnings
+    )
+
+
+def test_run_filter_enforces_min_and_max_language_bytes(clean: Engine):
+    sizes = {1: 50_000, 2: 100_000, 3: 200_000}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == "/search/repositories":
+            return page_response([repo_item(index) for index in (1, 2, 3)])
+        if path == "/graphql":
+            return graphql_batch_response(
+                request, {f"owner{i}/repo{i}": repo_item(i) for i in (1, 2, 3)}
+            )
+        if path.endswith("/languages"):
+            repo_id = int(path.split("/")[3].removeprefix("repo"))
+            return httpx.Response(200, json={"Python": sizes[repo_id]})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(
+            q="language:python",
+            virtual={"min_language_bytes": 100_000, "max_language_bytes": 150_000},
+        ),
+    )
+    assert [item.repo_id for item in payload.items] == [2]
+    assert payload.items[0].virtuals["language_bytes"] == 100_000
+    assert not any("language bytes" in warning for warning in payload.warnings)
+
+
+def test_run_filter_warns_when_language_bytes_are_missing(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        if path.endswith("/languages"):
+            return httpx.Response(422, json={"message": "Validation Failed"})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"min_language_bytes": 1}),
+        config=RunnerConfig(max_shards=1),
+    )
+
+    assert payload.items == []
+    assert (
+        "1 repo(s) could not be checked for language bytes; results are incomplete"
+        in payload.warnings
+    )
+
+
+def test_run_filter_language_bytes_budget_exhaustion_marks_incomplete(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if path == SEARCH_PATH:
+            if is_count(request):
+                return count_response(1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python", virtual={"min_language_bytes": 1}),
+        config=RunnerConfig(max_shards=1, max_enrich=0),
+    )
+
+    assert payload.items == []
+    assert (
+        "1 repo(s) could not be checked for language bytes; results are incomplete"
         in payload.warnings
     )
 
@@ -1365,3 +1446,15 @@ def test_run_filter_with_batching_disabled_hydrates_via_rest(clean: Engine):
     hydration = payload.field_stats["graphql"]["hydration"]
     assert hydration["requests"] == 0
     assert hydration["handled"] == 1
+
+
+def test_load_owners_chunks_large_id_lists(clean_db, monkeypatch):
+    import serve.runner as runner_module
+
+    owners = [{"id": index, "login": f"o{index}", "type": "User"} for index in range(1, 6)]
+    engine = clean_db(owners=owners)
+    monkeypatch.setattr(runner_module, "_ID_BATCH", 2)
+
+    loaded = runner_module._load_owners(engine, [1, 2, 3, 4, 5])
+
+    assert set(loaded) == {1, 2, 3, 4, 5}

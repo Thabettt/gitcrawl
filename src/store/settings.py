@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
+from lib.graphql_batch import MAX_BATCH_SIZE
 from store.models import AppSettings
 
 SETTINGS_ENV: Mapping[str, str] = {
@@ -89,7 +90,12 @@ def load_run_settings(engine: Engine) -> RunSettings:
     valid = {field: values[field] for field in fields if field in values}
     settings = RunSettings(**valid)
     overrides = _env_overrides()
-    return RunSettings(**{**settings.as_dict(), **overrides}) if overrides else settings
+    resolved = RunSettings(**{**settings.as_dict(), **overrides}) if overrides else settings
+    if resolved.graphql_batch_size > MAX_BATCH_SIZE:
+        # Env overrides bypass form bounds; a batch size above the API cap would
+        # make every GraphQL call raise. Clamp instead of failing every run.
+        return replace(resolved, graphql_batch_size=MAX_BATCH_SIZE)
+    return resolved
 
 
 def update_run_settings(engine: Engine, values: Mapping[str, object]) -> RunSettings:

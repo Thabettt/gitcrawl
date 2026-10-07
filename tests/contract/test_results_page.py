@@ -326,3 +326,13 @@ def test_results_page_unknown_run_is_404(clean, tmp_path, monkeypatch):
 
     assert response.status_code == 404
     assert 'id="results-not-found"' in response.text
+
+
+def test_detail_map_chunks_large_id_lists(clean, monkeypatch):
+    import serve.app as app_module
+
+    monkeypatch.setattr(app_module, "_DETAIL_BATCH", 1)
+
+    result = app_module._detail_map(clean, [1296269, 101])
+
+    assert set(result) == {1296269, 101}

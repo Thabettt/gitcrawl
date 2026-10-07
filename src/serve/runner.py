@@ -21,9 +21,9 @@ from enrich.graphql_owner_location import OwnerLocationAdapter
 from enrich.segment_executor import execute_segments
 from enrich.trees_first import fetch_tree
 from hydrate.tail import RefreshStats, refresh_repos_batched
-from lib import audit
+from lib import audit, cancellation, progress
 from lib.batching import chunked
-from lib.deadlines import Deadline, request_deadline_seconds
+from lib.deadlines import Deadline, DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import (
     API_BASE,
     PartialResultsError,
@@ -63,6 +63,7 @@ class RunnerConfig:
     request_deadline_seconds: float | None = None
     graphql_batch: bool = True
     graphql_batch_size: int = 20
+    concurrency: int = 1
 
 
 def runner_config_from(settings: RunSettings) -> RunnerConfig:
@@ -74,6 +75,7 @@ def runner_config_from(settings: RunSettings) -> RunnerConfig:
         request_deadline_seconds=float(settings.request_deadline_seconds),
         graphql_batch=settings.graphql_batch,
         graphql_batch_size=settings.graphql_batch_size,
+        concurrency=min(settings.limiter_max_concurrent, 20),
     )
 
 
@@ -217,6 +219,7 @@ def _hydrate(
     rows: list[dict],
     cfg: RunnerConfig,
     hook: Callable[[httpx.Response, float], None],
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> RefreshStats:
     candidates = rows[: cfg.max_hydrate]
     if not candidates:
@@ -231,6 +234,8 @@ def _hydrate(
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
         batch_size=cfg.graphql_batch_size,
         allow_requests=cfg.graphql_batch,
+        on_progress=on_progress,
+        concurrency=cfg.concurrency,
     )
 
 
@@ -259,18 +264,21 @@ def _topics(row: dict) -> list[str]:
 def _load_owners(engine: Engine, owner_ids: list[int]) -> dict[int, dict]:
     if not owner_ids:
         return {}
+    result: dict[int, dict] = {}
     with engine.connect() as connection:
-        rows = connection.execute(
-            select(
-                Owner.id,
-                Owner.login,
-                Owner.type,
-                Owner.location_raw,
-                Owner.country_iso,
-                Owner.geo_confidence,
-            ).where(Owner.id.in_(owner_ids))
-        ).mappings()
-        return {row["id"]: dict(row) for row in rows}
+        for batch in chunked(owner_ids, _ID_BATCH):
+            rows = connection.execute(
+                select(
+                    Owner.id,
+                    Owner.login,
+                    Owner.type,
+                    Owner.location_raw,
+                    Owner.country_iso,
+                    Owner.geo_confidence,
+                ).where(Owner.id.in_(batch))
+            ).mappings()
+            result.update({row["id"]: dict(row) for row in rows})
+    return result
 
 
 def _fetch_owner_location(
@@ -301,6 +309,33 @@ def _fetch_owner_location(
     if isinstance(location, str) and location.strip():
         return True, location
     return True, None
+
+
+def _fetch_language_bytes(
+    deps: Deps,
+    full_name: str,
+    hook: Callable[[httpx.Response, float], None],
+) -> tuple[bool, dict[str, object] | None]:
+    try:
+        response = request_with_retry(
+            deps.client,
+            "GET",
+            f"{API_BASE}/repos/{full_name}/languages",
+            limiter=deps.limiter,
+            token_id=deps.token_fp,
+            on_response=hook,
+        )
+    except (PartialResultsError, ThrottledError, DeadlineExceededError, httpx.HTTPError):
+        return False, None
+    if response.status_code != 200:
+        return False, None
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, None
+    if not isinstance(payload, dict):
+        return True, {}
+    return True, payload
 
 
 def _apply_geo(
@@ -356,6 +391,7 @@ def _apply_geo(
         on_response=hook,
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
         allow_requests=cfg.graphql_batch,
+        concurrency=cfg.concurrency,
     )
     report["owners"] = outcome.stats.as_dict()
     for login, owner_id in rows_by_login.items():
@@ -456,6 +492,10 @@ def _apply_dockerfile(
             )
         except (RequestFailed, ThrottledError, PartialResultsError):
             return None
+        if presence.truncated and not presence.has(_DOCKERFILE_PATH):
+            # A truncated tree cannot prove absence; treat it as unknown so the
+            # repo is skipped-and-warned instead of silently filtered out.
+            return None
         return presence.has(_DOCKERFILE_PATH)
 
     rows_by_key = {str(row["id"]): row for row in selected}
@@ -473,6 +513,7 @@ def _apply_dockerfile(
         on_response=hook,
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
         allow_requests=cfg.graphql_batch,
+        concurrency=cfg.concurrency,
     )
     report["files"] = outcome.stats.as_dict()
     kept: list[dict] = []
@@ -552,6 +593,63 @@ def _dockerfile_handler(deps, rows_by_id, wanted, budget, hook, skipped, report,
     return handler
 
 
+def _language_bytes_handler(deps, rows_by_id, virtual, budget, hook, skipped, cfg, language_bytes):
+    low = virtual.get("min_language_bytes")
+    high = virtual.get("max_language_bytes")
+    supplied = language_bytes or {}
+
+    def handler(ids):
+        kept: list[int] = []
+        used = 0
+        for index, repo_id in enumerate(ids):
+            if index and index % 250 == 0:
+                cancellation.check()
+                progress.report("enriching", index, len(ids))
+            row = rows_by_id[repo_id]
+            from_hydration = supplied.get(str(repo_id))
+            if from_hydration:
+                numeric = {
+                    name: value
+                    for name, value in from_hydration.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                }
+            elif used < max(0, budget["remaining"]) and not _deadline_expired(deps):
+                used += 1
+                ok, languages = _fetch_language_bytes(deps, row["full_name"], hook)
+                numeric = (
+                    {
+                        name: value
+                        for name, value in languages.items()
+                        if isinstance(value, (int, float)) and not isinstance(value, bool)
+                    }
+                    if ok and languages
+                    else {}
+                )
+            else:
+                skipped["language_bytes"] += 1
+                continue
+            if not numeric:
+                skipped["language_bytes"] += 1
+                continue
+            primary, value = max(numeric.items(), key=lambda item: item[1])
+            row["language_bytes"] = int(value)
+            row["primary_language"] = primary
+            if isinstance(low, int) and value < low:
+                continue
+            if isinstance(high, int) and value > high:
+                continue
+            kept.append(repo_id)
+        budget["remaining"] = max(0, budget["remaining"] - used)
+        return kept, used
+
+    return handler
+
+
+def _deadline_expired(deps: Deps) -> bool:
+    limiter = deps.limiter
+    return limiter is not None and limiter.deadline is not None and limiter.deadline.remaining <= 0
+
+
 def _enrich_handlers(
     deps: Deps,
     rows: list[dict],
@@ -562,6 +660,7 @@ def _enrich_handlers(
     report: dict,
     commit_counts: Mapping[str, int] | None = None,
     *,
+    language_bytes: Mapping[str, Mapping[str, int]] | None = None,
     depth: str = "page",
     cfg: RunnerConfig | None = None,
 ) -> tuple[dict, list[str]]:
@@ -571,6 +670,7 @@ def _enrich_handlers(
     unsupported: list[str] = []
     geo_claimed = False
     commits_claimed = False
+    language_bytes_claimed = False
     for step in plan_enrichment(list(virtual), depth=depth).steps:
         if step.field in ("min_stars", "team_topic"):
             handlers[step.field] = _record_handler(rows_by_id, step.field, virtual)
@@ -580,6 +680,12 @@ def _enrich_handlers(
                     rows_by_id, virtual, commit_counts or {}, skipped
                 )
                 commits_claimed = True
+        elif step.field in ("min_language_bytes", "max_language_bytes"):
+            if not language_bytes_claimed:
+                handlers[step.field] = _language_bytes_handler(
+                    deps, rows_by_id, virtual, budget, hook, skipped, resolved, language_bytes
+                )
+                language_bytes_claimed = True
         elif step.field in ("owner_country", "min_geo_confidence"):
             if not geo_claimed:
                 handlers[step.field] = _geo_handler(
@@ -608,6 +714,8 @@ def _payload_item(row: dict, virtual: dict) -> RunPayloadItem:
         badges["has_dockerfile"] = row["has_dockerfile"]
     if "commit_count" in row:
         badges["commit_count"] = row["commit_count"]
+    if "language_bytes" in row:
+        badges["language_bytes"] = row["language_bytes"]
     return RunPayloadItem(
         repo_id=row["id"],
         full_name=row["full_name"],
@@ -652,7 +760,13 @@ def apply_sort(items: list[dict], sort: str | None, order: str | None) -> list[d
     return sorted(items, key=lambda item: _sort_key(item, sort), reverse=order != "asc")
 
 
-def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
+def run_filter(
+    deps: Deps,
+    spec: FilterSpec,
+    *,
+    config: RunnerConfig | None = None,
+    queue_prefix: str | None = None,
+) -> RunPayload:
     cfg = config or RunnerConfig()
     if deps.limiter is not None:
         seconds = (
@@ -662,7 +776,7 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
         )
         deps.limiter.bind_deadline(Deadline(seconds))
     try:
-        return _run_filter(deps, spec, config=config)
+        return _run_filter(deps, spec, config=config, queue_prefix=queue_prefix)
     finally:
         if deps.limiter is not None:
             deps.limiter.bind_deadline(None)
@@ -670,7 +784,13 @@ def run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = No
             deps.audit_buffer.flush()
 
 
-def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = None) -> RunPayload:
+def _run_filter(
+    deps: Deps,
+    spec: FilterSpec,
+    *,
+    config: RunnerConfig | None = None,
+    queue_prefix: str | None = None,
+) -> RunPayload:
     cfg = config or RunnerConfig()
     virtual = dict(spec.virtual)
     warnings = _r44_warnings(virtual)
@@ -682,10 +802,23 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         max_shards=cfg.max_shards,
         max_pages=spec.max_pages,
         total_count=total_count,
+        queue_prefix=queue_prefix,
     )
     if stats.incomplete_shards > 0:
         warnings.append(
             f"{stats.incomplete_shards} discovery shard(s) incomplete; results are partial"
+        )
+    if stats.deferred_shards > 0:
+        warnings.append(
+            f"{stats.deferred_shards} discovery shard(s) deferred for retry; "
+            "results are incomplete until this search is resumed"
+        )
+    if stats.deadline_hit:
+        warnings.append("the run deadline was reached during discovery; results are incomplete")
+    if stats.cap_splits > 0:
+        warnings.append(
+            f"{stats.cap_splits} discovery shard(s) exceeded GitHub's result cap and were "
+            "split; results are incomplete until the narrower shards finish"
         )
     if stats.page_capped_shards > 0:
         warnings.append(
@@ -696,8 +829,25 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         warnings.append(
             f"discovery shard plan stopped at max_shards={cfg.max_shards}; results are incomplete"
         )
+    if stats.skipped > 0:
+        warnings.append(
+            f"{stats.skipped} search result(s) could not be saved (invalid repo data); "
+            "results are incomplete"
+        )
+    unique_found = len(stats.repo_ids)
+    if total_count is not None and unique_found < total_count:
+        warnings.append(
+            f"collected {unique_found} unique repos of ~{total_count} matching; "
+            "results are incomplete"
+        )
     hook = _audit_hook(deps)
     ordered = _ordered_rows(deps.engine, list(stats.repo_ids))
+    missing_local = max(0, unique_found - len(ordered))
+    if missing_local > 0:
+        warnings.append(
+            f"{missing_local} discovered repo(s) are unavailable locally (deleted or missing "
+            "owner); results are incomplete"
+        )
     dropped_candidates = max(0, len(ordered) - cfg.max_candidates)
     if dropped_candidates > 0:
         warnings.append(
@@ -711,7 +861,17 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
             f"{dropped_hydration} repo(s) not hydrated due to max_hydrate="
             f"{cfg.max_hydrate}; results are incomplete"
         )
-    hydration = _hydrate(deps, candidates, cfg, hook)
+    cancellation.check()
+    progress.report("hydrating", 0, len(candidates), fetched=stats.fetched)
+    hydration = _hydrate(
+        deps,
+        candidates,
+        cfg,
+        hook,
+        on_progress=lambda done, total: progress.report(
+            "hydrating", done, total, fetched=stats.fetched
+        ),
+    )
     graphql_report: dict[str, object] = {"hydration": hydration.batch}
     if hydration.unresolved:
         sample = "; ".join(
@@ -721,9 +881,14 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
             f"{len(hydration.unresolved)} repo(s) could not be hydrated ({sample}); "
             "results are incomplete"
         )
+    if hydration.tombstoned > 0:
+        warnings.append(
+            f"{hydration.tombstoned} repo(s) were deleted or private when checked; "
+            "results are incomplete"
+        )
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
     budget = {"remaining": cfg.max_enrich}
-    skipped = {"geo": 0, "dockerfile": 0, "commits": 0}
+    skipped = {"geo": 0, "dockerfile": 0, "commits": 0, "language_bytes": 0}
     handlers, unsupported = _enrich_handlers(
         deps,
         rows,
@@ -733,6 +898,7 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
         skipped,
         graphql_report,
         hydration.commit_counts,
+        language_bytes=hydration.language_bytes,
         cfg=cfg,
     )
     for field in unsupported:
@@ -740,6 +906,8 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
             f"`{field}` requires full-depth enrichment, which is not wired yet; "
             "results are incomplete"
         )
+    cancellation.check()
+    progress.report("enriching", 0, len(rows), fetched=stats.fetched)
     survivors, segment_stats = execute_segments([row["id"] for row in rows], handlers, segments=1)
     surviving = set(survivors)
     rows = [row for row in rows if row["id"] in surviving]
@@ -757,6 +925,11 @@ def _run_filter(deps: Deps, spec: FilterSpec, *, config: RunnerConfig | None = N
     if skipped["commits"] > 0:
         warnings.append(
             f"{skipped['commits']} repo(s) could not be checked for commit count; "
+            "results are incomplete"
+        )
+    if skipped["language_bytes"] > 0:
+        warnings.append(
+            f"{skipped['language_bytes']} repo(s) could not be checked for language bytes; "
             "results are incomplete"
         )
     if spec.sort == "help-wanted-issues":

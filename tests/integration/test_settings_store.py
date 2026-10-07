@@ -40,6 +40,11 @@ def test_invalid_env_value_falls_back_to_the_row(clean, monkeypatch):
     assert load_run_settings(clean).max_shards == 25
 
 
+def test_env_graphql_batch_size_is_clamped_to_the_api_cap(clean, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_GRAPHQL_BATCH_SIZE", "50")
+    assert load_run_settings(clean).graphql_batch_size == 20
+
+
 def test_unknown_field_is_rejected(clean):
     with pytest.raises(KeyError):
         update_run_settings(clean, {"nope": 1})

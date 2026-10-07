@@ -355,7 +355,10 @@ def clone_estimate_for_run(
     mode: CloneMode,
     dest_root: str = "clones",
     low_disk_threshold_mb: float = 2048.0,
+    disk_free_mb: float | None = None,
 ) -> CloneEstimate:
+    if disk_free_mb is None:
+        disk_free_mb = free_disk_mb(dest_root)
     if limit is None:
         repos, size_kb = _run_totals(engine, run_id)
         _row_for_run(engine, run_id)  # preserve KeyError semantics
@@ -363,7 +366,7 @@ def clone_estimate_for_run(
             repos,
             size_kb,
             mode=mode,
-            disk_free_mb=free_disk_mb(dest_root),
+            disk_free_mb=disk_free_mb,
             low_disk_threshold_mb=low_disk_threshold_mb,
         )
     if limit < 0:
@@ -373,7 +376,7 @@ def clone_estimate_for_run(
         run_id,
         limit=limit,
         mode=mode,
-        disk_free_mb=free_disk_mb(dest_root),
+        disk_free_mb=disk_free_mb,
         low_disk_threshold_mb=low_disk_threshold_mb,
     )
 

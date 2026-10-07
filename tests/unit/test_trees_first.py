@@ -9,7 +9,7 @@ from discover.search_shards import RequestFailed
 
 TREE_RESPONSE = {
     "sha": "tree-sha",
-    "truncated": True,
+    "truncated": False,
     "tree": [
         {"path": "src", "type": "tree", "sha": "t1"},
         {"path": "src/app.py", "type": "blob", "sha": "b1"},
@@ -58,13 +58,60 @@ def test_fetch_tree_resolves_default_branch_and_collects_blobs_only():
     presence = fetch_tree(client, "octo/hello")
     assert presence.repo_full_name == "octo/hello"
     assert presence.paths == TREE_BLOB_PATHS
-    assert presence.truncated is True
+    assert presence.truncated is False
     assert presence.source == "tree"
     assert [urlparse(str(request.url)).path for request in captured] == [
         "/repos/octo/hello",
         "/repos/octo/hello/git/trees/trunk",
     ]
     assert urlparse(str(captured[1].url)).query == "recursive=1"
+
+
+def test_fetch_tree_unions_root_listing_when_recursive_is_truncated():
+    from enrich.trees_first import fetch_tree
+
+    recursive = {
+        "truncated": True,
+        "tree": [
+            {"path": "src", "type": "tree"},
+            {"path": "src/app.py", "type": "blob"},
+        ],
+    }
+    root = {
+        "truncated": False,
+        "tree": [
+            {"path": "src", "type": "tree"},
+            {"path": "Dockerfile", "type": "blob"},
+        ],
+    }
+    captured = []
+    client = client_from(
+        [httpx.Response(200, json=recursive), httpx.Response(200, json=root)], captured
+    )
+
+    presence = fetch_tree(client, "octo/hello", ref="main")
+
+    assert presence.paths == frozenset({"src/app.py", "Dockerfile"})
+    assert presence.truncated is False
+    assert [urlparse(str(request.url)).path for request in captured] == [
+        "/repos/octo/hello/git/trees/main",
+        "/repos/octo/hello/git/trees/main",
+    ]
+    assert urlparse(str(captured[0].url)).query == "recursive=1"
+    assert urlparse(str(captured[1].url)).query == ""
+
+
+def test_fetch_tree_stays_truncated_when_root_listing_is_truncated_too():
+    from enrich.trees_first import fetch_tree
+
+    recursive = {"truncated": True, "tree": [{"path": "src/app.py", "type": "blob"}]}
+    root = {"truncated": True, "tree": [{"path": "Dockerfile", "type": "blob"}]}
+    client = client_from([httpx.Response(200, json=recursive), httpx.Response(200, json=root)])
+
+    presence = fetch_tree(client, "octo/hello", ref="main")
+
+    assert presence.paths == frozenset({"src/app.py", "Dockerfile"})
+    assert presence.truncated is True
 
 
 def test_fetch_tree_with_explicit_ref_makes_single_request():

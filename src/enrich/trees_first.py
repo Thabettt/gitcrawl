@@ -109,16 +109,43 @@ def fetch_tree(
     raw_tree = payload.get("tree")
     if not isinstance(raw_tree, list):
         raise RequestFailed(200, "missing tree list")
-    paths = frozenset(
+    paths = {
         entry["path"]
         for entry in raw_tree
         if isinstance(entry, dict)
         and entry.get("type") == "blob"
         and isinstance(entry.get("path"), str)
-    )
+    }
+    truncated = bool(payload.get("truncated"))
+    if truncated:
+        # The recursive listing is capped; the non-recursive root listing is not
+        # subject to the same cap and top-level files (e.g. Dockerfile) live there.
+        root_payload = _require_json(
+            request_with_retry(
+                client,
+                "GET",
+                f"{API_BASE}/repos/{full_name}/git/trees/{ref}",
+                limiter=limiter,
+                token_id=token_id,
+                sleep=sleep,
+                now=now,
+                jitter=jitter,
+                on_response=on_response,
+            )
+        )
+        raw_root = root_payload.get("tree")
+        if isinstance(raw_root, list):
+            paths.update(
+                entry["path"]
+                for entry in raw_root
+                if isinstance(entry, dict)
+                and entry.get("type") == "blob"
+                and isinstance(entry.get("path"), str)
+            )
+            truncated = bool(root_payload.get("truncated"))
     return FilePresence(
         repo_full_name=full_name,
-        paths=paths,
-        truncated=bool(payload.get("truncated")),
+        paths=frozenset(paths),
+        truncated=truncated,
         source="tree",
     )
