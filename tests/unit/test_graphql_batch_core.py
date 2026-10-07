@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 from lib.deadlines import Deadline
-from lib.gh_client import PartialResultsError
 from lib.graphql_batch import GraphQLAuthError, ParsedBatch, fetch_batch
 
 ALIAS_RE = re.compile(r"(n\d+): field")
@@ -230,15 +229,21 @@ def test_malformed_json_is_treated_as_a_transient_batch_failure():
     assert outcome.stats.fallbacks == 1
 
 
-def test_sso_partial_results_propagates():
+def test_sso_partial_results_degrades_instead_of_aborting():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200, json={"data": {}}, headers={"x-github-sso": "partial-results; ..."}
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    with pytest.raises(PartialResultsError):
-        fetch_batch(DictAdapter(), ["1"], client=client)
+    outcome = fetch_batch(DictAdapter(), ["1"], client=client, fallback=lambda key: f"rest-{key}")
+    assert outcome.values == {"1": "rest-1"}
+    assert outcome.stats.fallbacks == 1
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(DictAdapter(), ["1"], client=client)
+    assert "1" in outcome.unresolved
+    assert "PartialResultsError" in outcome.unresolved["1"]
 
 
 def test_allow_requests_false_resolves_everything_through_fallback():
@@ -256,3 +261,39 @@ def test_allow_requests_false_resolves_everything_through_fallback():
     assert outcome.values == {"1": "rest-1", "2": "rest-2"}
     assert outcome.stats.requests == 0
     assert outcome.stats.fallbacks == 2
+
+
+def test_progress_counts_handled_fallback_keys():
+    client = client_from([httpx.Response(200, json={"data": {}, "errors": [{"message": "boom"}]})])
+    seen: list[tuple[int, int]] = []
+    outcome = fetch_batch(
+        DictAdapter(),
+        ["1", "2"],
+        client=client,
+        fallback=lambda key: None,
+        on_progress=lambda done, total: seen.append((done, total)),
+    )
+    assert outcome.stats.handled == 2
+    assert seen[-1] == (2, 2)
+
+
+def test_fetch_batch_runs_chunks_concurrently():
+    import threading
+
+    barrier = threading.Barrier(3, timeout=10)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        barrier.wait()
+        return httpx.Response(200, json={"data": {}})
+
+    adapter = DictAdapter()
+    adapter.batch_size = 3
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        [str(index) for index in range(9)],
+        client=client,
+        concurrency=3,
+    )
+    assert outcome.stats.requests == 3
+    assert outcome.stats.unresolved == 9

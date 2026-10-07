@@ -33,6 +33,7 @@ class RefreshStats:
     unresolved: dict[str, str] = field(default_factory=dict)
     batch: dict = field(default_factory=dict)
     commit_counts: dict[str, int] = field(default_factory=dict)
+    language_bytes: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def _stored_etags(
@@ -109,6 +110,8 @@ def refresh_repos_batched(
     deadline: Deadline | None = None,
     batch_size: int = MAX_BATCH_SIZE,
     allow_requests: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
+    concurrency: int = 1,
 ) -> RefreshStats:
     stats = RefreshStats()
     candidates = [(str(row["id"]), str(row["full_name"])) for row in rows]
@@ -162,12 +165,10 @@ def refresh_repos_batched(
                 jitter=jitter,
                 on_response=on_response,
             )
-        except PartialResultsError:
-            raise
-        except (ThrottledError, httpx.HTTPError):
+        except (PartialResultsError, ThrottledError, httpx.HTTPError):
             count = None
         if count is not None:
-            stats.commit_counts[str(hydrated.id)] = count
+            stats.commit_counts[key] = count
         return None
 
     outcome = fetch_batch(
@@ -183,6 +184,8 @@ def refresh_repos_batched(
         now=now,
         jitter=jitter,
         allow_requests=allow_requests,
+        on_progress=on_progress,
+        concurrency=concurrency,
     )
     for key, details in outcome.values.items():
         hydrated = HydratedRepo(
@@ -199,6 +202,8 @@ def refresh_repos_batched(
             stats.renamed += 1
         if details.commit_count is not None:
             stats.commit_counts[key] = details.commit_count
+        if details.language_bytes:
+            stats.language_bytes[key] = details.language_bytes
     stats.unresolved = {full_name_by_key[key]: reason for key, reason in outcome.unresolved.items()}
     stats.batch = outcome.stats.as_dict()
     return stats

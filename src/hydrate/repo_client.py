@@ -12,7 +12,7 @@ from lib import audit
 from lib.gh_client import API_BASE, request_with_retry
 from limiter.buckets import BucketLimiter
 
-_REDIRECT_STATUSES = frozenset({301, 302})
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 3
 
 

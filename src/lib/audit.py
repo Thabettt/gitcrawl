@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -138,16 +139,20 @@ class AuditBuffer:
         self._engine = engine
         self._batch_size = batch_size
         self._records: list[AuditRecord] = []
+        self._lock = threading.Lock()
 
     def add(self, record: AuditRecord) -> None:
-        self._records.append(record)
-        if len(self._records) >= self._batch_size:
-            self.flush()
+        with self._lock:
+            self._records.append(record)
+            if len(self._records) < self._batch_size:
+                return
+        self.flush()
 
     def flush(self) -> None:
-        if not self._records:
-            return
-        records, self._records = self._records, []
+        with self._lock:
+            if not self._records:
+                return
+            records, self._records = self._records, []
         with self._engine.begin() as connection:
             connection.execute(insert(AuditLog), [asdict(record) for record in records])
 

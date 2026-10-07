@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from lib.graphql_batch import MAX_BATCH_SIZE, ParsedBatch
 
@@ -12,7 +12,7 @@ _FIELDS = """    databaseId
     nameWithOwner
     stargazerCount
     forkCount
-    watchers(first: 0) { totalCount }
+    watchers { totalCount }
     issues(states: [OPEN]) { totalCount }
     diskUsage
     isArchived
@@ -30,6 +30,7 @@ _FIELDS = """    databaseId
       target { ... on Commit { history(first: 1) { totalCount } } }
     }
     primaryLanguage { name }
+    languages(first: 10) { edges { size node { name } } }
     licenseInfo { spdxId }
     repositoryTopics(first: 100) { nodes { topic { name } } }
     hasIssuesEnabled
@@ -38,7 +39,12 @@ _FIELDS = """    databaseId
     hasDiscussionsEnabled
     hasPullRequestsEnabled
     parent { nameWithOwner }
-    owner { databaseId login __typename }"""
+    owner {
+      login
+      __typename
+      ... on User { databaseId }
+      ... on Organization { databaseId }
+    }"""
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,7 @@ class RepoDetails:
     full_name: str
     payload: dict
     commit_count: int | None = None
+    language_bytes: dict[str, int] = field(default_factory=dict)
 
 
 def _as_int(value: object) -> int | None:
@@ -109,6 +116,26 @@ def _language(node: dict) -> str | None:
         return None
     name = raw.get("name")
     return name if isinstance(name, str) else None
+
+
+def _language_bytes(node: dict) -> dict[str, int]:
+    raw = node.get("languages")
+    if not isinstance(raw, dict):
+        return {}
+    edges = raw.get("edges")
+    if not isinstance(edges, list):
+        return {}
+    sizes: dict[str, int] = {}
+    for entry in edges:
+        if not isinstance(entry, dict):
+            continue
+        size = _as_int(entry.get("size"))
+        language = entry.get("node")
+        name = language.get("name") if isinstance(language, dict) else None
+        if size is None or not isinstance(name, str) or not name:
+            continue
+        sizes[name] = sizes.get(name, 0) + size
+    return sizes
 
 
 def _branch(node: dict) -> str | None:
@@ -231,6 +258,7 @@ class RepoDetailsAdapter:
                     full_name=str(node.get("nameWithOwner") or ""),
                     payload=_payload(repo_id, node),
                     commit_count=_commit_count(node),
+                    language_bytes=_language_bytes(node),
                 )
             except ValueError as exc:
                 failures[key] = str(exc)
