@@ -41,9 +41,9 @@ Primary nav: `Home · Searches · Corpora · Detections · Library · System`, p
 |---|---|
 | Find / Run / filter hash | **Search**, shown as “rust · 100+ stars”, never a hash |
 | Replay | **Search again** (new run, same filter) |
-| Resume | **Resume** (failed searches only; starts over safely, explained) |
+| Resume | **Resume** (failed or stopped searches only; starts over safely, explained) |
 | `partial` | **Finished — incomplete** (with reason) |
-| queued / running / done / failed | Waiting / Running / Finished / Failed |
+| queued / running / done / failed / cancelled | Waiting / Running / Finished / Failed / **Stopped** |
 | filter-spec, virtual filters | **Filters**; “extra rules (files, country, activity)” |
 | fetched / inserted / updated / unchanged / skipped | **Found / Saved / Passed filters / Unavailable** |
 | run_items, bundle | Results, Export |
@@ -65,7 +65,7 @@ Search ─┬─> View all results (full table)
         ├─> Clone code…
         ├─> Freeze as corpus… ──> Corpus
         ├─> Search again
-        ├─> Resume (only when failed)
+        ├─> Resume (failed or stopped)
         ├─> Compare with an earlier search (diff)
         └─> Back to Searches
 ```
@@ -97,15 +97,16 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 
 ### 4.3 Running search
 
-- Status line: “Running, step 2 of 3”.
+- Status line: the live phase (Starting / Finding repos / Fetching details / Applying filters / Saving results), done/total, a percent bar, a phase-relative time estimate, and a ticking elapsed clock.
 - Three explained stages: **1 Finding repos → 2 Saving details → 3 Applying extra rules**, current stage highlighted; each stage has a one-line meaning (“unchanged repos are free”).
-- Progress bar based on saved/discovered, plus a **rough** time estimate; copy says “rough estimate”.
-- Reassurance: “You can close this tab — the search keeps running. Failed searches get a Resume button.”
+- Progress bar based on the current phase's done/total, plus a phase-relative estimate labeled “est.”; until the phase has at least two progress points the page says “estimating…”, and no projection over 24 h is shown.
+- Reassurance: “You can close this tab — the search keeps running. Failed or stopped searches get a Resume button.”
+- A **Stop search** button is available while waiting or running; stopping is cooperative, keeps the partial work, and the search becomes **Stopped** (resumable).
 - Live counters use the same explanations as the finished page, including failures and their retry state.
 
 ### 4.4 Search (results workspace)
 
-- Header: human name + status + frozen/observation time; actions: **Detect agent use** (greyed, coming soon), **Export results**, **Clone code…**, **Freeze as corpus…**, **Search again**, **Resume** (failed only), **Compare with…** (diff, pre-filled with the previous same-filter search).
+- Header: human name + status + frozen/observation time; actions: **Detect agent use** (greyed, coming soon), **Export results**, **Clone code…**, **Save filter…**, **Freeze as corpus…**, **Search again**, **Resume** (failed or stopped), **Compare with…** (diff, pre-filled with the previous same-filter search).
 - **Results preview** (hero): top 20 rows, compact columns (Repository, Stars, Updated, Language, Country, Flags), with **View all results →**.
 - **Side panel — “What happened”** with permanently visible explanations:
   - Found — “Repos GitHub said matched your search.”
@@ -173,7 +174,9 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 - Save to library — “Keeps this filter on this machine for reuse. No GitHub calls.”
 - Download file — “Exports this filter as a portable JSON file. No GitHub calls.”
 - Search again — “Starts a new search with the same filter. The old results stay frozen.”
-- Resume — “Only for failed searches. Clears partial work and starts over safely.”
+- Resume — “Only for failed or stopped searches. Clears partial work and starts over safely.”
+- Stop search — “Stops the search after the current step. Partial work is kept; you can resume later.”
+- Save filter… — “Keeps this search’s filter on this machine for reuse. No GitHub calls.”
 - Freeze as corpus — “Records the exact repos and details as of now. No GitHub calls; does not copy code.”
 - Detect agent use — “Scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo.” (greyed until shipped)
 - Export results — “Downloads the frozen result list as JSON or CSV.”
@@ -193,7 +196,8 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 | Quality checks → grouped sentence form; raw names behind disclosure | Small | Uses existing `quality.py` data |
 | Settings page relabeled to §4.9 (plan already exists) | Plan edit | `2026-10-02-console-settings.md` |
 | Detection pages adopt this IA (plan already exists) | Plan edit | `2026-10-02-agent-detection.md` |
-| Progress-stage state + rough ETA | Optional | Nice-to-have; stages can be derived from counters without new storage |
+| Progress-stage state + ETA | Done (2026-10-06/07) | Migrations 0010/0011 add progress columns; phase-relative ETA + client-side elapsed clock |
+| Stop/cancel + resumable status; save-filter from a run | Done (2026-10-06/07) | `cancelled` status, cooperative cancellation, run-page Save filter… modal |
 | Enforce `min_commits`/`max_commits` (default branch only) | Planned — batch-engine plan, Task 8 | Counts commits reachable from the default branch, snapshot at `ran_at` |
 | Enforce `min_loc`/`max_loc` | Out of scope for the console pass — needs a LOC tier | Greyed in the UI; runs keep the “incomplete” warning (R44); never remove or weaken it. A no-clone bytes-estimate tier is designed in `loc-dilemma.md` |
 
@@ -219,7 +223,7 @@ Every orphan today (`/runs/{id}/diff`, `/metrics`, `/health`) gets an inbound li
 ## 10. Open items
 
 - Corpus schema details (name uniqueness, note length, delete semantics) — needs its own small spec.
-- ETA: ship as “rough estimate” or omit; decide during implementation.
+- ETA (resolved 2026-10-06/07): shipped as a phase-relative estimate; “estimating…” until the phase has at least two progress points, and no projection over 24 h.
 - Header status-dot thresholds (what counts as degraded amber).
 - Keyboard keys for the new nav sections.
 - Whether Check matches should optionally count virtual filters by sampling (no, for now — copy states the limitation).

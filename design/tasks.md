@@ -26,6 +26,8 @@
 | 7 — Polish | Mostly done; T049 (token vault/OIDC) deferred — env-only tokens + fingerprint logging today |
 | 8 — Operator Console | Done (B1–B10) |
 
+**Post-completion fixes (2026-10-06/07)**: after Phase 8 closed, the discovery planner was corrected for GitHub's duplicate-qualifier union (it now replaces the query's `created:` token and plans inside the user's window), hydration moved to valid owner selection + parallel GraphQL batches, runs gained a `cancelled` status with cooperative abort and live progress columns (migrations 0010/0011), and the settings max preset became the corpus preset. Details in `../docs/development-log.md`; inline notes on the affected tasks appear below.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -58,7 +60,7 @@
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
 - [x] T005 Implement Redis per-bucket limiter in `src/limiter/buckets.py` (search/core/code_search HASH+Lua token buckets O(1) — never ZSET logs; `x-ratelimit-*` pacing, per-bucket pausing only, ~10 concurrent/endpoint/token ceiling, 0.5–1ms same-AZ budget); the delayed-retry `src/limiter/retry.py` queue was later deleted under R58 — retry orchestration lives in `src/lib/gh_client.py`
-- [ ] T006 Implement throttle classifier in `src/limiter/classifier.py` (retry-after → reset → `60s×2^n`+jitter max 5; spam-422 backoff vs cap-422 shard vs validation-422 fix; SSO `partial-results` loud-fail)
+- [ ] T006 Implement throttle classifier in `src/limiter/classifier.py` (retry-after → reset → `60s×2^n`+jitter max 5; spam-422 backoff vs cap-422 shard vs validation-422 fix; SSO `partial-results` loud-fail — 2026-10-07: hydration GraphQL SSO `partial-results` now degrades to per-repo fallback/unresolved and is recorded; `401` still fails loudly)
 - [ ] T007 [P] Implement `q` allowlist + delta-test validation in `src/lib/qualify.py` (06 §2 set, `props.*`-only-with-`org:`, local `400`, CI delta test)
 - [ ] T008 Create base models + Alembic migrations in `src/store/models.py` (repos PK `id`, owners, full_name_history, shards, audit_log, geo_cache per data-model.md)
 - [x] T009 Configure audit logging + SLO metric emit in `src/lib/audit.py` (moved from `serve/` during hardening; FR-010 fields; `search_remaining`, `incomplete_results_ratio`, `422/403+429` rates, p95, coverage, geo-unmatched)
@@ -82,7 +84,7 @@
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] Implement shard planner (created:/stars: bisect to <1000 fetchable and <<4000 scanned) in `src/scheduler/shard_planner.py`
+- [ ] T012 [P] [US1] Implement shard planner (created:/stars: bisect to <1000 fetchable and <<4000 scanned) in `src/scheduler/shard_planner.py` (2026-10-06: planner replaces the parent `created:` token — GitHub unions duplicates — plans only inside the user's window, and targets `min(1000, per_page × max_pages)`, falling back to the 1000 cap when `total_count > max_shards × target`)
 - [ ] T013 [P] [US1] Implement shard state machine (pending/active/done/incomplete, within-run only) + within-run ordering + Redis Streams queue (sharded lanes `hash%N` for per-repo order, PEL-history drain before `>`, `XAUTOCLAIM` reaper + DLQ after 3 tries, PEL-size monitor; NO hot/cold tiers) in `src/scheduler/state_machine.py` and `src/scheduler/tiering.py`
 - [ ] T014 [US1] Implement sharded search discovery (`per_page=100`, `Link: rel="next"` verbatim, `incomplete_results` → narrow-once + mark) in `src/discover/search_shards.py` (depends on T012)
 - [ ] T015 [US1] Implement `since` cursor scan + ID-range sharding + `max(id)` checkpoint in `src/discover/since_scan.py`
@@ -140,7 +142,7 @@
 - [ ] T031 [P] [US3] Implement mirror enrichers (ecosyste.ms polite-pool `?mailto=` + `POST /packages/bulk_lookup`, deps.dev batch endpoints first, releases/commits/issues/SBOM/OSV/Scorecard-weekly — `criticality_score` bulk is dead — per `06 §6` cost notes) in `src/enrich/mirrors.py` — **not wired**; the module was deleted under R58 (design survives in `06 §5`)
 - [ ] T032 [US3] Implement FastAPI `GET /vsearch/repos` + virtual-param translation + upstream allowlist in `src/serve/app.py` and `src/serve/virtual_params.py` per `contracts/search-api.md` (depends on T028–T031)
 - [ ] T033 [P] [US3] Implement filter-spec v1 schema validation (version gate, qualifier allowlist + typo hints, virtual table check, no tokens/state accepted) in `src/serve/filter_spec.py`
-- [ ] T034 [P] [US3] Implement run/replay/export (`POST /vsearch/run` → `{filter_hash, ran_at, api_version, ...}`, `GET /vsearch/runs/{filter_hash}`, `GET .../export` run bundle with raw upstream JSON) in `src/serve/runs.py` (depends on T033)
+- [ ] T034 [P] [US3] Implement run/replay/export (`POST /vsearch/run` → `{filter_hash, ran_at, api_version, ...}`, `GET /vsearch/runs/{filter_hash}`, `GET .../export` run bundle with raw upstream JSON) in `src/serve/runs.py` (depends on T033; 2026-10-06 additions: `POST /runs/{id}/cancel` + `POST /runs/{id}/save-filter`, live progress via migrations 0010/0011)
 - [ ] T035 [P] [US3] Implement filter form page (`GET /vsearch/`: every `06`-matrix group incl. virtual section, `props.*` gated on single-`org:`, builds identical filter-spec on submit, upload-JSON control, download-as-JSON button) in `src/serve/templates/filters.html` + form handler in `src/serve/app.py`; parity test (form ≡ equivalent JSON upload) in `tests/contract/test_filter_form.py`
 - [ ] T036 [P] [US3] Implement cost-ordered filter planner (cheap-first ordering, per-field source priority table per research D12, lazy depth: visible-page vs full-export) in `src/enrich/cost_planner.py`
 - [ ] T037 [P] [US3] Implement segment executor (id-range segments × tokens, survivors-first ordering, dead-lane re-queue, per-field source + calls-spent reporting into run metadata) in `src/enrich/segment_executor.py` (depends on T036)
@@ -243,4 +245,4 @@
 
 ## Phase 8: Operator Console (US4) — see `console-plan.md`
 
-Tasks **T052–T059** (console models/migration, executor, library, diff, UI shell/detail/history-keyboard-dark, polish) are defined in `design/console-plan.md`, together with the **batch queue B1–B10** that executes them alongside the outstanding **T019–T037 and T051** (US2 + US3). That queue is the overnight run of record; briefs for each batch quote the exact task text and interfaces. US4 contract additions: `design/console-spec.md`; routes table and DDL live there.
+Tasks **T052–T059** (console models/migration, executor, library, diff, UI shell/detail/history-keyboard-dark, polish) are defined in `design/console-plan.md`, together with the **batch queue B1–B10** that executes them alongside the outstanding **T019–T037 and T051** (US2 + US3; all since completed — see the status table above). That queue is the overnight run of record; briefs for each batch quote the exact task text and interfaces. US4 contract additions: `design/console-spec.md`; routes table and DDL live there.

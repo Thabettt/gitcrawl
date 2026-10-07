@@ -1,6 +1,6 @@
 # gitcrawl Console Implementation Plan (overnight run)
 
-> **Status: executed 2026-10-01 → 2026-10-03** (batches B1–B10 + one fix wave). This file is the plan of record; outcomes, rulings R32–R58, and verification numbers live in `../docs/development-log.md`. Two plan details were superseded during execution and are corrected inline: the console migration is `0003` (R38) and the CSS is hand-rolled (R46).
+> **Status: executed 2026-10-01 → 2026-10-03** (batches B1–B10 + one fix wave). This file is the plan of record; outcomes, rulings R32–R58, and verification numbers live in `../docs/development-log.md`. Two plan details were superseded during execution and are corrected inline: the console migration is `0003` (R38) and the CSS is hand-rolled (R46). Later console work (2026-10-06/07) added a sixth run status (`cancelled`, shown as Stopped and resumable), live progress columns, and the run-page Stop and Save-filter actions; `console-spec.md` is authoritative for those.
 >
 > **For the executor (me):** execute the batch queue below with subagent-driven development — fresh implementer per batch, task review, fix loop, commit, ledger. Briefs quote exact task text/interfaces. Do not stop between batches; the operator is asleep and instructed a continuous run.
 
@@ -57,7 +57,7 @@
   def create_run(engine, filter_spec: dict, *, api_version: str) -> int   # status=queued
   def run_status(engine, run_id: int) -> dict
   ```
-- `execute_run`: queued→running→(done|partial|failed); calls the US1 pipeline (search/since/org as the filter-spec dictates), then hydration + enrichment + virtual filters (whatever batches B1–B3 delivered), snapshots `run_items`, writes `runs/{filter_hash}/{run_id}/bundle.json` + `corpus.csv`; sanitized `error` on failure; partial when any incomplete shard.
+- `execute_run`: queued→running→(done|partial|failed|cancelled); calls the US1 pipeline (search/since/org as the filter-spec dictates), then hydration + enrichment + virtual filters (whatever batches B1–B3 delivered), snapshots `run_items`, writes `runs/{filter_hash}/{run_id}/bundle.json` + `corpus.csv`; sanitized `error` on failure; partial when any incomplete shard; operator Stop (cancelled, added 2026-10-06/07) is cooperative and resumable, leaving the in-flight shard PENDING.
 - Tests: `tests/integration/test_executor.py` with MockTransport + TEST DB (status transitions, FIFO order, snapshot rows, bundle files, failure path, partial path).
 
 ### T054 — saved filter library (backend)
@@ -87,7 +87,8 @@
 
 ### T057 — run detail UI
 - Create: `src/serve/templates/run_detail.html` + `src/serve/templates/partials/{status.html,table.html,clone_modal.html,clone_progress.html}`; routes in `pages.py`; partial routes `/partials/runs/{id}/status|table|clone-estimate|clone-progress`.
-- Table: sort (stars/pushed/name), 50/page, badges for incomplete/truncation, owner country + confidence, export/replay buttons.
+- Status partial (updated 2026-10-06/07): live phase, done/total, percent bar, phase-relative ETA, client-side ticking elapsed clock, and the Stop button while queued/running.
+- Table: sort (stars/pushed/name), 50/page, badges for incomplete/truncation, owner country + confidence, export/replay buttons, and a Save filter… action (added 2026-10-06/07).
 - Tests: `tests/contract/test_run_detail.py` (fragments, polling stops at terminal, sort/paging, badges).
 
 ### T058 — history/diff/library pages + keyboard + dark mode

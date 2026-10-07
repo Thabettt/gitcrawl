@@ -1,10 +1,10 @@
 # Data Model
 
-**Date**: 2026-09-29 (updated 2026-10-04). Implements spec entities + `05` A3/A11 + efficiency review I5 + deep-research D10. Postgres 17+; Alembic migrations; partition by `id` range at scale.
+**Date**: 2026-09-29 (updated 2026-10-07). Implements spec entities + `05` A3/A11 + efficiency review I5 + deep-research D10. Postgres 17+; Alembic migrations; partition by `id` range at scale.
 
-**The one-paragraph version**: this is the schema of record. Everything is keyed on immutable GitHub IDs — never on names, because names change — with tombstones instead of deletes, ETags for cheap revalidation, and per-table vacuum/retention tuning so a large crawl stays healthy. Eleven tables are implemented today (migrations `0001`–`0009`): the core repo/owner/geo/shard/audit set, plus the console's runs/run_items/saved_filters, the single-row app_settings, and corpora. Two thesis tables (trace_packs, validation_samples) are designed here but not built — the thesis tracks are parked. Where this document and the migrations disagree, **the migrations are the authority**; this file explains the intent.
+**The one-paragraph version**: this is the schema of record. Everything is keyed on immutable GitHub IDs — never on names, because names change — with tombstones instead of deletes, ETags for cheap revalidation, and per-table vacuum/retention tuning so a large crawl stays healthy. Eleven tables are implemented today (migrations `0001`–`0011`): the core repo/owner/geo/shard/audit set, plus the console's runs/run_items/saved_filters, the single-row app_settings, and corpora. The last two revisions (`0010`, `0011`) added the `runs` live progress columns; no new tables. Two thesis tables (trace_packs, validation_samples) are designed here but not built — the thesis tracks are parked. Where this document and the migrations disagree, **the migrations are the authority**; this file explains the intent.
 
-> **Status note (2026-10-04)**: the DDL below matches the implemented migrations for the core tables (minor column drift is possible — check `migrations/versions/`). The console tables were amended by migration `0004` (see the note there), and later migrations added `app_settings` (`0008`) and `corpora` (`0009`).
+> **Status note (2026-10-07)**: the DDL below matches the implemented migrations for the core tables (minor column drift is possible — check `migrations/versions/`). The console tables were amended by migration `0004` (see the note there), and later migrations added `app_settings` (`0008`), `corpora` (`0009`), and the `runs` progress columns (`0010`–`0011`).
 
 ## Conventions
 
@@ -148,11 +148,13 @@ CREATE INDEX audit_ts_idx ON audit_log (ts);
 
 **Amendment (migration `0004`, ruling R55)**: `run_items.repo_id` became nullable with `ON DELETE SET NULL` and a surrogate `id` was added, so a run snapshot survives a repo purge; the unique `(run_id, repo_id)` is retained. The `0004` downgrade is lossy for rows with a `NULL` `repo_id` (documented in the migration).
 
+**Amendment (migrations `0010`–`0011`, run controls)**: `runs` gained `progress_phase`, `progress_done`, `progress_total`, `progress_updated_at` (`0010`) and `progress_started_at` (`0011`), written by a throttled reporter (1 s; phase changes immediate) while a run is live and cleared at terminal status and by orphan recovery. The status vocabulary gained `cancelled` (shown as "Stopped"), which — like `failed` and `partial` — remains resumable. `run_items.repo_id` and the snapshot shape are unchanged.
+
 ## Tables added after the first draft (implemented)
 
 | Table | Migration | Purpose |
 |---|---|---|
-| `app_settings` | `0008` | Single-row run limits and toggles (`max_shards`, `max_candidates`, `max_hydrate`, `max_enrich`, `request_deadline_seconds`, `graphql_batch`, `graphql_batch_size` 1–20, `limiter_max_concurrent` 1–100); editable at `/settings`, env-pinnable |
+| `app_settings` | `0008` | Single-row run limits and toggles (`max_shards`, `max_candidates`, `max_hydrate`, `max_enrich`, `request_deadline_seconds`, `graphql_batch`, `graphql_batch_size` 1–20, `limiter_max_concurrent` 1–100); editable at `/settings` (one-click corpus preset: 1,000 shards; 100,000 candidates/hydrate/enrich; 24 h deadline; batch 20; concurrency 10), env-pinnable |
 | `corpora` | `0009` | Named frozen corpora: unique name, `source_run_id` FK → runs, note, `repo_count`, `frozen_at` |
 
 ## Planned tables (designed, not implemented — thesis tracks parked)

@@ -1,6 +1,6 @@
 # Market Comparison: Does Anything Do What gitcrawl Does?
 
-**Date**: 2026-10-02. Companion to `how-the-data-flows.md`, `corpus-building-efficient-engineering.md`, and `gitcrawl-vs-seart.md`. Facts verified against the tools' public sites, repositories, and papers on 2026-10-02.
+**Date**: 2026-10-02 (gitcrawl capability notes updated 2026-10-07). Companion to `how-the-data-flows.md`, `corpus-building-efficient-engineering.md`, and `gitcrawl-vs-seart.md`. Facts verified against the tools' public sites, repositories, and papers on 2026-10-02.
 
 **Purpose of this document**: answer a blunt build-or-buy question — *is there already a tool that does what gitcrawl does?* — by surveying the adjacent landscape honestly, showing a capability matrix, and identifying the gap. If the intersection is empty, that emptiness is itself the justification for building it.
 
@@ -42,7 +42,7 @@ Analyzes **10+ billion GitHub events** in real time, with trending rankings, rep
 The original GitHub research mirror. It stopped updating years ago, shell access ended in 2019, and the site later went down (the domain was reported hijacked in 2024). Any study built on it is historical. Its lesson shapes gitcrawl's design: never depend on someone else's crawl for a number that must be defensible. Own the pipeline, own the evidence.
 
 ### 3.6 `gh search repos` and assistant connectors (the DIY baseline)
-The GitHub CLI exposes GitHub's search qualifiers (`--stars`, `--language`, `--created`, `--topic`, `--license`, `--size`, and so on) with JSON output, up to 100 per page. MCP servers and enterprise connectors (for example Glean's "Search repositories") are the same thing with friendlier plumbing. All of them inherit GitHub's 1,000-result cap, offer no virtual filters, no batching, no hydration/enrichment, no persistence, no bundles, and no rate pacing beyond GitHub's own errors. They are the tool you would start writing gitcrawl with — and the tool you would still be building after the first week.
+The GitHub CLI exposes GitHub's search qualifiers (`--stars`, `--language`, `--created`, `--topic`, `--license`, `--size`, and so on) with JSON output, up to 100 per page. MCP servers and enterprise connectors (for example Glean's "Search repositories") are the same thing with friendlier plumbing. All of them inherit GitHub's 1,000-result cap, offer no virtual filters, no batching, no hydration/enrichment, no persistence, no bundles, and no rate pacing beyond GitHub's own errors. They also inherit search's sharper edges — duplicate same-type qualifiers union rather than intersect, pagination has no stability guarantee, and forks are excluded unless `fork:true` — which any corpus tool has to handle explicitly. They are the tool you would start writing gitcrawl with — and the tool you would still be building after the first week.
 
 ### 3.7 Complementary tools (use inside gitcrawl, not instead of it)
 - **ecosyste.ms / deps.dev / Libraries.io**: package and repo metadata offloads that cost zero GitHub calls — already part of the design.
@@ -80,7 +80,7 @@ Read the matrix by column: every column has at least one ❌ where gitcrawl has 
 1. **The intersection is empty.** The six capabilities that define the thesis's corpus problem never co-exist in one tool. Adopting any existing tool means giving up at least one requirement the study cannot give up — most commonly file presence, owner geography, or timestamped evidence.
 2. **The closests alternatives are structurally unable to close the gap.** SEART's catalog cannot grow a file column retroactively without re-cloning the world; WoC's monthly object store cannot answer "today's pushed_at." These are architecture choices, not missing features.
 3. **The alternatives carry dependency risk.** GHTorrent's arc (abandoned, site lost) is the extreme case; SEART's open 502 issue and 15-day dump lag are the everyday version. A thesis number that must survive review should not ride on a third party's uptime.
-4. **The build is bounded and already partly done.** The pipeline, limiter, run bundles, executor, and UI exist; the gap-closing work is the designed batching engine, which is additive. This is not a from-scratch bet against a funded competitor; it is finishing the only tool shaped for the job.
+4. **The build is bounded and already partly done.** The pipeline, limiter, run bundles, executor, and UI exist, and the batching engine is built and parallel (measured ~2,800 repos/min hydration on run #9 — 38,833 repos with zero GraphQL fallbacks). This is not a from-scratch bet against a funded competitor; it is finishing the only tool shaped for the job.
 5. **It is a selling point, stated correctly.** The honest pitch is not "nothing like this exists" — catalogs and archives exist and are good. It is: *"no tool provides live, custom-filtered, evidence-bundled corpus building with owner geography and file-level signals; the available tools each solve an adjacent slice."* That sentence is defensible because this document shows the slices.
 
 ---

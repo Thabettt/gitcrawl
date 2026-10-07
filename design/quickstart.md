@@ -1,6 +1,6 @@
 # Quickstart: Golden-Org Validation Runbook
 
-**Date**: 2026-09-29 (updated 2026-10-04). Proves US1–US3 on fixtures/small scope before scaling tokens. Collect every output as review evidence. New? Read `how-the-data-flows.md` first — each step below maps to its stages.
+**Date**: 2026-09-29 (updated 2026-10-07). Proves US1–US3 on fixtures/small scope before scaling tokens. Collect every output as review evidence. New? Read `how-the-data-flows.md` first — each step below maps to its stages.
 
 **The one-paragraph version**: this runbook is how you convince yourself the system works before spending real API allowance. It walks the four layers in order — discovery completeness on a known org, lifecycle on fixtures, enrichment/serve/geo on fixtures, and the throttle classifier — and names the evidence to record at each step. If all four pass, you can scale tokens and shards with a clear conscience.
 
@@ -22,7 +22,7 @@ PYTHONPATH=src python -m serve
 # and confirm runs/<filter_hash>/<run_id>/bundle.json + corpus.csv exist when it finishes.
 ```
 
-Expected: the dashboard loads, `/health` shows database/Redis/token present, a Find reaches a terminal status, and the bundle appears on disk. This is the same loop the original skeleton proved, now with the real pipeline.
+Expected: the dashboard loads, `/health` shows database/Redis/token present, a Find reaches a terminal status while the run page shows live phase progress (phase, done/total, percent bar, ETA) with a **Stop search** button that leaves it resumable as "Stopped", and the bundle appears on disk. This is the same loop the original skeleton proved, now with the real pipeline.
 
 ## Step 1 — US1: golden-org discovery parity (15 min)
 
@@ -30,10 +30,12 @@ Expected: the dashboard loads, `/health` shows database/Redis/token present, a F
 pytest tests/integration/test_golden_org.py -v
 # Expected: PASS — org:github shards all <1000 fetchable, stored id-set diffs clean
 # against an independent GET /repositories?since= sample; every >1000 query auto-sharded;
+# the plan stays inside the query's own created: window when it has one (the date token is
+# replaced, never appended — GitHub unions duplicate same-type qualifiers);
 # typo probe (updated:>...) rejected local-400 with zero GitHub calls.
 ```
 
-Evidence to record: shard table dump (`query, total_count, fetched, incomplete`), `id`-set diff output, qualifier-400 log line.
+Evidence to record: shard table dump (`query, total_count, fetched, incomplete`) and the plan's `created:` ranges, `id`-set diff output, qualifier-400 log line.
 
 ## Step 2 — US2: live current-state + lifecycle on fixtures (10 min, no background jobs)
 
@@ -54,6 +56,9 @@ pytest tests/contract/test_vsearch_params.py tests/unit/test_trees_first.py test
 # "Lagos"→{NG,gazetteer-city}, "🌍 remote"→{null,unmatched}.
 # Scheduler spot-check: run metadata shows filters executed cheap-first with per-field
 # source + calls spent (spot the zero-call mirror hits vs single-call vs batched rows).
+# Hydration runs as bounded-concurrency GraphQL batches (owner ids via User/Organization
+# inline fragments; language bytes and commit counts in the same query) — the bundle's
+# field_stats.graphql should show batched requests with zero REST fallbacks on healthy repos.
 curl "http://localhost:8000/vsearch/repos?q=org:github&has_dockerfile=true&owner_country=DE&per_page=5"
 # Expected: 200 with items[] carrying enrichment + {country_iso, confidence, raw_location} per owner.
 # Filter-spec portability: save the query as filter-spec v1 JSON, POST /vsearch/run, then

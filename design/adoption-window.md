@@ -70,6 +70,8 @@ The strongest design runs **both cohorts**:
 
 Report both numbers, labeled: "X% of new repos" and "Y% of existing repos adopted by month N" are different sentences. Reviewers will ask which one is meant.
 
+One pipeline note for expressing cohort membership with `created:`: since 2026-10-06/07 the shard planner plans only inside the query's `created:` window, and when it slices it replaces the date token rather than appending a second one (GitHub unions duplicate same-type qualifiers, so appending would silently widen the cohort). Before that fix, shards could return repos outside the requested window. Queries with no date constraint still fall back to 2008-01-01→today.
+
 ## 6. What the commit count buys you
 
 This came up directly in review: *"how could the count of commits be useful?"* The non-obvious answer: **the commit count is not a measure of AI use — it is the denominator that turns adoption from a yes/no into a rate.** Presence of a trace says a repo *tried* an agent; the count says how much, how fast, and compared to what.

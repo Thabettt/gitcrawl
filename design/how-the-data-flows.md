@@ -1,6 +1,6 @@
 # How the Data Flows (read this first if you're new)
 
-**Date**: 2026-09-29 (updated 2026-10-02). Companion to `spec.md`, `contracts/search-api.md`, and `findings/06-exhaustive-parameters.md`. No prior GitHub API knowledge assumed — every concept is introduced where it's first used.
+**Date**: 2026-09-29 (updated 2026-10-07). Companion to `spec.md`, `contracts/search-api.md`, and `findings/06-exhaustive-parameters.md`. No prior GitHub API knowledge assumed — every concept is introduced where it's first used.
 
 **The document set** (read together — what it does, how fast it can go, why it exists, and what else is out there):
 - This document — what gitcrawl does and the stages data passes through.
@@ -15,7 +15,7 @@ You describe what you want in a filter file and click **Find**. gitcrawl checks 
 ## Cast of characters (the only 5 things you must know)
 
 - **GitHub search** (`GET /search/repositories`): the front door. You send one text string (`q`) with filters inside it (e.g. `language:rust stars:>100`) and get back *thin* repo records: name, description, stars, language, dates, plus a `score`. It returns at most 100 per page and 1000 per query, allows ~30 requests/minute per token, and silently treats typos as plain words instead of erroring. Full reference: `findings/01-search-repos-parameters.md`.
-- **Hydration** (`GET /repos/{owner}/{repo}`): asking for one repo's *full* record — topics, license, exact counts, flags, dates. Costs 1 call per repo from a separate budget (5,000/hr per token). Unchanged repos can be re-fetched nearly free via caching headers (ETag).
+- **Hydration** (`GET /repos/{owner}/{repo}`, or one batched GraphQL request for up to 20 repos): asking for one repo's *full* record — topics, license, exact counts, flags, dates, language bytes. Costs 1 REST call per repo from a separate budget (5,000/hr per token), or one batched GraphQL call per 20 from the points budget; if a repo fails inside a batch, only that repo falls back to REST. Unchanged repos can be re-fetched nearly free via caching headers (ETag).
 - **Virtual filters**: filters GitHub never built (`has_dockerfile`, `min_commits`, `owner_country`). gitcrawl computes them itself per repo, after hydration.
 - **Enrichment**: extra detail fetched per repo beyond the full record — language byte breakdowns, file trees, releases, funding links, discussions. Each costs calls, so it's spent only on repos that survived filtering.
 - **Run bundle**: the saved artifact of one Find — your filters + when it ran + what GitHub said + final results. It's how a second device replays your search and how a thesis proves what was measured.
@@ -37,15 +37,15 @@ Before any network call, every qualifier is checked against the documented allow
 
 ### Stage 2 — Live search (thin matches arrive)
 
-The validated `q` goes to GitHub search, pages of 100 followed via `Link` headers. Each match is thin (see cast above); the `score` field is thrown away immediately — it's relevance *relative to that query*, meaningless to store or sort by later. Two honest limits surface here: past 1000 results GitHub errors (`422`) instead of paging, so broad queries must be narrowed (date-sharded) rather than forced; and `total_count` is an estimate, so it's displayed as approximate with an `incomplete` flag when timeouts cut a page short. Throttling is shared across all users of a token (30/min), so concurrent Finds queue with "retry in Ns" instead of failing.
+The validated `q` goes to GitHub search, pages of 100 followed via `Link` headers. Each match is thin (see cast above); the `score` field is thrown away immediately — it's relevance *relative to that query*, meaningless to store or sort by later. Two honest limits surface here: past 1000 results GitHub errors (`422`) instead of paging, so broad queries must be narrowed (date-sharded) rather than forced; and `total_count` is an estimate (it drifts over hours, and search pagination has no stability guarantee — the same request can shift or skip items between runs), so it's displayed as approximate with an `incomplete` flag when timeouts cut a page short. Sharding respects the query's own `created:` constraint: the existing date token is replaced rather than appended (GitHub unions duplicate same-type qualifiers, so appending would make every shard the same query) and the plan stays inside that window, falling back to 2008→today only when the query has no date constraint. The shard-size target follows your `page.per_page × max_pages` budget, capped at 1,000 results per shard; when a query is so broad that a finer plan wouldn't fit `max_shards`, the planner falls back to the 1,000 cap and reports the plan as capped. Throttling is shared across all users of a token (30/min), so concurrent Finds queue with "retry in Ns" instead of failing.
 
 ### Stage 3 — Hydration (thin → full, only for candidates)
 
-Each surviving match gets its full record (1 call each, separate budget). This is the most expensive stage per repo, so two economies apply: unchanged repos revalidate nearly free (ETag → `304`), and enrichment never starts for repos that later fail virtual filters. A repo renamed since discovery is followed (`301`); a deleted/privatized one becomes a recorded tombstone, not a crash.
+Each surviving match gets its full record — batched by default (up to 20 aliased repos per GraphQL request, bounded concurrency, per-repo REST fallback when one node fails) on a budget separate from search. This is the most expensive stage per repo, so two economies apply: unchanged repos revalidate nearly free (ETag → `304`), and enrichment never starts for repos that later fail virtual filters. A repo renamed since discovery is followed (`301`); a deleted/privatized one becomes a recorded tombstone, not a crash. The same batch already carries the commit count and primary-language bytes, so those filters cost no extra calls.
 
 ### Stage 4 — Virtual filters (gitcrawl's own screening room)
 
-Now the filters GitHub can't express run per repo, cheapest first: counts from the hydrated record (`min_commits` via commit count; `min_loc` is accepted but recorded-only until an estimate tier ships — see `loc-dilemma.md`), then file checks (`has_dockerfile` via one file-tree fetch covering all paths — never one call per file; this same machinery later becomes the agent-detection file channel), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable. The full cost-order table (free → mirrors → single-call → batched → deep) lives in `research.md` D12; the scheduler behind it segments candidates across tokens survivors-first, so even a stopped-early run stays useful.
+Now the filters GitHub can't express run per repo, cheapest first: values already carried by hydration (`min_language_bytes`/`max_language_bytes`, `min_commits`/`max_commits`; `min_loc` is accepted but recorded-only until an estimate tier ships — see `loc-dilemma.md`), then file checks (`has_dockerfile` via one file-tree fetch covering all paths — never one call per file; this same machinery later becomes the agent-detection file channel), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable. The full cost-order table (free → mirrors → single-call → batched → deep) lives in `research.md` D12; the scheduler behind it segments candidates across tokens survivors-first, so even a stopped-early run stays useful.
 
 ### Stage 5 — Enrichment (detail only for survivors)
 
@@ -61,7 +61,7 @@ Survivors merge by immutable repo `id` (never by name — names change on rename
 
 ### Stage 8 — Display (cards with provenance)
 
-Each card shows enriched metadata + virtual-filter badges + owner country with confidence + *when* it was measured (`ran_at`). Truncation is always declared: capped-by-1000, timed-out pages, and throttled retries appear as labeled flags, never silent gaps.
+Each card shows enriched metadata + virtual-filter badges + owner country with confidence + *when* it was measured (`ran_at`). While a Find is live the page shows its phase, a done/total counter, a percent bar, a phase-relative ETA and a ticking elapsed clock, with a **Stop** button that parks the run as "Stopped" — stopped runs keep their shards and can be resumed. Truncation is always declared: capped-by-1000, timed-out pages, and throttled retries appear as labeled flags, never silent gaps.
 
 ### Stage 9 — Bundle and export (the replayable artifact)
 
@@ -69,7 +69,7 @@ The run persists `{filter_hash, ran_at, api_version, total_count, incomplete_fla
 
 ## The exhaustive run (when bounded isn't enough) — still live-only
 
-Everything above is the per-Find live flow. For exhaustive coverage the *same* live run scales up: sharded date-range discovery plus ID-cursor backfill into the within-run working set (`spec.md` US1/US2, `design` scheduler/store stages), all executed on the go at `ran_at`. There is no second background path, no watermarks, no tails. A bounded Find answers "top matches right now"; an exhaustive run answers "everything matching right now, fetched live." Both feed the same display and bundle stages.
+Everything above is the per-Find live flow. For exhaustive coverage the *same* live run scales up: sharded date-range discovery plus ID-cursor backfill into the within-run working set (`spec.md` US1/US2, `design` scheduler/store stages), all executed on the go at `ran_at`. There is no second background path, no watermarks, no tails. A bounded Find answers "top matches right now"; an exhaustive run answers "everything matching right now, fetched live." If it hits the run deadline or is stopped mid-flight it ends gracefully as partial or stopped and stays resumable — in-flight shards are left pending, and transient shard failures are deferred and retried rather than aborting the run. Both feed the same display and bundle stages.
 
 ## Optional epilogue: cloning (never required)
 

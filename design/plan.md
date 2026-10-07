@@ -28,7 +28,7 @@ Build the SEART-pattern crawler hardened per the `05` gaps + efficiency review, 
 
 **Project Type**: service (scheduler + workers) with a local operator console (US4) and a CLI runbook (`quickstart.md`).
 
-**Performance Goals**: live-only serve (~10–20s first Find: bounded search + visible-page enrich; cached repeats fast); discovery at dense-search rate (≤1,800 search req/hr/token, 100/page); hydration ≤5,000 core req/hr/token; no background tails — all budget spent within the run.
+**Performance Goals**: live-only serve (~10–20s first Find: bounded search + visible-page enrich; cached repeats fast); discovery at dense-search rate (≤1,800 search req/hr/token, 100/page); hydration ≤5,000 core req/hr/token; no background tails — all budget spent within the run. Measured 2026-10-07 (run #9): parallel batched GraphQL hydration at concurrency 10 sustained ~2,800 repos/min (38,833 repos via 1,942 GraphQL requests, 0 fallbacks) versus ~300–400/min sequential.
 
 **Constraints**: search 30/min/token, core 5,000/hr/token (no token-sharing to evade); ~10 concurrent per endpoint per token (900 pts/min math); 1000-fetchable + ~4000-scan per query; `q` 256-char/5-op caps; API-only default (HTML fallback needs legal review + `robots.txt` check); GDPR deletion purge window; PII minimization (no commit emails stored).
 
@@ -72,7 +72,7 @@ The list below is the **current** layout, with the original plan's entries corre
 ```text
 src/
 ├── scheduler/
-│   ├── shard_planner.py      # created:/stars: bisect to <1000 and <<4000 scanned
+│   ├── shard_planner.py      # created:/stars: bisect to <1000 and <<4000 scanned; replaces the parent created: token (GitHub unions duplicates)
 │   ├── tiering.py            # within-run shard ordering (cheap-first, survivors-first; no cadences)
 │   └── state_machine.py      # pending/active/done/incomplete per shard (within-run only)
 ├── limiter/
@@ -90,7 +90,7 @@ src/
 │   └── settings.py           # RunSettings + app_settings load/update + env pinning
 ├── hydrate/
 │   ├── repo_client.py        # GET /repos + ETag (stable URLs only)
-│   ├── graphql_repo.py       # GraphQL repo-details batch adapter (REST fallback)
+│   ├── graphql_repo.py       # GraphQL repo-details batch adapter (REST fallback; owner databaseId via User/Organization fragments)
 │   └── tail.py               # live within-run refresh (current pushed_at at ran_at; no watermark poller)
 ├── enrich/
 │   ├── cost_planner.py       # cost-ordered filter plan + per-field source priority (D12)
@@ -108,14 +108,16 @@ src/
 │   ├── executor.py           # single-worker run executor
 │   ├── virtual_params.py     # translation table + upstream allowlist + own 400
 │   ├── filter_spec.py        # filter-spec v1 schema + corpus-frame validation (T033/T038)
-│   ├── runs.py               # run/replay/export + clone estimate/progress (T034/T051)
+│   ├── runs.py               # run/replay/export + cancel/save-filter + live progress + clone estimate/progress (T034/T051)
 │   ├── library.py / diff.py / corpora.py / quality.py / metrics.py / settings.py / system.py
 │   ├── templates/            # base/dashboard/filters/run detail/history/diff/library/corpora/...
 │   └── static/               # vendored htmx + hand-rolled app.css/app.js (R46)
 └── lib/
     ├── gh_client.py          # shared httpx + headers + User-Agent + version pin
-    ├── graphql_batch.py      # generic aliased GraphQL batch core (moved from enrich/)
+    ├── graphql_batch.py      # generic aliased GraphQL batch core with bounded concurrency (moved from enrich/)
     ├── audit.py              # per-request audit + SLO emit (moved from serve/)
+    ├── cancellation.py       # cooperative abort contextvar (run Stop)
+    ├── progress.py           # throttled live progress reporter (phase/done/total)
     ├── deadlines.py          # request/clone deadlines
     └── qualify.py            # q allowlist + delta-test validation
 
@@ -141,4 +143,4 @@ tests/
 
 ## Console additions (US4 — see `console-spec.md` / `console-plan.md`)
 
-Additional source files, as actually built: `src/serve/pages.py` (server-rendered routes), `src/serve/executor.py` (single-worker run executor), `src/serve/library.py` (saved filters), `src/serve/diff.py` (run diff), `src/serve/corpora.py` (frozen corpora), `src/serve/quality.py` (per-run quality report), `src/serve/metrics.py` (SLO payload), `src/serve/settings.py` + `settings_spec.py` (run limits), `src/serve/system.py` (status page), `src/serve/__main__.py` (dev server), `src/serve/templates/` (base/dashboard/find/run detail/history/diff/library/corpora/settings/system + partials), `src/serve/static/` (vendored htmx + hand-rolled CSS + app.js, R46), and `migrations/versions/0003_console.py` (runs/run_items/saved_filters — ruling R38; later migrations `0004`, `0008`, `0009` amend/extend). The console completes US2 (T019–T023) and US3 (T025–T037, T051) per `console-plan.md` batches B1–B10; the thesis tracks (FR-015–FR-022) remain deferred and parked.
+Additional source files, as actually built: `src/serve/pages.py` (server-rendered routes), `src/serve/executor.py` (single-worker run executor), `src/serve/library.py` (saved filters), `src/serve/diff.py` (run diff), `src/serve/corpora.py` (frozen corpora), `src/serve/quality.py` (per-run quality report), `src/serve/metrics.py` (SLO payload), `src/serve/settings.py` + `settings_spec.py` (run limits), `src/serve/system.py` (status page), `src/serve/__main__.py` (dev server), `src/serve/templates/` (base/dashboard/find/run detail/history/diff/library/corpora/settings/system + partials), `src/serve/static/` (vendored htmx + hand-rolled CSS + app.js, R46), and `migrations/versions/0003_console.py` (runs/run_items/saved_filters — ruling R38; later migrations `0004`–`0011` amend/extend, with `0010`/`0011` adding the run progress columns). The console completes US2 (T019–T023) and US3 (T025–T037, T051) per `console-plan.md` batches B1–B10; the thesis tracks (FR-015–FR-022) remain deferred and parked.

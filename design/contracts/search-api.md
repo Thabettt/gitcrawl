@@ -1,6 +1,6 @@
 # Contract: `GET /vsearch/repos` (gitcrawl serve API)
 
-**Date**: 2026-09-29 (updated 2026-10-04). Upstream: `GET /search/repositories` (allowlist enforced — unknown params never forwarded). Versioned with `X-GitHub-Api-Version` pinned server-side. Narrative version of this contract: `../how-the-data-flows.md` (Stages 0–1, 8–9).
+**Date**: 2026-09-29 (updated 2026-10-07). Upstream: `GET /search/repositories` (allowlist enforced — unknown params never forwarded). Versioned with `X-GitHub-Api-Version` pinned server-side. Narrative version of this contract: `../how-the-data-flows.md` (Stages 0–1, 8–9).
 
 **The one-paragraph version**: this is the promise gitcrawl makes to anyone calling its serve API. You may send the upstream search parameters plus gitcrawl's own "virtual" filters; anything unknown is rejected locally with a helpful `400` instead of being forwarded to GitHub (where it would be silently ignored). Responses look like GitHub's shape — `total_count` + `items[]` — but the counts are exact, each owner carries a country with a confidence tier, and any incompleteness is labeled. The rest of this file is the precise table of what's accepted, what it translates to, and what comes back.
 
@@ -26,7 +26,7 @@ GET /vsearch/repos?q={query}&sort={sort}&order={order}&per_page={n}&page={n}
 | `owner_country` | ISO-3166-1 alpha-2, optional | Virtual → post-filter on stored `owners.country_iso`; implies `min_geo_confidence` default (gazetteer and above) |
 | `min_geo_confidence` | enum: `exact-iso` \| `name` \| `gazetteer-city` \| `geocoder` \| `weak`, optional (default `gazetteer-city`) | Confidence floor for `owner_country` |
 | `min_commits` / `max_commits` | int ≥ 0, optional | Virtual → post-filter on hydrated default-branch commit count |
-| `min_language_bytes` / `max_language_bytes` | int ≥ 0, optional | Virtual → post-filter on the primary language's byte size from `GET /repos/{o}/{r}/languages` (one call per repo) |
+| `min_language_bytes` / `max_language_bytes` | int ≥ 0, optional | Virtual → post-filter on the primary language's byte size captured during hydration (GraphQL `languages(first: 10)`; no extra call per repo) |
 | `min_loc` / `max_loc` | int ≥ 0, optional | **Accepted and recorded, not yet enforced** — using them flags the run incomplete (R44). A no-clone estimate tier is designed in `../loc-dilemma.md`; until it ships, the UI renders these fields disabled |
 | future virtuals | — | Added only with translation rule + tests here; upstream allowlist NEVER extended ad hoc |
 
@@ -76,8 +76,16 @@ Envelope mirrors upstream shape (`total_count` + `items[]`) but counts are exact
 | `owner_country=CC` | none (broad discovery) | `owners.country_iso = CC` (+ confidence ≥ threshold) |
 | `min_geo_confidence=T` | none | confidence rank ≥ `T` |
 | `min_commits=N` / `max_commits=N` | none | default-branch commit count compared |
-| `min_language_bytes=N` / `max_language_bytes=N` | none | primary-language bytes compared (live `/languages`) |
+| `min_language_bytes=N` / `max_language_bytes=N` | none | primary-language bytes compared (captured during hydration) |
 | `min_loc=N` / `max_loc=N` | none | recorded only (enforcement pending `../loc-dilemma.md`) |
+
+## Upstream behavior this contract relies on (verified 2026-10-06/07)
+
+- **Duplicate same-type qualifiers union.** GitHub treats two `created:` qualifiers as a union, not an intersection and not first-wins. The shard planner therefore *replaces* the existing `created:` token when it slices a query (`replace_created`), planning only inside the user's window; appending a second `created:` would silently widen the shard.
+- **1,000-result cap per query.** Repository search returns at most 1,000 results; page 11 at `per_page=100` returns `422 "Only the first 1000 search results are available"`. `total_count` can exceed 1,000 and drifts over hours (38,820 → 38,823 → 38,833 within ~5 h for one unchanged query), so discovery shards by creation date and treats counts as approximate.
+- **Forks excluded by default.** Repository search omits forks unless `fork:true` (include) or `fork:only` (restrict) is given.
+- **Hydration is batched GraphQL.** Details, per-language bytes (`languages(first: 10)`), and default-branch commit counts arrive in the same batched query (≤ `graphql_batch_size` aliases per request; the bound is 1–20 and env overrides clamp to it). REST remains the fallback. Hydration concurrency is `min(limiter_max_concurrent, 20)`.
+- **Search pagination has no stability guarantee.** Identical paginated requests can shift or skip items, which explains small cross-run corpus deltas; the exported run bundle (filters + raw items + field stats) is the reproducible artifact.
 
 ## Invariants
 

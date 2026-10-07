@@ -1,6 +1,6 @@
 # Console Spec (US4) — gitcrawl Operator Console
 
-**Status**: Implemented (2026-10-01→03; outcomes in `../docs/development-log.md`). Approved-for-overnight v1; **UX flow revised 2026-10-02** — see `console-ux-redesign.md`. This spec remains authoritative for the backend and route contract; later phases (corpora, settings, system/metrics, quality) extended the route table — those rows are marked below, and the implementation is the final authority. Parents: `spec.md` (Frozen v3), `tasks.md` (T019–T037, T051), `contracts/search-api.md`, `data-model.md`. Plan of record: `console-plan.md`.
+**Status**: Implemented (2026-10-01→03; outcomes in `../docs/development-log.md`). Approved-for-overnight v1; **UX flow revised 2026-10-02** — see `console-ux-redesign.md`. This spec remains authoritative for the backend and route contract; later phases (corpora, settings, system/metrics, quality, run controls) extended the route table — those rows are marked below, and the implementation is the final authority. Parents: `spec.md` (Frozen v3), `tasks.md` (T019–T037, T051), `contracts/search-api.md`, `data-model.md`. Plan of record: `console-plan.md`.
 
 ## Goal
 
@@ -22,7 +22,7 @@ CREATE TABLE runs (
   id            BIGSERIAL PRIMARY KEY,
   filter_hash   TEXT NOT NULL,              -- sha256 of canonical filter-spec
   filter_spec   JSONB NOT NULL,             -- full validated filter-spec v1 (+frame if any)
-  status        TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed|partial
+  status        TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed|partial|cancelled
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at    TIMESTAMPTZ, finished_at TIMESTAMPTZ,
   api_version   TEXT NOT NULL,
@@ -51,6 +51,9 @@ CREATE INDEX run_items_stars_idx ON run_items (run_id, stargazers DESC);
 -- Amendment (migration 0004, ruling R55): `repo_id` became NULLABLE with
 -- ON DELETE SET NULL and a surrogate `id` was added, so a run snapshot
 -- survives a repo purge; unique (run_id, repo_id) is retained.
+-- Amendment (migrations 0010, 0011, 2026-10-06/07): live progress columns
+-- `progress_phase`, `progress_done`, `progress_total`, `progress_updated_at`,
+-- `progress_started_at`; cleared on terminal states and orphan recovery.
 
 CREATE TABLE saved_filters (
   id            BIGSERIAL PRIMARY KEY,
@@ -64,7 +67,8 @@ CREATE TABLE saved_filters (
 ### Run executor
 
 - Single background worker (in-process thread), FIFO queue; one Find at a time; `POST /find` enqueues and redirects.
-- Lifecycle: `queued` → `running` → (`done` | `partial` when any shard/page incomplete | `failed`).
+- Lifecycle: `queued` → `running` → (`done` | `partial` when any shard/page incomplete | `failed` | `cancelled` when the operator stops it). Cancellation is cooperative (`lib/cancellation.py` contextvar, checked in the planner loop, per shard/page, per GraphQL chunk, and per enrichment segment); the in-flight shard is left PENDING so a resume reclaims it. Resume accepts failed, partial, and cancelled runs.
+- A throttled reporter (1 s; phase changes immediate) writes the live progress columns. Phases: starting, discovering, hydrating, enriching, writing (labels: Starting, Finding repos, Fetching details, Applying filters, Saving results).
 - Uses the existing pipeline (`run_search_discovery` / `run_since_scan` / `run_org_enum`) for discovery, then hydration/enrichment/virtual filters for the result set, then snapshots `run_items` and writes the bundle (`bundle.json` + `corpus.csv`) under `runs/{filter_hash}/{run_id}/`.
 - Audit rows continue to be written per response (FR-010).
 
@@ -83,11 +87,14 @@ CREATE TABLE saved_filters (
 | GET | `/runs/{id}` | Run detail page |
 | GET | `/runs/{id}/export?format=json\|csv` | Bundle download |
 | POST | `/runs/{id}/replay` | New run from stored filter-spec |
+| POST | `/runs/{id}/resume` | Resume a failed, partial, or cancelled run (added post-v1) |
+| POST | `/runs/{id}/cancel` | Stop a queued/running run (CSRF); status `cancelled`, resumable (added post-v1) |
+| POST | `/runs/{id}/save-filter` | Store this run's filter in the library (CSRF); duplicate names report an error on the run page (added post-v1) |
 | GET | `/runs/{id}/diff?against={id2}` | Diff page |
 | GET | `/api/runs/{id}/diff?against={id2}` | Diff JSON (`added`, `removed`, `changed[{field,from,to}]`) |
 | GET | `/filters` | Saved filter library |
 | POST | `/filters` / POST `/filters/{id}/delete` | Save / delete (rename optional) |
-| GET | `/partials/runs/{id}/status` | htmx poll: status banner + counts (stops at terminal state) |
+| GET | `/partials/runs/{id}/status` | htmx poll: status banner, counts, live phase/done/total/percent/ETA, elapsed clock, Stop control (stops at terminal state) |
 | GET | `/partials/runs/{id}/table?sort=&dir=&page=` | htmx results table fragment |
 | GET | `/runs/{id}/clone-estimate?limit=&mode=` | disk estimate preview (R54) |
 | POST | `/runs/{id}/clone` / GET `/partials/runs/{id}/clone-progress` | clone start / progress (R54) |
@@ -103,7 +110,7 @@ CREATE TABLE saved_filters (
 
 - **Dashboard**: recent runs table (id, hash short, status pill, counts, duration, relative time), health badges, quick filter box.
 - **Filter form**: every `06 §2` qualifier group with comparator/range widgets; virtual section (`min_stars`, `team_topic`, `has_dockerfile`, `min_commits`, `min_loc`, `owner_country` + confidence threshold); `props.*` gated on single `org:`; live client-side typo hints mirrored from `lib/qualify.py`; "Download as JSON" button producing the exact filter-spec the form would POST.
-- **Run detail**: status banner auto-polls via htmx until terminal; results table sortable (stars, pushed, name) and paginated 50/page via htmx fragments; badges for incomplete/truncation; per-row provenance tooltip; owner country + confidence; export/replay/clone actions.
+- **Run detail**: status banner auto-polls via htmx until terminal; live progress line (phase label, done/total, percent bar, phase-relative ETA — needs done ≥ 2, projections over 24 h show "estimating…" — and a client-side ticking elapsed clock that survives htmx swaps); **Stop search** button while queued/running (status becomes Stopped, resumable); results table sortable (stars, pushed, name) and paginated 50/page via htmx fragments; badges for incomplete/truncation (truncation evaluated only for finished runs); per-row provenance tooltip; owner country + confidence; **Found** shows GitHub's `total_count` while the raw fetched count stays under Technical details; export/replay/clone actions and a **Save filter…** modal that stores the run's filter in the library (duplicate names report an error without losing the form).
 - **Clone control**: modal with slider + numeric input (top-N by current sort), mode radio (shallow / file-only / windowed), disk estimate with low-disk warning, resumable progress view.
 - **Diff**: select a second run for the same filter hash; table of added/removed/changed (stars, pushed_at, archived, status flags) with counts summary.
 - **Saved filters**: list with name, hash, last run; one-click load into the form; save-from-form; delete with confirmation.
@@ -130,7 +137,7 @@ CREATE TABLE saved_filters (
 
 - Contract tests for every route (status codes, validation hints, allowlist, export headers/bodies, diff JSON shape, saved-filter CRUD, CSRF reject).
 - Template tests (TestClient): key elements/ids present per page, empty/error states render, form produces the exact filter-spec (form ≡ JSON parity test).
-- Executor tests: queued→running→done/partial/failed with MockTransport + TEST DB; snapshot rows; bundle files written; single-worker FIFO.
+- Executor tests: queued→running→done/partial/failed/cancelled with MockTransport + TEST DB; snapshot rows; bundle files written; single-worker FIFO; run-control tests cover Stop/cancel and save-filter.
 - Diff unit/integration tests on fixture runs.
 - Existing live tests stay; new UI tests are offline. Optional token-guarded live smoke for `POST /find` end-to-end.
 

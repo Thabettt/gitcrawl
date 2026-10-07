@@ -10,6 +10,8 @@
 
 > **Status note (2026-10-04)**: US1–US4 are implemented (see `../docs/development-log.md`). The thesis tracks **FR-015–FR-022 are parked** — designed, not built — and their entities (`TracePack`, `CorpusFrame`) exist as design intent only; `tasks.md` Phase 6 stays deferred. `min_loc`/`max_loc` are accepted but recorded-only (R44); a no-clone estimate path is designed in `loc-dilemma.md`. This spec's requirement text stays frozen; the status note is the pointer.
 
+> **Status note (2026-10-07)**: Session fixes that refine (not rewrite) the text above: GitHub unions duplicate same-type qualifiers, so the shard planner now *replaces* the query's `created:` token and plans only inside the user's date window (FR-001/SC-001); runs now include a `cancelled` status ("Stopped", resumable) with cooperative abort and live progress phase/done/total/ETA in the console (US4); hydration is parallel batched GraphQL with owner `databaseId` selected via `... on User` / `... on Organization` inline fragments (it is not on the `RepositoryOwner` interface) plus REST fallback; hydration SSO `partial-results` degrades to per-repo fallback/unresolved and is recorded, while `401` still fails loudly (the Edge Cases line below predates this); `min_language_bytes`/`max_language_bytes` are enforced virtual filters from hydration language bytes (distinct from the recorded-only `min_loc`/`max_loc`).
+
 **New here? Read `how-the-data-flows.md` first** — it narrates every stage below (filters → Find → hydrate → enrich → display → bundle) with each GitHub limitation explained.
 
 ## User Scenarios & Testing *(mandatory)*

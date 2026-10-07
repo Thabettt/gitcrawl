@@ -53,7 +53,7 @@ Python is unusually comment-heavy (module docstrings, function docstrings, and `
 The definitional difference is the leading explanation, not the only one. Three more deserve a check:
 
 - **Catalog lag.** SEART is a crawl-time database: it knows what its crawlers collected, and how recently. Repos created or pushed after its last pass may simply be missing from their 12,383 — meaning some of our "extra" 4,000 are repos SEART has not seen yet.
-- **Commit count definitions.** Our `min_commits` uses the default branch's commit count from the GitHub API. SEART counts commits from its own crawl, which may include other branches or count differently. A different denominator changes the candidate set before LOC even runs.
+- **Commit count definitions.** Our `min_commits` uses the default branch's commit count from the GitHub API (captured in the batched hydration query, with a REST fallback per repo). SEART counts commits from its own crawl, which may include other branches or count differently. A different denominator changes the candidate set before LOC even runs.
 - **Fork handling.** Both sides exclude forks, but the flag comes from different sources (GitHub's `fork` field vs SEART's stored flag). Worth a spot check, not a rewrite.
 
 None of these can be settled by staring at totals. The afternoon experiment in §7 settles all of them for the cost of a small download.
@@ -143,7 +143,7 @@ Both are available, so the choice is ours — and it must be written down:
 - **tokei/cloc (Option 5)** gives exact per-language rows — Python-only is exact.
 - **`code_frequency` (Option 1)** is whole-repo only; GitHub does not break additions/deletions down by language.
 - **SEART** stores per-language metrics — but verify whether its "Code Lines" filter uses the Python row or the sum across languages before comparing.
-- **The `min_language_bytes`/`max_language_bytes` virtuals (added 2026-10-06)** enforce the primary-language slice directly from `/languages` — one call per repo, budget-aware, with the byte count recorded per result. This is the first tier of the fallback architecture (§6) implemented in code.
+- **The `min_language_bytes`/`max_language_bytes` virtuals (added 2026-10-06)** enforce the primary-language slice from the per-language byte counts captured during hydration — the GraphQL repo query's `languages(first: 10) { edges { size node { name } } }`, so no extra call per repo — budget-aware, with the byte count recorded per result. This is the first tier of the fallback architecture (§6) implemented in code.
 
 For a Python-project filter, **count Python-only** — but **store both** (Python lines, total lines, Python share). Under `language:python`, Python can be as little as ~30% of a repo, so Python-only LOC can be a fraction of the repo's total. If the thesis says "5k+ LOC" and a reviewer reads it as repo-total, the wrong number is being defended.
 

@@ -1,6 +1,6 @@
 # gitcrawl vs. SEART GitHub Search
 
-**Date**: 2026-10-02. Companion to `how-the-data-flows.md` and `corpus-building-efficient-engineering.md`. No prior knowledge assumed. SEART facts below were verified against its public site, repository, and published papers on 2026-10-02.
+**Date**: 2026-10-02 (gitcrawl capability notes updated 2026-10-07). Companion to `how-the-data-flows.md` and `corpus-building-efficient-engineering.md`. No prior knowledge assumed. SEART facts below were verified against its public site, repository, and published papers on 2026-10-02.
 
 **Purpose of this document**: explain, plainly, what SEART GitHub Search is, what gitcrawl is, where each one genuinely wins, and why gitcrawl is the better fit for this project's thesis work. It is written to be fair: SEART is a good, citable research platform, and there are jobs where it is clearly the better choice. The claim is not "gitcrawl beats SEART at everything" — it is "gitcrawl wins at the specific job we need done."
 
@@ -30,7 +30,7 @@ The one-sentence difference: **SEART asks "what does my catalog contain that mat
 | **Evidence for a thesis** | Catalog export | Per-repo raw GitHub responses — the replication package's raw layer; audit rows for every request; rate-limit telemetry |
 | **Honesty about gaps** | Catalog semantics (you see what was collected) | Explicit partial flags: capped pages, timed-out shards, throttled retries, dropped candidates, unresolved repos — never silently missing |
 | **Setup cost** | Nearly zero: open the site or download a dump | Needs a token, a database, Redis, and a running console |
-| **Heavy metrics** | Already computed for ~1.9M repos (commits, contributors, issues, PRs, LOC via `cloc`) | Commits are enforced (default-branch count); LOC is recorded-only pending an estimate tier (`loc-dilemma.md`); file and country checks work today |
+| **Heavy metrics** | Already computed for ~1.9M repos (commits, contributors, issues, PRs, LOC via `cloc`) | Commits are enforced (default-branch count); language bytes (`min_language_bytes`) are enforced from hydration data, while `cloc`-style LOC is recorded-only pending an estimate tier (`loc-dilemma.md`); file and country checks work today |
 | **Cloning / code** | Not available in GitHub Search itself; their separate Data Hub offers Java/Python code datasets with preprocessing by email | Optional clone control (shallow/file-only/windowed) into the run, never required |
 | **Code/legality posture** | Shared public platform with published papers and a DOI | Owned tokens, fingerprint-only logging, paced to GitHub's limits, legal gates documented in-repo |
 | **Best at** | Fast, no-setup sampling from a large prebuilt catalog | Bespoke, live, evidence-backed corpora with filters nobody has precomputed |
@@ -82,7 +82,7 @@ That same machinery **is** the file channel of the agent-detection work (current
 3. **Explicit incompleteness.** gitcrawl's rule is "never present partial data as complete": capped searches, throttled pages, dropped candidates, and unresolved repos all become named flags in the run. A shared catalog cannot tell you what it missed.
 4. **Independence.** gitcrawl does not stop working when someone else's service returns 502, runs its crawler on a 6-hour cycle, or changes its schema. The pipeline is in this repository, under this project's control and audit.
 5. **One pipeline for the whole study.** Search, virtual filters, geo, optional cloning, run bundles, and (later) the detection channels all live in one place. With SEART, repo selection is one tool and everything else is your own separate scripts.
-6. **Roadmap off the same core.** The GraphQL batching engine (built 2026-10-02; `corpus-building-efficient-engineering.md` §9–§10) raises gitcrawl's ceiling from ~20,000 to hundreds of thousands of repos per 4 hours, and the LOC estimate work (`loc-dilemma.md`) closes the one metric gap where SEART is ahead.
+6. **Roadmap off the same core.** The GraphQL batching engine (built 2026-10-02, parallelized 2026-10-06; `corpus-building-efficient-engineering.md` §9–§10) raises gitcrawl's ceiling: run #9 hydrated 38,833 repos with 1,942 GraphQL requests and zero fallbacks — ~2,800 repos/min at concurrency 10 (was ~300–400/min sequential) — and the LOC estimate work (`loc-dilemma.md`) closes the one metric gap where SEART is ahead.
 
 ---
 
@@ -99,7 +99,7 @@ Filter: Rust, not a fork, pushed since a cutoff, at least 100 stars, plus "has a
 | "Has a Dockerfile" | **Not possible** | One file-listing call per repo |
 | "Owner in Germany" | **Not possible** | Geo pipeline: one call per owner, cached |
 | Evidence artifact | Catalog export | Bundle: filter spec, hash, timestamp, API version, raw JSON per repo, flags |
-| Time for a 10,000-repo slice | Minutes | About 4 hours for save + one check at the current meters (`corpus-building-efficient-engineering.md` §4), less with batching once built |
+| Time for a 10,000-repo slice | Minutes | Tens of minutes; run #9 hydrated + filtered 38,833 repos in ~25 min (whole resumed run 78 min including re-planning and the 30/min search cap — `corpus-building-efficient-engineering.md` §4) |
 
 Neither column is universally better — the point is that only one column can answer the last two filter questions at all, and only one can prove what GitHub said on the day.
 
@@ -107,9 +107,9 @@ Neither column is universally better — the point is that only one column can a
 
 ## 6. Honest limitations of gitcrawl (as of this writing)
 
-- **A single run starts with small caps** (500 candidates, 200 saved, 100 checked), tunable at `/settings`; SEART has no such caps.
-- **LOC filters are recorded but not enforced yet** (`min_commits` is enforced; see `loc-dilemma.md`) — SEART is ahead on LOC today.
-- **GraphQL batching is built** (2026-10-02) and used for hydration/enrichment, with the one-by-one REST path as fallback.
+- **A single run starts with small caps** (500 candidates, 200 saved, 100 checked), tunable at `/settings`; the corpus preset raises them to 100,000 candidates/hydrate/enrich and 1,000 shards (24 h deadline). SEART has no such caps.
+- **`cloc`-style LOC filters are recorded but not enforced yet** (`min_commits` and language-byte filters `min_language_bytes`/`max_language_bytes` are enforced; see `loc-dilemma.md`) — SEART is ahead on true LOC today.
+- **GraphQL batching is built** (2026-10-02) and now runs parallel batches (bounded concurrency; hydration uses `min(limiter_max_concurrent, 20)`, corpus preset 10) with the one-by-one REST path as fallback.
 - **It needs infrastructure**: Postgres, Redis, a token, and operational care. SEART needs a browser.
 - **You own the rate-limit responsibility.** gitcrawl paces itself and records fingerprints, but the token and its behavior are yours (see `corpus-building-efficient-engineering.md` §5).
 

@@ -43,7 +43,7 @@ Think of GitHub as a service with **prepaid meters**, like a taxi with two diffe
 Two more useful facts:
 
 - **Search returns up to 100 repos per request.** One request = 100 entries in the list.
-- **GitHub refuses to show more than 1,000 results for any single search query.** A query matching 50,000 repos will not page past 1,000; it must be sliced into smaller queries (for example by creation date) until each slice is under 1,000. This slicing is called **sharding**, and the shard planner in this repo does it automatically.
+- **GitHub refuses to show more than 1,000 results for any single search query.** A query matching 50,000 repos will not page past 1,000; page 11 at 100 per page returns `422 "Only the first 1000 search results are available"`. The query must be sliced into smaller queries (for example by creation date) until each slice is under 1,000. This slicing is called **sharding**, and the shard planner in this repo does it automatically.
 
 ### 3.2 The critical fact: limits belong to the account, not the token
 
@@ -101,7 +101,7 @@ This is the sentence that confuses everyone the first time, so here it is step b
 
 **Why search finds so many:** searching does not open repos. It returns **index cards** — up to 100 per request, 30 requests per minute. Reading 600,000 index cards never touches the 600,000 repos themselves. It is like asking a librarian for lists: the lists are cheap; pulling the books off the shelf is not.
 
-**Why saving is so slow:** saving means asking GitHub *"give me the current full details of this one repo"* — one request per repo, no bulk option in the code today. (GraphQL adds a bulk option; that is §9.) That request is what we call a **touch**. The main meter allows 20,000 touches per 4 hours.
+**Why saving is so slow:** without batching, saving means asking GitHub *"give me the current full details of this one repo"* — one REST request per repo. The batched GraphQL path is now the default and is explained in §9–§10. One such request is what we call a **touch**. The main meter allows 20,000 touches per 4 hours.
 
 **Why checks are slow too:** every check that needs a question answered is also a touch, and it spends from the *same* 20,000. One touch to save a repo. One more touch to check whether it has a Dockerfile. One more touch (per owner, not per repo) to look up a country.
 
@@ -260,7 +260,7 @@ Ordered from highest leverage to lowest.
 
 ### 9.1 REST versus GraphQL
 
-- **REST (today)**: one request = one repo. Ordering 50 repo details is 50 phone calls.
+- **REST (without batching)**: one request = one repo. Ordering 50 repo details is 50 phone calls.
 - **GraphQL (batching, built)**: one request can carry a *shopping list* ("details for these 50 repos"), and the answer contains all 50. One phone call, 50 items.
 
 GraphQL is on **its own meter** (5,000 points/hour) and its price is in **points**, not requests. The cost formula is roughly **1 point per 100 items requested** (minimum 1 point per query). A batch of 20–50 repos therefore costs about **1 point**.
@@ -306,7 +306,7 @@ A small generic **batch core** plus three thin **adapters**:
 5. **REST fallback.** A repo that still fails as a single batch call is retried once through today's one-by-one path; if that fails too, it is recorded **unresolved with a reason**.
 6. **Explicit final states.** Every repo ends as *saved*, *fallback-saved*, or *unresolved (reason)*. Counts are reported at the end of the run; audit rows are written as failures happen.
 7. **No silent partials.** Any unresolved repo marks the run **partial**, consistent with the project rule that partial data is never presented as complete.
-8. **Sequential batches.** The hourly point budget (about 1.4 points/second) is the real cap, so concurrency would not add throughput — it would only add disorder and approach GitHub's "avoid concurrent requests" guidance from the wrong side.
+8. **Bounded concurrency.** Batches run through a small thread pool under the shared limiter and the run deadline; hydration uses `min(limiter_max_concurrent, 20)` workers. Parallelism stays well inside GitHub's 100-concurrent politeness ceiling, and the point meters still cap the hour. (Measured: ~2,800 repos/min at concurrency 10, versus ~300–400/min sequential.)
 9. **Dedicated GraphQL meter.** A `graphql` bucket (5,000 points/hour) is added beside `search`/`core` in the limiter, and `/graphql` is recognized as its own resource.
 
 ### 10.3 Why not the old module as-is
@@ -338,6 +338,8 @@ A `graphql_batch` module existed before and was deleted as unused (R58). It had 
 | 128,000 repos, save + 1 check | + 1 app | ~26 hours |
 | 128,000 repos, save + checks | personal + batching engine | hours (bounded by checks that cannot batch) |
 | Refresh an unchanged corpus | personal + ETags | nearly free |
+
+**Measured (2026-10-06/07).** A live run (`created:>=2025-02-24 language:rust`, min_stars 4, min_commits 50, min_language_bytes 175,000) found 38,833 repos and hydrated all of them in 1,942 GraphQL requests — 0 REST fallbacks, 0 unresolved — at roughly 2,800 repos/min with concurrency 10. The local filters then cost zero extra API calls: min_stars kept 38,833; min_commits kept 21,503; min_language_bytes exported 17,795 (0 skipped, 0 incomplete shards, status done). `corpus.csv` columns are id, full_name, stargazers, pushed_at, archived, language, license_spdx, country_iso, geo_confidence; the bundle also carries `field_stats` (per-field survivors and calls spent).
 
 **Current code caveats** (as of this document): one run caps itself at 500 candidates, 200 saved, 100 checked (`RunnerConfig`), so today's single run yields hundreds, not thousands; those caps are now operator-tunable at `/settings` (env-pinnable); defaults remain the interactive values, and the derivation plus presets live in `run-limits.md`. The token loader accepts a list but the runner uses the first token; rotation adds nothing on one account anyway.
 

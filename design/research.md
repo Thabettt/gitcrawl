@@ -8,6 +8,7 @@
 
 - Sharded `GET /search/repositories` (`created:` bisect to <1000 fetchable and <<4000 scanned, `per_page=100`, `Link` verbatim) is the only path for *filtered* queries — but unfiltered cross-GitHub backfill via `created:`-bisect costs ~1,111 hr/PAT vs `GET /repositories?since=` at ~400 hr/PAT (2.8×), plus scan distortion (`findings/02 §6`, `05` A1/A6, efficiency review C2).
 - Decision: `since`-enumeration (ID-range shards, `max(id)` checkpoint) for bulk coverage; org/user listing (`GET /orgs/{org}/repos`) for single scopes (core bucket, no 1000-cap); search shards only where `total << total GitHub`.
+- Correction (2026-10-06): GitHub treats duplicate same-type qualifiers as a **union**, so sharding must *replace* the query's `created:` token, not append a second one (the old append made every shard effectively the same query); the planner plans only inside the user's `created:` window and falls back to 2008-01-01→today only when the query has no date constraint (`src/scheduler/shard_planner.py` `split_created`/`replace_created`).
 - Source: https://docs.github.com/en/rest/repos/repos (accessed 2026-09-29); full matrix `06 §4`.
 
 ## D2. Postgres on immutable `id`, never `full_name`
@@ -35,6 +36,7 @@
 
 - Search `304` hit rate ≈ 0% (churn + `sort=updated` reorder); ETag kept for hydrate/trees/contents on stable URLs only (free if authed — review I1; `02` §4).
 - `total_count` is approximate: validate by `id`-set diff + overlap windows; cap-`422` → auto-shard; `incomplete_results` → narrow once, mark shard (review I2; `05` A6).
+- Live-probe corrections (2026-10-06/07): `total_count` drifts over hours (38,820 → 38,833 for one query within ~5 h) and pagination has **no stability guarantee** — identical paginated requests can shift/skip items (community-documented, GitHub staff acknowledged), which explains small cross-run corpus deltas. The cap is enforced: page 11 at `per_page=100` returns `422` ("Only the first 1000 search results are available"); `total_count` may exceed 1,000.
 
 ## D7. Geo: `06 §6.1` pipeline as specified
 
@@ -94,6 +96,16 @@ Source: the `thisisjustthebeginning` thesis repo (proposal §3, research-notes m
 - **crates.io linkage** (metadata/downloads/yanked/versions, Cargo/workspace parse, hallucination check); **snowball expansion** (user-search seed → frontier queue → org expansion with exclusions → bulk import → geographic fallback); **validation harness** (n=400 stratified samples, double-label κ, Wilson CIs, Chapman matrix, pre-registration freeze).
 - **Known numbers to respect**: ~128k old-bucket / ~13k new-bucket reference scale; 0.5–1% FP + ~3% borderline baseline; 50–100GB/stack storage; Python 3.12+ (plan aligned).
 
+## D14. Live-probe API facts (2026-10-06/07)
+
+- Duplicate same-type qualifiers union (two `created:`) — clients must replace, not append (see D1 correction).
+- Repository search returns at most 1,000 results per query; page 11 at `per_page=100` → `422`; `total_count` can exceed 1,000 and drifts (see D6).
+- Forks are excluded from repository search by default; `fork:true` includes, `fork:only` restricts.
+- GraphQL point cost = round(connection-requests needed / 100), minimum 1; 5,000 points/hour for users; batching N repos in one request is far cheaper than N requests.
+- SSO headers: `x-github-sso: partial-results; organizations=...` rides on `200` and means silently withheld orgs; `required; url=...` is a `403` carrying a one-hour authorization URL.
+- Search pagination stability: none guaranteed (identical paginated requests can shift/skip items) — the run bundle is the arbiter of cross-run deltas.
+- Git trees endpoint: `{tree_sha}` is a path segment; literal `/`, `%2F`, and `heads/...` refs all work.
+
 ## D12. Enrichment scheduler: cost order + batching + segmentation (FR-014)
 
 Savings come from calls never made, not corners cut (~3–4× under naive per-repo enrichment, zero fields dropped):
@@ -106,4 +118,4 @@ Savings come from calls never made, not corners cut (~3–4× under naive per-re
 | 3 (batched) | One round-trip, N repos | GraphQL aliases ≤10–20 (funding/discussions/sponsors/tiers), deps.dev `GetVersionBatch`, ecosyste.ms `bulk_lookup` | 1/N calls each |
 | 4 (deep) | Full price, survivors only | per-SHA CI, coverage artifacts, sparse blobless clones, raw file bytes | full cost, few repos |
 
-Execution: filters sorted by cost-per-repo (cheap screens first so expensive stages see only survivors); candidates segmented by id range across tokens (≈10 concurrent/endpoint/token, stateless shard-scoped workers, dead lanes re-queue); segments ordered survivors-first (high stars/recent push) so early stops stay useful; interactive Finds enrich the visible page only, corpus exports run full depth; ETag revalidation skips unchanged repos; every run reports per-field source + calls spent.
+Execution: filters sorted by cost-per-repo (cheap screens first so expensive stages see only survivors); candidates segmented by id range across tokens (≈10 concurrent/endpoint/token, stateless shard-scoped workers, dead lanes re-queue); segments ordered survivors-first (high stars/recent push) so early stops stay useful; interactive Finds enrich the visible page only, corpus exports run full depth; ETag revalidation skips unchanged repos; every run reports per-field source + calls spent. Measured 2026-10-07 (run #9): parallel batched GraphQL hydration at concurrency 10 sustained ~2,800 repos/min (38,833 repos, 1,942 GraphQL requests, 0 fallbacks) versus ~300–400/min sequential.
