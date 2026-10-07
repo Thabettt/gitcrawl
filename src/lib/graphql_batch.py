@@ -116,6 +116,11 @@ def _is_transient(message: str) -> bool:
     return any(marker in lowered for marker in _TRANSIENT_MARKERS)
 
 
+def is_transient_error(message: str) -> bool:
+    """Public form of the batch engine's transient-error classifier."""
+    return _is_transient(message)
+
+
 def _post(
     adapter: GraphQLAdapter,
     keys: Sequence[str],
