@@ -15,16 +15,18 @@ import httpx
 import sqlalchemy
 
 from discover.org_enum import iter_org_repos, iter_user_repos
-from discover.search_shards import (
-    RequestFailed,
-    SearchCapExceeded,
-    _short_message,
-    iter_shard_pages,
-)
+from discover.search_shards import SearchCapExceeded, iter_shard_pages
 from discover.since_scan import iter_since_pages, save_checkpoint
 from lib import audit, cancellation, progress
 from lib.deadlines import DeadlineExceededError
-from lib.gh_client import API_BASE, PartialResultsError, ThrottledError, request_with_retry
+from lib.gh_client import (
+    API_BASE,
+    PartialResultsError,
+    RequestFailed,
+    ThrottledError,
+    request_with_retry,
+    short_message,
+)
 from limiter.buckets import BucketLimiter
 from scheduler.shard_planner import ShardPlanner, ShardSpec, replace_created
 from scheduler.state_machine import QueuedShard, ShardQueue, ShardRow, ShardState, ShardStore
@@ -182,7 +184,7 @@ def count_total(
         jitter=jitter,
     )
     if response.status_code != 200:
-        raise RequestFailed(int(response.status_code), _short_message(response))
+        raise RequestFailed(int(response.status_code), short_message(response))
     payload = response.json()
     if not isinstance(payload, Mapping):
         raise RequestFailed(200, "search payload is not an object")

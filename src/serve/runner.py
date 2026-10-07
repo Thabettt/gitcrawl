@@ -13,7 +13,6 @@ from sqlalchemy.engine import Engine
 
 from discover import pipeline
 from discover.pipeline import Deps
-from discover.search_shards import RequestFailed
 from enrich.cost_planner import plan_enrichment
 from enrich.geo_resolver import GeoCache, _cache_key, resolve_many
 from enrich.graphql_file_presence import FilePresenceAdapter
@@ -27,6 +26,7 @@ from lib.deadlines import Deadline, DeadlineExceededError, request_deadline_seco
 from lib.gh_client import (
     API_BASE,
     PartialResultsError,
+    RequestFailed,
     ThrottledError,
     create_client,
     load_tokens,

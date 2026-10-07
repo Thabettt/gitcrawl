@@ -7,9 +7,8 @@ from urllib.parse import parse_qsl, urljoin, urlparse
 
 import httpx
 
-from discover.search_shards import RequestFailed, _short_message
 from lib import audit
-from lib.gh_client import API_BASE, request_with_retry
+from lib.gh_client import API_BASE, RequestFailed, request_with_retry, short_message
 from limiter.buckets import BucketLimiter
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -92,13 +91,13 @@ def hydrate_repo(
         if response.status_code == 404:
             raise RepoNotFound(full_name)
         if response.status_code != 200:
-            raise RequestFailed(int(response.status_code), _short_message(response))
+            raise RequestFailed(int(response.status_code), short_message(response))
         try:
             payload = audit.cached_json(response) or response.json()
         except ValueError:
-            raise RequestFailed(200, _short_message(response)) from None
+            raise RequestFailed(200, short_message(response)) from None
         if not _valid_payload(payload):
-            raise RequestFailed(200, _short_message(response))
+            raise RequestFailed(200, short_message(response))
         return HydratedRepo(
             id=payload["id"],
             node_id=payload["node_id"],

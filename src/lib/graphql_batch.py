@@ -10,10 +10,9 @@ from typing import Protocol
 
 import httpx
 
-from discover.search_shards import RequestFailed
 from lib import cancellation
 from lib.deadlines import Deadline, DeadlineExceededError
-from lib.gh_client import PartialResultsError, ThrottledError, request_with_retry
+from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError, request_with_retry
 from limiter.buckets import BucketLimiter
 
 GRAPHQL_URL = "https://api.github.com/graphql"

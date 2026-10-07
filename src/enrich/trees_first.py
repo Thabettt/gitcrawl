@@ -8,9 +8,8 @@ from fnmatch import translate
 
 import httpx
 
-from discover.search_shards import RequestFailed, _short_message
 from lib import audit
-from lib.gh_client import API_BASE, request_with_retry
+from lib.gh_client import API_BASE, RequestFailed, request_with_retry, short_message
 from limiter.buckets import BucketLimiter
 
 _LITERAL_CHARS = frozenset("*?[")
@@ -53,13 +52,13 @@ class FilePresence:
 
 def _require_json(response: httpx.Response) -> dict:
     if response.status_code != 200:
-        raise RequestFailed(int(response.status_code), _short_message(response))
+        raise RequestFailed(int(response.status_code), short_message(response))
     try:
         payload = audit.cached_json(response) or response.json()
     except ValueError:
-        raise RequestFailed(200, _short_message(response)) from None
+        raise RequestFailed(200, short_message(response)) from None
     if not isinstance(payload, dict):
-        raise RequestFailed(200, _short_message(response))
+        raise RequestFailed(200, short_message(response))
     return payload
 
 

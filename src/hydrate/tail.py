@@ -8,12 +8,11 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from discover.search_shards import RequestFailed
 from hydrate.graphql_repo import RepoDetailsAdapter
 from hydrate.repo_client import HydratedRepo, RepoNotFound, fetch_commit_count, hydrate_repo
 from lib.batching import chunked
 from lib.deadlines import Deadline
-from lib.gh_client import PartialResultsError, ThrottledError
+from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
 from lib.graphql_batch import MAX_BATCH_SIZE, GraphQLAuthError, fetch_batch
 from limiter.buckets import BucketLimiter
 from store.lifecycle import apply_hydration

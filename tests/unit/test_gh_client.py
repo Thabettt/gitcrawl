@@ -11,12 +11,15 @@ from lib.gh_client import (
     API_VERSION,
     USER_AGENT,
     PartialResultsError,
+    RequestFailed,
     ThrottledError,
     build_headers,
     create_client,
     load_tokens,
+    next_link,
     request_with_retry,
     resource_for_url,
+    short_message,
     token_fingerprint,
 )
 from limiter.buckets import BucketLimiter
@@ -749,3 +752,30 @@ def test_cancellation_aborts_before_a_retry_sleep():
     finally:
         cancellation.reset(token)
     assert slept == []
+
+
+def test_short_message_prefers_json_message():
+    response = httpx.Response(
+        422, json={"message": "Only the first 1000 search results are available"}
+    )
+    assert short_message(response) == "Only the first 1000 search results are available"
+
+
+def test_short_message_falls_back_to_body_text():
+    response = httpx.Response(500, text="<html>proxy error</html>")
+    assert "proxy error" in short_message(response)
+
+
+def test_next_link_returns_the_rel_next_url():
+    header = (
+        '<https://api.github.com/x?page=2>; rel="next", '
+        '<https://api.github.com/x?page=5>; rel="last"'
+    )
+    assert next_link(header) == "https://api.github.com/x?page=2"
+    assert next_link(None) is None
+    assert next_link('<https://api.github.com/x?page=5>; rel="last"') is None
+
+
+def test_request_failed_carries_status_and_message():
+    error = RequestFailed(404, "Not Found")
+    assert error.status == 404 and error.message == "Not Found" and str(error) == "404: Not Found"

@@ -7,8 +7,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-from discover.search_shards import RequestFailed, _next_link, _short_message
-from lib.gh_client import API_BASE, request_with_retry
+from lib.gh_client import API_BASE, RequestFailed, next_link, request_with_retry, short_message
 from limiter.buckets import BucketLimiter
 
 
@@ -46,7 +45,7 @@ def _iter_pages(
             on_response=on_response,
         )
         if response.status_code != 200:
-            raise RequestFailed(int(response.status_code), _short_message(response))
+            raise RequestFailed(int(response.status_code), short_message(response))
         payload = response.json()
         if isinstance(payload, list):
             raw_items = payload
@@ -57,7 +56,7 @@ def _iter_pages(
         items = tuple(raw_items or ())
         if not items:
             return
-        next_url = _next_link(response.headers.get("link"))
+        next_url = next_link(response.headers.get("link"))
         yield EnumPage(url=url, items=items, next_url=next_url)
         pages += 1
         url = next_url

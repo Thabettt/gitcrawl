@@ -23,10 +23,9 @@ from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from discover.search_shards import RequestFailed
 from lib.batching import chunked
 from lib.deadlines import DeadlineExceededError, request_deadline_seconds
-from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
+from lib.gh_client import API_VERSION, PartialResultsError, RequestFailed, ThrottledError
 from serve import errors, pages
 from serve.corpora import register_corpora
 from serve.diff import diff_runs

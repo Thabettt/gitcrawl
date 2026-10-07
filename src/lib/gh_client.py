@@ -85,6 +85,39 @@ class PartialResultsError(Exception):
         self.url = request_url
 
 
+class RequestFailed(Exception):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(f"{status}: {message}")
+        self.status = status
+        self.message = message
+
+
+def short_message(response: httpx.Response) -> str:
+    payload = None
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("message"), str):
+        return payload["message"]
+    return response.text[:_BODY_FALLBACK_CHARS]
+
+
+def next_link(header: str | None) -> str | None:
+    if not header:
+        return None
+    for part in header.split(","):
+        segments = part.split(";")
+        url_part = segments[0].strip()
+        if not (url_part.startswith("<") and url_part.endswith(">")):
+            continue
+        for segment in segments[1:]:
+            key, _, value = segment.partition("=")
+            if key.strip().lower() == "rel" and value.strip().strip('"').lower() == "next":
+                return url_part[1:-1]
+    return None
+
+
 def _sso_partial_results(headers: httpx.Headers) -> bool:
     value = headers.get("x-github-sso")
     return value is not None and "partial-results" in str(value).lower()
