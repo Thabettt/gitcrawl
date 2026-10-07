@@ -4,6 +4,8 @@
 
 **Purpose of this document**: explain, from scratch, how we can build the largest and freshest repository corpus possible with **one GitHub account**, as fast as GitHub's rules permit, without ever losing work and without breaking a single term of service. It records the math, the strategies, the legal boundaries, and the design decisions we reached — including the GraphQL batching engine, now built, that changes the speed by roughly 25x.
 
+**Status note (2026-10-08)**: a later spike (recorded in §9.4) measured that GitHub's GraphQL search connection draws on the GraphQL **points** meter, not the REST search meter — so both the sharding probes and the result pages can ride it. The same ~39,000-repo shard-and-fetch that took about 20 minutes through REST search on 2026-10-07 completed in **67.9 seconds** on one token. Nothing else changed: the §3–§4 numbers still describe REST search, which is what the shipped code uses today.
+
 ---
 
 ## 1. The goal, in one paragraph
@@ -280,6 +282,26 @@ Both meters work at once, so batching also frees the main meter for the things G
 - Keep batches modest (20–50). Very large queries get cut off by GitHub with partial results; a 10-second timeout costs **extra** points.
 - GraphQL has no "nothing changed" freebie. For repeat refreshes, the existing REST + ETag path stays valuable, so the design keeps both.
 - GraphQL errors arrive inside otherwise-successful replies (`200` with an `errors` list), and the good data is often still there. Handling this correctly is the entire subject of §10.
+
+### 9.4 Search itself on the points meter (measured 2026-10-08)
+
+**What was measured on 2026-10-08.** A live spike asked a question the earlier sections did not: can *finding* repos — the count probes and the result pages — also ride the GraphQL points meter, instead of the REST search meter? The answer measured that day: yes, and the numbers are large. This section records the measurement at the time it was made; it is not built into the crawler yet.
+
+**How the price works.** A GraphQL search that asks only for `repositoryCount` returns a single number, so sixteen probes fit in one query — and the whole query costs **1 point** (the minimum). Result pages are priced per search connection: one connection per query, with many queries in flight, stays cheap and fast. The 30-requests-per-minute REST search meter is never touched.
+
+**The measured ledger**, same filter as the §11 live run (`language:rust stars:>=4 created:>=2025-02-24`, ~39,000 repos):
+
+| Step | Result |
+|---|---|
+| Plan (aliased count probes, bisect until fetchable) | 111 probes in 9 batched queries → 56 shards in **8.9 s** |
+| Fetch (one search connection per page, 32 in flight) | 418 pages → 38,969 unique repos in **59.0 s** |
+| **Total shard-and-fetch** | **67.9 s**, 0 retries, 0 failures, 0 oversized shards |
+| Meter used | ~430–500 GraphQL points (~10% of the hourly budget); REST search untouched |
+| Same job through REST search | ~13 min of pages at 30/min + ~7 min of count probes ≈ **20 min** |
+
+**What did not work, and why the recipe is shaped this way.** Putting several result pages in one query does not scale: two search connections at 100 repos each took ~6 s, three took ~8 s, and four hit GitHub's 10-second query timeout (a `502`). Probes are fine batched because each returns one number; pages are fetched one connection per query, in parallel.
+
+**Cross-check from the same day**: 17,782 of the 17,795 repos the earlier REST run exported (99.93%) were rediscovered; the small remainder is the search drift this project already documents for REST runs. Before this becomes the default path it needs the same treatment as every other efficiency claim here: paced concurrency with backoff, audit rows, and a real end-to-end run.
 
 ---
 
