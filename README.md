@@ -47,10 +47,10 @@ The design principle behind all of it: **live-only**. A run measures GitHub as i
 GitHub's repository search looks like a friendly little API call. It is actually a front door with a very small lobby, and most crawlers find that out the hard way:
 
 - **The lobby holds 1,000 people.** No single query can return more than 1,000 results, no matter how many pages you ask for. Past result 1,000, GitHub returns an error (`422`), not more pages. Ranking also considers at most ~4,000 matching repos, so a very broad query can't even *see* the whole crowd. The only way through is to slice the query into smaller pieces (by creation date, usually) until each piece fits — a technique called **sharding**.
-- **There are two prepaid meters, and they are small.** Search queries and result pages spend the *search* meter: 30 requests per minute per token. Visiting a repo for its full details spends the *main* meter: 5,000 requests per hour. On top of those sit GitHub's anti-abuse ("secondary") limits, which punish bursting but never punish steady pacing. Details and the arithmetic live in [`design/corpus-building-efficient-engineering.md`](design/corpus-building-efficient-engineering.md).
+- **There are two prepaid meters, and they are small.** Search queries and result pages spend the *search* meter: 30 requests per minute per token. Visiting a repo for its full details spends the *main* meter (5,000 requests/hour) — or the *GraphQL points* meter (5,000 points/hour) when details are fetched in batches, which is the default. On top of those sit GitHub's anti-abuse ("secondary") limits, which punish bursting but never punish steady pacing. Details and the arithmetic live in [`design/corpus-building-efficient-engineering.md`](design/corpus-building-efficient-engineering.md).
 - **All filtering lives inside one text string.** GitHub supports a closed set of `qualifier:value` filters inside `q`, and nothing else. There is no server-side "has a Dockerfile," no "owner located in Germany," no "at least 100 commits." Those questions have to be answered locally, one repo at a time — after you've paid to fetch the repo.
 - **Typos fail silently.** Type `updated:>2024` (the real qualifier is `pushed:`) and GitHub answers `200 OK` with your filter treated as *plain search text*. You get wrong data and no error. This is why validation is the very first stage of a run.
-- **The search index lags pushes, and `total_count` is an estimate.** GitHub says so in its docs. That's why gitcrawl labels incompleteness instead of hiding it.
+- **The search index lags pushes, and `total_count` is an estimate.** GitHub says so in its docs, and search pagination carries no stability guarantee at all — identical paginated requests can shift or skip items between runs. That's why gitcrawl labels incompleteness instead of hiding it, and why the same filter can return a slightly different set hours later.
 - **Repos change underneath you.** They rename, transfer, get deleted, or go private. Search never tells you which. gitcrawl keys everything on the immutable `id`, follows renames, and records deletions as tombstones.
 
 A one-off script can answer "show me some Rust repos." It cannot answer *"give me the complete set of Rust repos matching this frame as of today, with the Dockerfile, owner-country, and commit-count filters applied, plus the evidence to defend every row."* That second question is the one this project exists for.
@@ -59,8 +59,8 @@ A one-off script can answer "show me some Rust repos." It cannot answer *"give m
 
 These five concepts recur everywhere, so here they are once, in plain words. No prior GitHub API knowledge is assumed.
 
-- **GitHub search** (`GET /search/repositories`) — the front door. You send one text string (`q`) with filters inside it (e.g. `language:rust stars:>100`) and get back *thin* records: name, description, stars, language, dates, plus a `score`. It returns at most 100 per page and 1,000 per query, allows ~30 requests/minute per token, and silently treats typos as words. Reference: [`findings/01-search-repos-parameters.md`](findings/01-search-repos-parameters.md).
-- **Hydration** (`GET /repos/{owner}/{repo}`) — asking for one repo's *full* current record: topics, license, exact counts, flags, dates. Costs one call per repo from the separate 5,000/hour main meter. Unchanged repos can be re-fetched almost free via caching headers (ETag). **This is not cloning** — no files are downloaded.
+- **GitHub search** (`GET /search/repositories`) — the front door. You send one text string (`q`) with filters inside it (e.g. `language:rust stars:>100`) and get back *thin* records: name, description, stars, language, dates, plus a `score`. It returns at most 100 per page and 1,000 per query, allows ~30 requests/minute per token, silently treats typos as words, and excludes forks unless you ask (`fork:true` to include them, `fork:only` for forks alone). Reference: [`findings/01-search-repos-parameters.md`](findings/01-search-repos-parameters.md).
+- **Hydration** (`GET /repos/{owner}/{repo}`) — asking for one repo's *full* current record: topics, license, exact counts, flags, dates, language bytes. Costs one call per repo from the separate 5,000/hour main meter — or, by default, one batched GraphQL request per 20 repos on the points meter. Unchanged repos can be re-fetched almost free via caching headers (ETag). **This is not cloning** — no files are downloaded.
 - **Virtual filters** — the filters GitHub never built (`has_dockerfile`, `min_commits`, `owner_country`, …). gitcrawl computes them itself, per repo, after hydration, cheapest first.
 - **Enrichment** — extra detail fetched per repo beyond the full record: file trees, language byte breakdowns, releases, funding links, discussions. Each answer costs calls, so enrichment is spent only on repos that survived your filters.
 - **Run bundle** — the saved artifact of one search: your filters, when it ran, what GitHub said, what survived, and the raw upstream responses behind it. It is how a second device replays your search and how a study proves what was measured.
@@ -80,9 +80,9 @@ filters.json → Validate → Live search → Thin matches → Hydrate → Virtu
 
 **Stage 2 — Live search (thin matches arrive).** The validated `q` goes to GitHub search, pages of 100 followed via `Link` headers. Each match is thin; its `score` is discarded immediately, because that score is relevance *relative to that one query* and meaningless to store or sort by later. Two honest limits surface here: past 1,000 results GitHub errors instead of paging, so broad queries are narrowed by recursive `created:` bisection rather than forced; and `total_count` is approximate, so it is displayed as an estimate with an `incomplete` flag when a timeout cuts a page short.
 
-**Stage 3 — Hydration (thin → full, candidates only).** Each surviving match gets its full current record, one call each from the main meter. This is the most expensive stage per repo, so two economies apply: unchanged repos revalidate almost free (ETag → `304`, which GitHub documents as not counting against the primary limit), and nothing downstream starts for repos that will fail a later filter. A repo renamed since discovery is followed (`301`); a deleted or privatized one becomes a recorded tombstone, not a crash.
+**Stage 3 — Hydration (thin → full, candidates only).** Each surviving match gets its full current record — batched by default (up to 20 aliased repos per GraphQL request, with per-repo REST fallback when one node fails). This is the most expensive stage per repo, so two economies apply: unchanged repos revalidate almost free (ETag → `304`, which GitHub documents as not counting against the primary limit), and nothing downstream starts for repos that will fail a later filter. A repo renamed since discovery is followed (`301`); a deleted or privatized one becomes a recorded tombstone, not a crash.
 
-**Stage 4 — Virtual filters (gitcrawl's own screening room).** Now the filters GitHub can't express run, cheapest first: counts already in the hydrated record (`min_stars`, `team_topic`), then commit counts (`min_commits`/`max_commits`), then file checks (`has_dockerfile` via one recursive file-tree call covering every path question — never one call per file), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable.
+**Stage 4 — Virtual filters (gitcrawl's own screening room).** Now the filters GitHub can't express run, cheapest first: counts already in the hydrated record (`min_stars`, `team_topic`, `min_language_bytes`/`max_language_bytes`), then commit counts (`min_commits`/`max_commits`), then file checks (`has_dockerfile` via one recursive file-tree call covering every path question — never one call per file), then `owner_country` via the geo pipeline. Failures drop with a recorded reason and are counted in the run metadata, so "47 repos matched search, 31 survived filters" is always explainable.
 
 **Stage 5 — Enrichment (detail only for survivors).** Only repos that pass every filter get enriched: language byte breakdowns, releases, funding links, discussions. The rules that keep this cheap: one file-tree call answers all path questions; GraphQL batches are used only where one query replaces three or more REST calls; identical files across repos are fetched once by content hash; package data comes from zero-token mirrors (ecosyste.ms, deps.dev) before any GitHub call is spent. Nothing is fetched for a display you won't show.
 
@@ -90,7 +90,7 @@ filters.json → Validate → Live search → Thin matches → Hydrate → Virtu
 
 **Stage 7 — Merge + cache (one result set, many devices).** Survivors merge by immutable repo `id` — never by name, because names change on rename or transfer — so the same filter file run on two laptops produces unionable, dedupe-safe sets. The merged set caches under its `filter_hash` briefly: an identical search minutes later costs zero GitHub calls.
 
-**Stage 8 — Display (cards with provenance).** Each row shows its metadata, virtual-filter outcomes, owner country with confidence, and *when* it was measured (`ran_at`). Truncation is always declared: capped-by-1,000, timed-out pages, budget stops, and unenforceable filters appear as labeled flags, never as silent gaps.
+**Stage 8 — Display (cards with provenance).** Each row shows its metadata, virtual-filter outcomes, owner country with confidence, and *when* it was measured (`ran_at`). Truncation is always declared: capped-by-1,000, timed-out pages, budget stops, plan/page caps, deferred or retry-exhausted shards, unique under-coverage (`collected < ~total_count`), tombstones, unresolved hydration, and unenforceable filters appear as labeled warnings, never as silent gaps.
 
 **Stage 9 — Bundle and export (the replayable artifact).** The run persists its filter hash, `ran_at`, API version, uniform counts, and the raw upstream JSON per repo. Export downloads it as JSON or CSV. Byte-identical reproduction comes from this bundle — re-running the same file later may drift (stars move, repos vanish), and the bundle is what explains the difference. For research use, this bundle *is* the replication package's raw layer.
 
@@ -108,12 +108,12 @@ Here is what quietly changes when the output has to be a complete, defensible co
 
 | The script | What happens at scale | What gitcrawl adds |
 |---|---|---|
-| One query, first page(s) | Result 1,001 returns `422`; `total_count` is approximate | Recursive `created:` bisection until every shard is fetchable, cap/incomplete auto-split, coverage counters |
+| One query, first page(s) | Result 1,001 returns `422`; `total_count` is approximate | Recursive `created:` bisection inside your own date window (the date token is replaced, never appended — GitHub unions duplicate same-type qualifiers), cap/incomplete auto-split, transient-shard retry, coverage counters |
 | A straight request loop | 30 search req/min; 403/429/422 mean three different things | Per-bucket Redis pacing from response headers; a classifier for retry-after / reset-wait / backoff / cap-split / fix / fail-loud; multi-token support |
 | No file/geo/commit filters server-side | You fetch thousands of repos to answer one file question | Cost-ordered enrichment: GraphQL file-presence batches, trees API, owner geo resolver, commit counts — cheap screens first, survivors only |
 | `owner/name` as the key | Renames and transfers silently fork your data | Immutable `id` primary key, `full_name_history`, `301` follow, `404` tombstones |
 | "It worked on my machine Tuesday" | You cannot reproduce last week's sample | Filter-spec hash, frozen bundles with raw upstream evidence, replay, run-to-run diff |
-| Crash = start over | A long run fails at hour three | Orphan recovery, resume (re-fetches from the start, safely), a quality report per run |
+| Crash = start over | A long run fails at hour three | Orphan recovery, Stop/resume (failed, partial, and stopped runs; re-fetches from the start, safely), live phase progress with ETA, a quality report per run |
 | No telemetry | You cannot show what you spent or when | Per-request audit log (rate-limit headers, status, latency, token fingerprint) and SLO dashboards |
 
 The honest summary: **a script answers a query; gitcrawl produces a corpus you can defend.** If you only need the query, stay with the script — genuinely.
@@ -135,7 +135,7 @@ gitcrawl targets the intersection none of them covers: **live measurement at a c
 
 ### Discovery
 
-- **Sharded live search.** gitcrawl slices your query by `created:` date ranges until every shard is under GitHub's 1,000-result cap, then pages each shard with `per_page=100`, following `Link: rel="next"` verbatim. Shards that still come back over the cap or `incomplete` are split again automatically and every shard records its `total_count`, fetched count, and state (`pending/active/done/incomplete`).
+- **Sharded live search.** gitcrawl slices your query by `created:` date ranges until every shard is under GitHub's 1,000-result cap, then pages each shard with `per_page=100`, following `Link: rel="next"` verbatim. The plan lives inside your own `created:` window (only a dateless query falls back to 2008→today), and every child replaces the date token rather than appending a second one — GitHub unions duplicate same-type qualifiers, so appending would never let a plan converge. Shards that still come back over the cap or `incomplete` are split again automatically; a transient shard failure is deferred and retried once after the rest (with a circuit breaker after three consecutive deferrals) instead of aborting the run, and a run deadline stops discovery gracefully so the work stays resumable. Every shard records its `total_count`, fetched count, and state (`pending/active/done/incomplete`).
 - **A validation gate with teeth.** Every qualifier is checked against the documented allowlist with typo hints; a "delta test" in the test suite proves filtering actually narrows results, so a silent `200` can never masquerade as filtering.
 - **Org and user enumeration** (`GET /orgs/{org}/repos`, `GET /users/{u}/repos`) is implemented and tested for single-scope jobs; `GET /repositories?since=` cursor scanning exists too. Both are currently quarantined from the console (see [Where the project is today](#where-the-project-is-today)).
 
@@ -147,9 +147,9 @@ gitcrawl targets the intersection none of them covers: **live measurement at a c
 
 ### Hydration and enrichment
 
-- **Two hydration paths:** REST `GET /repos/{full_name}` with ETag/`If-None-Match`, and aliased GraphQL batches of up to 20 repos with automatic per-repo REST fallback — so one bad repo never poisons its neighbours.
+- **Two hydration paths:** REST `GET /repos/{full_name}` with ETag/`If-None-Match`, and aliased GraphQL batches of up to 20 repos with automatic per-repo REST fallback — so one bad repo never poisons its neighbours. Batches run with bounded concurrency (capped at 20, from `limiter_max_concurrent`), and the same query carries language bytes and watcher counts, so no extra `/languages` call is spent.
 - Commit counts come from GraphQL `defaultBranchRef.target.history.totalCount` or REST `Link: rel=last`.
-- File presence is answered by a GraphQL batch first, with the recursive Git Trees API as fallback — never N× `contents` loops.
+- File presence is answered by a GraphQL batch first, with the recursive Git Trees API as fallback — never N× `contents` loops. When a recursive tree is truncated and the path isn't found, the non-recursive root listing is merged in; if presence still can't be proven, the repo is skipped with a warning rather than silently filtered out.
 - Owner locations resolve through the offline gazetteer described in [Stage 6](#the-journey-stage-by-stage) and cache per location in `geo_cache`.
 - The cost planner orders all of this record → mirror → single → batched → deep, and the run records per-field source and calls spent.
 
@@ -165,12 +165,12 @@ All are validated locally with actionable hints; the table says where each is en
 | `owner_country` | ISO 3166-1 alpha-2 (e.g. `DE`) | Owner location → geo resolver → confidence tier |
 | `min_geo_confidence` | `exact-iso` \| `name` \| `gazetteer-city` \| `geocoder` \| `weak` (default `gazetteer-city`) | Confidence floor for `owner_country` |
 | `min_commits` / `max_commits` | integer ≥ 0 | Hydrated default-branch commit count |
-| `min_language_bytes` / `max_language_bytes` | integer ≥ 0 | Live `/languages` primary-language byte size (one call per repo) |
+| `min_language_bytes` / `max_language_bytes` | integer ≥ 0 | Primary-language byte size carried by the hydration query (no extra call) |
 | `min_loc` / `max_loc` | integer ≥ 0 | **Recorded only — not enforceable yet**; a run using them is flagged incomplete |
 
 ### The operator console
 
-Everything is server-rendered Jinja2 with vendored htmx and hand-rolled CSS — no Node, no CDN, no build step at runtime. The pages: dashboard, **Find** (the filter form, with download-as-JSON, upload-and-run, and save), **Searches** (run history, live status, full-width paginated results, replay, resume, export, clone, compare-with), **Corpora** (freeze a finished search into a named snapshot), **Library** (saved filters you can run again), **System** (status, performance, limits), **Settings** (run caps), **Metrics** (SLOs), and **Health**. Keyboard navigation (`/`, `g h/f/r/l`, `j`/`k`, `Enter`, `?`, `Esc`), dark mode, and CSRF-protected forms come standard; page, sort, and page size always live in the URL, so any view is linkable.
+Everything is server-rendered Jinja2 with vendored htmx and hand-rolled CSS — no Node, no CDN, no build step at runtime. The pages: dashboard, **Find** (the filter form, with download-as-JSON, upload-and-run, and save), **Searches** (run history, live status with phase, done/total, percent bar, ETA, and a ticking elapsed clock, full-width paginated results, Stop, resume, save-filter-to-library, replay, export, clone, compare-with), **Corpora** (freeze a finished search into a named snapshot), **Library** (saved filters you can run again), **System** (status, performance, limits), **Settings** (run caps), **Metrics** (SLOs), and **Health**. Keyboard navigation (`/`, `g h/f/r/l`, `j`/`k`, `Enter`, `?`, `Esc`), dark mode, and CSRF-protected forms come standard; page, sort, and page size always live in the URL, so any view is linkable.
 
 ### Reproducibility
 
@@ -201,7 +201,7 @@ Everything runs from the repo source with `PYTHONPATH=src` (implicit namespace p
 | `src/hydrate/` | REST repo hydration (ETag, redirects, commit counts), GraphQL repo adapter, batched refresh driver |
 | `src/enrich/` | Geo resolver + gazetteer, trees-first file presence, GraphQL file/owner adapters, cost planner, segment executor, repo cloner |
 | `src/serve/` | FastAPI app and middleware, run runner + background executor, filter-spec parsing/hashing, virtual params, console pages/templates/static, exports, clone registry, library, corpora, diff, quality, metrics, settings |
-| `migrations/` | Alembic revisions `0001`–`0009` (11 tables) |
+| `migrations/` | Alembic revisions `0001`–`0011` (11 tables; `0010`–`0011` add the runs progress columns) |
 | `tests/` | `unit/`, `integration/`, `contract/`, `golden/`, `js/` suites |
 | `design/`, `findings/`, `docs/` | Research, frozen specs, plans, environment and legal runbooks (not runtime code) |
 
@@ -211,14 +211,14 @@ The stack, in one sentence: Python 3.12+ (PEP 695 syntax is used, so 3.12 is man
 
 Pacing is a first-class subsystem here, not a retry loop bolted on:
 
-- Four Redis token buckets — `search` (30/min), `core` (5,000/hr), `code_search` (10/min), `graphql` (5,000 pts/hr) — keyed by resource and token fingerprint.
+- Four Redis token buckets — `search` (30/min), `core` (5,000/hr), `code_search` (10/min), `graphql` (5,000 pts/hr; one request costs `round(connections ÷ 100)` points, minimum 1, which is why batching 20 repos at once is far cheaper than 20 requests) — keyed by resource and token fingerprint.
 - Response headers are authoritative. `X-RateLimit-*` values are reconciled into the buckets, and `remaining == 0` pauses only the exhausted bucket until its reset.
-- Every failure maps to exactly one action: `retry_after`, `wait_reset`, `backoff` (jittered and bounded), `shard` (the cap-`422`), `fix` (a validation-`422`), or `fail_loud` (SSO partial results, bad credentials). No loop without a limit; no silent degradation.
+- Every failure maps to exactly one action: `retry_after`, `wait_reset`, `backoff` (jittered and bounded by the run deadline), `shard` (the cap-`422`), `fix` (a validation-`422`), or `fail_loud` (bad credentials). SSO partial results — a `200` that quietly withholds some orgs — degrade to per-repo fallback instead of aborting the run. No loop without a limit; no silent degradation. Credentialed requests refuse non-GitHub hosts, so a redirect can never leak a token.
 - Without Redis the runner falls back to `fakeredis` with a warning (`GITCRAWL_REDIS_STRICT=1` forbids that fallback). Unit tests are hermetic via `fakeredis[lua]`.
 
 ## Data model and run artifacts
 
-Eleven PostgreSQL tables, created by nine Alembic revisions:
+Eleven PostgreSQL tables, created by eleven Alembic revisions:
 
 | Table | Purpose |
 |---|---|
@@ -228,7 +228,7 @@ Eleven PostgreSQL tables, created by nine Alembic revisions:
 | `geo_cache` | Normalized location → country, confidence, hit count |
 | `shards` | Discovery shard state: kind, query, ranges, state, watermark, totals, fetched, incomplete |
 | `audit_log` | One row per GitHub response: params, status, rate-limit headers, retry-after, Link, totals, token fingerprint, latency |
-| `runs` | One row per search: filter hash + spec, status (`queued/running/done/partial/failed`), timestamps, counters, error, bundle dir |
+| `runs` | One row per search: filter hash + spec, status (`queued/running/done/partial/failed/cancelled`, the last shown as "Stopped"), timestamps, counters, live progress columns (phase, done/total), error, bundle dir |
 | `run_items` | Frozen per-run result snapshot (repo id, stars, pushed, flags, geo, virtuals) |
 | `saved_filters` | Named saved filter specs |
 | `app_settings` | Single-row run limits and toggles (editable at `/settings`, pinnable by env) |
@@ -244,7 +244,7 @@ runs/<filter_hash>/<run_id>/
 clones/<filter_hash>/<run_id>/<owner__repo>/   # one dir per clone, with a done marker
 ```
 
-`field_stats` inside the bundle records `per_field_sources`, `calls_spent`, `requeues`, `warnings`, and GraphQL batch statistics — so every enriched field can be traced back to how it was obtained. `runs/` and `clones/` are runtime artifacts and git-ignored.
+`field_stats` inside the bundle records hydration statistics, per-field survivors (the filter funnel), `per_field_sources`, `calls_spent`, `requeues`, `warnings`, and GraphQL batch statistics — so every enriched field can be traced back to how it was obtained. `runs/` and `clones/` are runtime artifacts and git-ignored.
 
 ## Getting it running
 
@@ -367,13 +367,13 @@ Everything is read from the environment only. Secrets are never stored in the re
 | `GITCRAWL_MAX_HYDRATE` | `200` | Hydration cap per run (must be ≤ candidates). |
 | `GITCRAWL_MAX_ENRICH` | `100` | Enrichment-check cap per run. |
 | `GITCRAWL_GRAPHQL_BATCH` | `true` | Toggle batched GraphQL (falls back to per-repo REST when off). |
-| `GITCRAWL_GRAPHQL_BATCH_SIZE` | `20` | Aliases per GraphQL request (1–20). |
+| `GITCRAWL_GRAPHQL_BATCH_SIZE` | `20` | Aliases per GraphQL request (1–20); env overrides are clamped into range at load. |
 | `GITCRAWL_MAX_CONCURRENT` | `10` | Max in-flight requests per endpoint/token. |
 | `TEST_DATABASE_URL` | — | Test database; its name must end in `_test` (destructive-safe). Suites skip without it. |
 | `GITCRAWL_REQUIRE_TEST_DB` | unset | `1` turns a missing test database into a failure instead of a skip (used in CI). |
 | `UPDATE_GOLDEN` | unset | `1` regenerates the golden snapshots. |
 
-The default run caps are intentionally small — laptop-friendly, interactive. Raise them at **System → Limits** (`/settings`) for corpus builds, or pin them from the environment; the settings page renders env-pinned fields as read-only.
+The default run caps are intentionally small — laptop-friendly, interactive. Raise them at **System → Limits** (`/settings`) for corpus builds — the **Set to corpus-build limits** button applies 1,000 shards; 100,000 candidates/hydrate/enrich; a 24 h deadline; batch 20; concurrency 10 — or pin them from the environment; the settings page renders env-pinned fields as read-only.
 
 ### Database migrations
 
@@ -389,7 +389,7 @@ One warning worth reading before you point this at a large database: migrations 
 
 1. Start the app and open <http://127.0.0.1:8000/>.
 2. Go to **Find** (`/find`): enter a GitHub query (e.g. `language:rust stars:>100`) and optionally virtual filters such as `has_dockerfile` or `owner_country`.
-3. Run it. The run page polls live status; when it finishes it shows counts (found / saved / passed / unavailable / with Dockerfile), warnings, and partial-result flags.
+3. Run it. The run page polls live status — phase, done/total, percent bar, phase-relative ETA, and a ticking elapsed clock — with a **Stop search** button that leaves the run resumable as "Stopped". When it finishes it shows counts (found / saved / passed / unavailable / with Dockerfile), warnings, and partial-result flags.
 4. Inspect the full results page, **export** JSON/CSV, **compare** against the previous same-filter run, or **freeze** the result as a corpus.
 5. Optional: clone the top-N with the Clone control.
 
@@ -462,7 +462,7 @@ Unknown parameters are rejected locally with a `400` and a hint — a typo like 
 | `/` | Dashboard: health badges, quick find, recent runs |
 | `/find` (`/vsearch/` alias) | Filter form: run, download as JSON, upload and run, save |
 | `/runs` | Run history with status/hash filters and paging |
-| `/runs/{id}` | Run detail: live status, counts, warnings, export/replay/resume/clone, compare-with |
+| `/runs/{id}` | Run detail: live phase progress + ETA, Stop, counts, warnings, save-filter-to-library, export/replay/resume/clone, compare-with |
 | `/runs/{id}/results` | Full-width result table; page, sort, and page size live in the URL |
 | `/runs/{id}/diff?against={baseline_id}` | Compare with an earlier run (defaults to the previous same-filter run) |
 | `/corpora`, `/corpora/{id}` | Frozen corpora and their contents |
@@ -482,7 +482,9 @@ Unknown parameters are rejected locally with a `400` and a hint — a typo like 
 | `GET` | `/vsearch/runs/{filter_hash}/export` | Export by filter hash (`format=json\|csv`) |
 | `GET` | `/runs/{run_id}/export` | Run-scoped export |
 | `GET` | `/api/runs/{run_id}/diff` | Compare a run with a baseline |
-| `POST` | `/runs/{run_id}/resume` | Resume a failed run (resets artifacts, re-fetches) |
+| `POST` | `/runs/{run_id}/cancel` | Stop a queued/running run (cooperative; it becomes resumable `cancelled`) |
+| `POST` | `/runs/{run_id}/resume` | Resume a failed, partial, or stopped run (resets artifacts, re-fetches) |
+| `POST` | `/runs/{run_id}/save-filter` | Save the run's filter into the library |
 | `GET` | `/runs/{run_id}/quality` | Per-run quality report |
 | `GET` | `/runs/{run_id}/clone-estimate` | Clone disk estimate preview |
 | `POST` / `DELETE` | `/runs/{run_id}/clone` | Start / cancel cloning the top-N |
@@ -546,7 +548,7 @@ Two pieces of test furniture deserve a sentence each. The `golden/` suite snapsh
 
 ## Where the project is today
 
-**Built and wired** (verifiable in `src/` and in the test suite): sharded live discovery with cap handling; immutable-id storage and lifecycle; per-bucket rate limiting with the failure classifier; REST + GraphQL hydration; cost-ordered virtual enrichment (`has_dockerfile`, `owner_country` + confidence, `min_commits`/`max_commits`); the operator console (find/runs/results/diff/corpora/library/system/settings/health); filter-spec v1 with replay and hashes; bundles and CSV; quality reports; audit log; SLO metrics; and top-N cloning.
+**Built and wired** (verifiable in `src/` and in the test suite): sharded live discovery with cap handling, including a date planner that stays inside the filter's own `created:` window; immutable-id storage and lifecycle; per-bucket rate limiting with the failure classifier; REST + GraphQL hydration with bounded batch concurrency; cost-ordered virtual enrichment (`has_dockerfile`, `owner_country` + confidence, `min_commits`/`max_commits`, `min_language_bytes`/`max_language_bytes`); the operator console (find/runs/results/diff/corpora/library/system/settings/health); run controls (Stop/resume, save filter, live phase progress with ETA); filter-spec v1 with replay and hashes; bundles and CSV; quality reports; audit log; SLO metrics; and top-N cloning.
 
 **Designed but not implemented** — the console and docs label these clearly rather than pretending:
 
@@ -557,7 +559,7 @@ Two pieces of test furniture deserve a sentence each. The `golden/` suite snapsh
 - **Multi-segment enrichment parallelism**: the executor supports segments, but the runner currently always uses one.
 - **Mid-run checkpointing**: none — resume re-fetches from the start (upserts make that safe, only slower).
 
-Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests/quarantine_manifest.txt) and enforced by tests, so unwired code cannot silently rot. Migration `0010` is reserved for the detection feature.
+Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests/quarantine_manifest.txt) and enforced by tests, so unwired code cannot silently rot. Migrations `0010`–`0011` carry the run progress columns; the detection feature's tables remain unbuilt and will claim a later revision.
 
 **Known operational constraints**: migrations `0005`–`0007` take write-blocking locks; a run occupies the single executor for its whole duration; the default caps are small; the console has no auth (see above).
 
@@ -576,6 +578,7 @@ Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests
 - **ETag / `304`** — a stored fingerprint for a repo; if nothing changed, GitHub says so for free.
 - **Run bundle** — the frozen artifact of a search: filters, `ran_at`, counts, item rows, provenance, raw upstream evidence.
 - **Incomplete** — the honest flag on a run that hit a budget, a cap, or an unenforceable filter. Never silently hidden.
+- **Stopped (`cancelled`)** — a run you ended with the Stop button; it keeps its shards and stays resumable.
 - **Geo confidence tiers** — `exact-iso`, `name`, `gazetteer-city`, `geocoder`, `weak`; the ladder behind every owner-country answer.
 
 ## Documentation map
