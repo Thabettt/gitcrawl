@@ -6,7 +6,8 @@ import itertools
 import json
 import queue
 import threading
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -15,6 +16,9 @@ from pathlib import Path
 from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.engine import Engine
 
+from lib import cancellation, progress
+from lib.batching import chunked
+from lib.cancellation import RunCancelled
 from store.models import RunItem, Runs
 
 
@@ -137,11 +141,14 @@ def run_status(engine: Engine, run_id: int) -> dict:
     }
 
 
+_SNAPSHOT_BATCH = 1000
+
+
 def _snapshot_items(engine: Engine, run_id: int, items: list[RunPayloadItem]) -> None:
-    rows = [{"run_id": run_id, **_snapshot_item(item)} for item in items]
     with engine.begin() as connection:
         connection.execute(delete(RunItem).where(RunItem.run_id == run_id))
-        if rows:
+        for batch in chunked(items, _SNAPSHOT_BATCH):
+            rows = [{"run_id": run_id, **_snapshot_item(item)} for item in batch]
             connection.execute(insert(RunItem), rows)
 
 
@@ -188,11 +195,51 @@ def _write_bundle(run: dict, payload: RunPayload, runs_root: str) -> str:
         "items": [_bundle_item(item) for item in payload.items],
         "field_stats": payload.field_stats,
     }
-    (directory / "bundle.json").write_text(
-        json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    with (directory / "bundle.json").open("w", encoding="utf-8") as handle:
+        json.dump(bundle, handle, ensure_ascii=False, indent=2)
     _write_corpus(directory / "corpus.csv", payload.items)
     return f"{directory.as_posix()}/"
+
+
+class ProgressReporter:
+    """Throttled writer of the live progress columns on the runs row."""
+
+    def __init__(self, engine: Engine, run_id: int, *, min_interval: float = 1.0) -> None:
+        self._engine = engine
+        self._run_id = run_id
+        self._min_interval = min_interval
+        self._last_write = 0.0
+        self._last_phase = ""
+
+    def update(
+        self,
+        phase: str,
+        done: int,
+        total: int | None,
+        counters: Mapping[str, int],
+        *,
+        force: bool = False,
+    ) -> None:
+        now = time.monotonic()
+        if not force and phase == self._last_phase and now - self._last_write < self._min_interval:
+            return
+        phase_changed = phase != self._last_phase
+        self._last_write = now
+        self._last_phase = phase
+        values: dict[str, object] = {
+            "progress_phase": phase,
+            "progress_done": int(done),
+            "progress_total": total,
+            "progress_updated_at": func.now(),
+        }
+        if phase_changed:
+            values["progress_started_at"] = func.now()
+        for name in ("total_count", "fetched", "updated", "unchanged", "skipped"):
+            value = counters.get(name)
+            if isinstance(value, int):
+                values[name] = value
+        with self._engine.begin() as connection:
+            connection.execute(update(Runs).where(Runs.id == self._run_id).values(**values))
 
 
 def execute_run(
@@ -201,16 +248,47 @@ def execute_run(
     *,
     runner: Runner | None = None,
     runs_root: str = "runs",
+    cancel: threading.Event | None = None,
 ) -> None:
+    cancel = cancel if cancel is not None else threading.Event()
+    reporter = ProgressReporter(engine, run_id)
     with engine.begin() as connection:
         run = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
         if run is None:
             raise KeyError(run_id)
+        if cancel.is_set():
+            connection.execute(
+                update(Runs)
+                .where(Runs.id == run_id)
+                .values(
+                    status="cancelled",
+                    error=None,
+                    finished_at=func.now(),
+                    progress_phase=None,
+                    progress_done=None,
+                    progress_total=None,
+                    progress_started_at=None,
+                )
+            )
+            return
         connection.execute(
-            update(Runs).where(Runs.id == run_id).values(status="running", started_at=func.now())
+            update(Runs)
+            .where(Runs.id == run_id)
+            .values(
+                status="running",
+                started_at=func.now(),
+                error=None,
+                progress_phase="starting",
+                progress_done=0,
+                progress_total=None,
+            )
         )
+    cancel_token = cancellation.bind(cancel.is_set)
+    progress_token = progress.bind(reporter.update)
     try:
         payload = (runner or _default_runner)(run_id, run["filter_spec"])
+        cancellation.check()
+        reporter.update("writing", 0, len(payload.items), {}, force=True)
         _snapshot_items(engine, run_id, payload.items)
         bundle_dir = _write_bundle(run, payload, runs_root)
         with engine.begin() as connection:
@@ -229,6 +307,25 @@ def execute_run(
                     bundle_dir=bundle_dir,
                     finished_at=func.now(),
                     error=None,
+                    progress_phase=None,
+                    progress_done=None,
+                    progress_total=None,
+                    progress_started_at=None,
+                )
+            )
+    except RunCancelled:
+        with engine.begin() as connection:
+            connection.execute(
+                update(Runs)
+                .where(Runs.id == run_id)
+                .values(
+                    status="cancelled",
+                    error=None,
+                    finished_at=func.now(),
+                    progress_phase=None,
+                    progress_done=None,
+                    progress_total=None,
+                    progress_started_at=None,
                 )
             )
     except Exception as exc:
@@ -236,8 +333,19 @@ def execute_run(
             connection.execute(
                 update(Runs)
                 .where(Runs.id == run_id)
-                .values(status="failed", error=_error_message(exc), finished_at=func.now())
+                .values(
+                    status="failed",
+                    error=_error_message(exc),
+                    finished_at=func.now(),
+                    progress_phase=None,
+                    progress_done=None,
+                    progress_total=None,
+                    progress_started_at=None,
+                )
             )
+    finally:
+        progress.reset(progress_token)
+        cancellation.reset(cancel_token)
 
 
 def recover_orphaned_runs(engine: Engine) -> int:
@@ -249,6 +357,10 @@ def recover_orphaned_runs(engine: Engine) -> int:
                 status="failed",
                 error="orphaned: process restarted",
                 finished_at=func.now(),
+                progress_phase=None,
+                progress_done=None,
+                progress_total=None,
+                progress_started_at=None,
             )
         )
     return int(result.rowcount or 0)
@@ -282,6 +394,7 @@ class RunExecutor:
         self._idle = threading.Event()
         self._idle.set()
         self._futures: dict[int, Future] = {}
+        self._cancel_events: dict[int, threading.Event] = {}
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._work, daemon=True)
         self._thread.start()
@@ -293,6 +406,10 @@ class RunExecutor:
             for key in done:
                 del self._futures[key]
             self._futures[run_id] = future
+            cancel = self._cancel_events.get(run_id)
+            if cancel is None or not cancel.is_set():
+                cancel = threading.Event()
+            self._cancel_events[run_id] = cancel
 
         def job() -> None:
             execute_run(
@@ -300,10 +417,22 @@ class RunExecutor:
                 run_id,
                 runner=runner or self._runner,
                 runs_root=self._runs_root,
+                cancel=cancel,
             )
 
         self._enqueue(1, job, future)
         return future
+
+    def request_cancel(self, run_id: int) -> bool:
+        with self._lock:
+            event = self._cancel_events.setdefault(run_id, threading.Event())
+            event.set()
+        return True
+
+    def is_cancelled(self, run_id: int) -> bool:
+        with self._lock:
+            event = self._cancel_events.get(run_id)
+        return event is not None and event.is_set()
 
     def submit_call(self, func: Callable[[], object]) -> Future:
         future: Future = Future()

@@ -18,6 +18,7 @@ from serve.executor import (
     RunPayloadItem,
     create_run,
     execute_run,
+    recover_orphaned_runs,
     run_status,
 )
 
@@ -390,6 +391,24 @@ def test_execute_run_replaces_previous_snapshot(db: Engine, tmp_path):
     assert list(rows) == [3]
 
 
+def test_execute_run_snapshots_items_in_batches(db: Engine, tmp_path, monkeypatch):
+    monkeypatch.setattr(executor_module, "_SNAPSHOT_BATCH", 2)
+    run_id = create_run(db, FILTER, api_version="v1")
+    items = [_item(repo_id=index, full_name=f"octo/r{index}") for index in (1, 2, 3)]
+    execute_run(
+        db,
+        run_id,
+        runner=lambda rid, spec: RunPayload(3, items),
+        runs_root=str(tmp_path),
+    )
+    with db.connect() as connection:
+        count = connection.scalar(
+            text("SELECT count(*) FROM run_items WHERE run_id = :id"), {"id": run_id}
+        )
+    assert run_status(db, run_id)["status"] == "done", run_status(db, run_id)["error"]
+    assert count == 3
+
+
 def test_execute_run_empty_items_writes_header_only_csv(db: Engine, tmp_path):
     run_id = create_run(db, FILTER, api_version="v1")
     execute_run(db, run_id, runner=lambda rid, spec: RunPayload(0, []), runs_root=str(tmp_path))
@@ -692,3 +711,117 @@ def test_run_executor_concurrent_submits_keep_single_worker(db: Engine, tmp_path
     assert all(kind == "end" for kind, _ in events[1::2])
     for run_id in run_ids:
         assert run_status(db, run_id)["status"] == "done"
+
+
+def test_execute_run_cancelled_before_start(db: Engine, tmp_path, monkeypatch):
+    import threading
+
+    run_id = create_run(db, FILTER, api_version="v1")
+    cancel = threading.Event()
+    cancel.set()
+    execute_run(
+        db,
+        run_id,
+        runner=lambda rid, spec: RunPayload(0, []),
+        runs_root=str(tmp_path),
+        cancel=cancel,
+    )
+    status = run_status(db, run_id)
+    assert status["status"] == "cancelled"
+    assert status["finished_at"] is not None
+
+
+def test_execute_run_cancel_midflight_marks_cancelled(db: Engine, tmp_path):
+    import threading
+    import time
+
+    from lib import cancellation
+
+    run_id = create_run(db, FILTER, api_version="v1")
+    started = threading.Event()
+
+    def runner(rid, spec):
+        started.set()
+        while True:
+            time.sleep(0.01)
+            cancellation.check()
+
+    future_executor = RunExecutor(db, runner=runner, runs_root=str(tmp_path))
+    future = future_executor.submit(run_id)
+    assert started.wait(5)
+    assert future_executor.request_cancel(run_id) is True
+    future.result(timeout=10)
+    status = run_status(db, run_id)
+    assert status["status"] == "cancelled"
+    assert status["finished_at"] is not None
+
+
+def test_execute_run_writes_live_progress_and_clears_it(db: Engine, tmp_path):
+    import threading
+    import time
+
+    from lib import progress
+
+    run_id = create_run(db, FILTER, api_version="v1")
+    gate = threading.Event()
+    reported = threading.Event()
+
+    def runner(rid, spec):
+        progress.report("discovering", 3, 10, fetched=300)
+        reported.set()
+        gate.wait(5)
+        return RunPayload(0, [])
+
+    future_executor = RunExecutor(db, runner=runner, runs_root=str(tmp_path))
+    future_executor.submit(run_id)
+    assert reported.wait(5)
+    deadline = time.monotonic() + 5
+    row = None
+    while time.monotonic() < deadline:
+        with db.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT progress_phase, progress_done, progress_total, fetched, "
+                    "progress_started_at FROM runs WHERE id = :id"
+                ),
+                {"id": run_id},
+            ).one()
+        if row[0] == "discovering":
+            break
+        time.sleep(0.05)
+    assert tuple(row[:4]) == ("discovering", 3, 10, 300)
+    assert row[4] is not None
+    gate.set()
+    future_executor.wait_for(run_id, timeout=10)
+    assert run_status(db, run_id)["status"] == "done"
+    with db.connect() as connection:
+        cleared = connection.execute(
+            text("SELECT progress_phase, progress_started_at FROM runs WHERE id = :id"),
+            {"id": run_id},
+        ).one()
+    assert tuple(cleared) == (None, None)
+
+
+def test_recover_orphaned_runs_clears_live_progress(db: Engine):
+    run_id = create_run(db, FILTER, api_version="v1")
+    with db.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE runs SET status='running', started_at=now(), "
+                "progress_phase='discovering', progress_done=3, progress_total=10 "
+                "WHERE id = :id"
+            ),
+            {"id": run_id},
+        )
+    recovered = recover_orphaned_runs(db)
+    assert recovered == 1
+    status = run_status(db, run_id)
+    assert status["status"] == "failed"
+    with db.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT progress_phase, progress_done, progress_total " "FROM runs WHERE id = :id"
+            ),
+            {"id": run_id},
+        ).one()
+    assert tuple(row) == (None, None, None)

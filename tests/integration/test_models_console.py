@@ -44,6 +44,11 @@ RUN_COLUMNS: dict[str, bool] = {
     "incomplete_shards": False,
     "error": True,
     "bundle_dir": True,
+    "progress_phase": True,
+    "progress_done": True,
+    "progress_total": True,
+    "progress_updated_at": True,
+    "progress_started_at": True,
 }
 
 RUN_ITEM_COLUMNS: dict[str, bool] = {
@@ -103,7 +108,7 @@ def _indexdefs(engine: Engine) -> dict[str, str]:
 
 
 def test_single_alembic_head(alembic_config):
-    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0009"]
+    assert ScriptDirectory.from_config(alembic_config).get_heads() == ["0011"]
 
 
 def test_metadata_declares_exactly_the_expected_tables():

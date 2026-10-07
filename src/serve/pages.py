@@ -64,7 +64,7 @@ RUN_SORT_COLUMNS = {
 RESULTS_PAGE_SIZES = (25, 50, 100, 200)
 RESULTS_DIRECTIONS = ("asc", "desc")
 NON_TERMINAL_STATUSES = ("queued", "running")
-HISTORY_STATUSES = ("queued", "running", "done", "partial", "failed")
+HISTORY_STATUSES = ("queued", "running", "done", "partial", "failed", "cancelled")
 HISTORY_PAGE_SIZE = 50
 R44_VIRTUALS = ("min_loc", "max_loc")
 SAVE_ERROR_STATUS = {"invalid_name": 400, "invalid_spec": 400, "duplicate_name": 409}
@@ -74,6 +74,14 @@ STATUS_LABELS = {
     "done": "Finished",
     "partial": "Finished — incomplete",
     "failed": "Failed",
+    "cancelled": "Stopped",
+}
+PROGRESS_PHASES = {
+    "starting": "Starting",
+    "discovering": "Finding repos",
+    "hydrating": "Fetching details",
+    "enriching": "Applying filters",
+    "writing": "Saving results",
 }
 
 
@@ -516,6 +524,10 @@ def _run_flags(row, virtual: dict) -> list[dict]:
     flags: list[dict] = []
     if row["error"]:
         flags.append({"kind": "error", "label": f"failed: {row['error']}"})
+    if row["status"] == "cancelled":
+        flags.append(
+            {"kind": "incomplete", "label": "stopped by the user; resume this search to continue"}
+        )
     if row["status"] == "partial" or row["incomplete_shards"]:
         steps = row["incomplete_shards"] or 1
         flags.append(
@@ -526,7 +538,11 @@ def _run_flags(row, virtual: dict) -> list[dict]:
             }
         )
     total = row["total_count"]
-    if isinstance(total, int) and row["fetched"] < total:
+    if (
+        row["status"] not in NON_TERMINAL_STATUSES
+        and isinstance(total, int)
+        and row["fetched"] < total
+    ):
         flags.append(
             {"kind": "truncation", "label": f"truncated: found {row['fetched']} of ~{total}"}
         )
@@ -540,6 +556,52 @@ def _run_flags(row, virtual: dict) -> list[dict]:
                 }
             )
     return flags
+
+
+def _format_span(seconds: float | None) -> str | None:
+    if seconds is None or seconds < 0:
+        return None
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes, sec = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
+
+
+def _elapsed_seconds(row) -> float | None:
+    if row["started_at"] is None:
+        return None
+    end = row["finished_at"] or datetime.now(UTC)
+    return max((end - row["started_at"]).total_seconds(), 0.0)
+
+
+def _progress_summary(row) -> dict | None:
+    phase = row["progress_phase"]
+    if not phase:
+        return None
+    done = row["progress_done"] or 0
+    total = row["progress_total"]
+    percent = int(done * 100 / total) if total else None
+    eta = None
+    phase_started = row["progress_started_at"] or row["started_at"]
+    if total and done >= 2 and phase_started is not None:
+        elapsed = max((datetime.now(UTC) - phase_started).total_seconds(), 0.0)
+        if elapsed > 0:
+            candidate = elapsed * (total - done) / done
+            if candidate <= 24 * 3600:
+                eta = candidate
+    return {
+        "phase": phase,
+        "label": PROGRESS_PHASES.get(phase, phase),
+        "done": done,
+        "total": total,
+        "percent": percent,
+        "eta": _format_span(eta),
+        "eta_seconds": int(eta) if eta is not None else None,
+    }
 
 
 def _run_detail_summary(row, item_count: int) -> dict:
@@ -560,6 +622,9 @@ def _run_detail_summary(row, item_count: int) -> dict:
         "started_at": _iso(row["started_at"]),
         "finished_at": _iso(row["finished_at"]),
         "duration": _duration(row["started_at"], row["finished_at"]),
+        "elapsed": _format_span(_elapsed_seconds(row)),
+        "elapsed_seconds": int(_elapsed_seconds(row) or 0),
+        "progress": _progress_summary(row),
         "item_count": item_count,
         "polling": row["status"] in NON_TERMINAL_STATUSES,
         "q": _raw_query(row["filter_spec"]),
@@ -608,7 +673,11 @@ def _run_counts(engine: Engine, row) -> dict[str, dict]:
         "found": {
             "label": "Found",
             "explain": "Repos GitHub said matched your search.",
-            "value": _int_or_zero(row["fetched"]),
+            "value": (
+                _int_or_zero(row["total_count"])
+                if row["total_count"] is not None
+                else _int_or_zero(row["fetched"])
+            ),
         },
         "saved": {
             "label": "Saved",
@@ -788,6 +857,7 @@ def register_pages(
     health_snapshot: Callable[[], dict[str, bool]] | None = None,
     runner_factory: Callable[[], Runner] | None = None,
     find_count_factory: Callable[[], Callable[[str], int]] | None = None,
+    clone_disk_free: Callable[[str], float] | None = None,
     executor_factory: Callable[[], RunExecutor],
 ) -> None:
     templates = _templates
@@ -1099,7 +1169,12 @@ def register_pages(
             total=item_count,
         )
         estimate = clone_estimate_for_run(
-            engine, run_id, limit=None, mode=CloneMode.SHALLOW, dest_root=clone_root
+            engine,
+            run_id,
+            limit=None,
+            mode=CloneMode.SHALLOW,
+            dest_root=clone_root,
+            disk_free_mb=clone_disk_free(clone_root) if clone_disk_free is not None else None,
         )
         progress = read_clone_progress(
             engine, run_id, registry=progress_registry, runs_root=runs_root
@@ -1118,6 +1193,8 @@ def register_pages(
                 "csrf_token": request.state.csrf_token,
                 "estimate": estimate,
                 "progress": progress,
+                "save_notice": request.query_params.get("saved"),
+                "save_error": request.query_params.get("save_error"),
                 **(table or {}),
             },
         )
@@ -1154,6 +1231,7 @@ def register_pages(
             {
                 "run": _run_detail_summary(row, _item_count(engine, run_id)),
                 "counts": _run_counts(engine, row),
+                "csrf_token": request.state.csrf_token,
             },
         )
 
@@ -1256,7 +1334,12 @@ def register_pages(
             return _invalid_param("mode", "mode must be one of: shallow, file_only, windowed")
         try:
             estimate = clone_estimate_for_run(
-                engine_factory(), run_id, limit=limit, mode=mode, dest_root=clone_root
+                engine_factory(),
+                run_id,
+                limit=limit,
+                mode=mode,
+                dest_root=clone_root,
+                disk_free_mb=(clone_disk_free(clone_root) if clone_disk_free is not None else None),
             )
         except KeyError:
             return _run_not_found(run_id)

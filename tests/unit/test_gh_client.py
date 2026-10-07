@@ -682,3 +682,70 @@ def test_resource_for_graphql():
     from lib.gh_client import resource_for_url
 
     assert resource_for_url("https://api.github.com/graphql") == "graphql"
+
+
+def test_request_with_retry_refuses_non_github_hosts_for_authenticated_calls():
+    def handler(request):
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError):
+        request_with_retry(client, "GET", "https://evil.example/repos/octo/x")
+
+    response = request_with_retry(client, "GET", "https://evil.example/repos/octo/x", auth=False)
+    assert response.status_code == 200
+
+
+def test_retry_sleep_is_bounded_by_the_run_deadline():
+    from lib.deadlines import Deadline, DeadlineExceededError
+
+    sleeps = []
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999"}
+            )
+        )
+    )
+    limiter = BucketLimiter(fakeredis.FakeRedis(), specs={"core": (5000, 3600.0)})
+    limiter.bind_deadline(Deadline(10.0, clock=lambda: 0.0))
+
+    with pytest.raises(DeadlineExceededError):
+        request_with_retry(
+            client,
+            "GET",
+            "https://api.github.com/x",
+            limiter=limiter,
+            token_id="t",
+            sleep=sleeps.append,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+    assert sleeps == []
+
+
+def test_cancellation_aborts_before_a_retry_sleep():
+    from lib import cancellation
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999"}
+            )
+        )
+    )
+    slept: list[float] = []
+    token = cancellation.bind(lambda: True)
+    try:
+        with pytest.raises(cancellation.RunCancelled):
+            request_with_retry(
+                client,
+                "GET",
+                "https://api.github.com/x",
+                sleep=slept.append,
+                now=lambda: 1000.0,
+                jitter=lambda: 0.0,
+            )
+    finally:
+        cancellation.reset(token)
+    assert slept == []

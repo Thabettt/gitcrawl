@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import cast
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -17,12 +18,13 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
-from sqlalchemy import create_engine, select, update
+from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from discover.search_shards import RequestFailed
+from lib.batching import chunked
 from lib.deadlines import DeadlineExceededError, request_deadline_seconds
 from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
 from serve import errors, pages
@@ -78,6 +80,7 @@ READY_STATUSES = frozenset({"done", "partial"})
 _GET_PARAMS = ("q", "sort", "order", "per_page", "page", *VIRTUAL_FILTERS)
 _GET_PARAM_SET = frozenset(_GET_PARAMS)
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
+_DETAIL_BATCH = 5000
 
 
 def _allowed_hosts() -> list[str]:
@@ -201,26 +204,29 @@ def _detail_map(engine: Engine, repo_ids: list[int]) -> dict[int, dict]:
     unique = list(dict.fromkeys(repo_ids))
     if not unique:
         return {}
+    result: dict[int, dict] = {}
     with engine.connect() as connection:
-        rows = connection.execute(
-            select(
-                Repo.id,
-                Repo.description,
-                Repo.language,
-                Repo.license_spdx,
-                Repo.topics,
-                Repo.stargazers,
-                Repo.forks_count,
-                Repo.open_issues,
-                Repo.pushed_at,
-                Owner.login.label("owner_login"),
-                Owner.type.label("owner_type"),
-                Owner.location_raw.label("raw_location"),
-            )
-            .join(Owner, Owner.id == Repo.owner_id)
-            .where(Repo.id.in_(unique))
-        ).mappings()
-        return {row["id"]: dict(row) for row in rows}
+        for batch in chunked(unique, _DETAIL_BATCH):
+            rows = connection.execute(
+                select(
+                    Repo.id,
+                    Repo.description,
+                    Repo.language,
+                    Repo.license_spdx,
+                    Repo.topics,
+                    Repo.stargazers,
+                    Repo.forks_count,
+                    Repo.open_issues,
+                    Repo.pushed_at,
+                    Owner.login.label("owner_login"),
+                    Owner.type.label("owner_type"),
+                    Owner.location_raw.label("raw_location"),
+                )
+                .join(Owner, Owner.id == Repo.owner_id)
+                .where(Repo.id.in_(batch))
+            ).mappings()
+            result.update({row["id"]: dict(row) for row in rows})
+    return result
 
 
 def _render_item(item: RunPayloadItem, detail: dict | None) -> dict:
@@ -337,6 +343,17 @@ class _LazyLoaders:
             return value
 
 
+def _shard_queue_prefix(run_id: int) -> str:
+    """Scope shard queue keys per run so runs never reclaim each other's shards.
+
+    Persisted runs keep a stable prefix so resuming a failed run can reclaim its
+    own interrupted deliveries; ad-hoc (vsearch) runs get an isolated prefix.
+    """
+    if run_id > 0:
+        return f"gitcrawl:shards:run:{run_id}"
+    return f"gitcrawl:shards:adhoc:{uuid4().hex}"
+
+
 def create_app(
     *,
     engine: Engine | None = None,
@@ -348,6 +365,7 @@ def create_app(
     token_present: Callable[[], bool] | None = None,
     metrics_redis: Callable[[], object] | None = None,
     find_count_factory: Callable[[], Callable[[str], int]] | None = None,
+    clone_disk_free: Callable[[str], float] | None = None,
 ) -> FastAPI:
     loaders = _LazyLoaders()
     payload_cache = RunPayloadCache(ttl_seconds=CACHE_TTL_SECONDS, clock=clock)
@@ -388,11 +406,13 @@ def create_app(
 
                 settings = load_run_settings(engine_for())
                 deps = build_deps(engine_for(), max_concurrent=settings.limiter_max_concurrent)
+                queue_prefix = _shard_queue_prefix(run_id)
                 try:
                     return run_filter(
                         deps,
                         parse_filter_spec(filter_spec),
                         config=runner_config_from(settings),
+                        queue_prefix=queue_prefix,
                     )
                 finally:
                     deps.client.close()
@@ -841,8 +861,10 @@ def create_app(
         row = await run_in_threadpool(load_run)
         if row is None:
             return HTMLResponse("run not found", status_code=404)
-        if row["status"] != "failed":
-            return HTMLResponse("only failed runs can be resumed", status_code=400)
+        if row["status"] not in ("failed", "partial", "cancelled"):
+            return HTMLResponse(
+                "only failed, partial, or cancelled runs can be resumed", status_code=400
+            )
 
         if row.get("kind") == "detect":
             from detect.orchestrator import run_detection
@@ -865,12 +887,89 @@ def create_app(
             reset_run_artifacts(engine, run_id)
             with engine.begin() as connection:
                 connection.execute(
-                    update(Runs).where(Runs.id == run_id).values(status="queued", error=None)
+                    update(Runs)
+                    .where(Runs.id == run_id)
+                    .values(
+                        status="queued",
+                        error=None,
+                        started_at=None,
+                        finished_at=None,
+                    )
                 )
 
         await run_in_threadpool(reset_and_queue)
         executor_for().submit(run_id, submit_runner)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @application.post("/runs/{run_id}/cancel")
+    async def cancel_run(request: Request, run_id: int):
+        if not await validate_csrf(request):
+            return errors.csrf_error_page(request)
+        engine = engine_for()
+        with engine.connect() as connection:
+            row = connection.execute(select(Runs).where(Runs.id == run_id)).mappings().one_or_none()
+        if row is None:
+            return HTMLResponse("run not found", status_code=404)
+        if row["status"] not in ("queued", "running"):
+            return HTMLResponse("only queued or running runs can be stopped", status_code=400)
+        executor_for().request_cancel(run_id)
+        if row["status"] == "queued":
+
+            def mark_stopped() -> None:
+                with engine.begin() as connection:
+                    connection.execute(
+                        update(Runs)
+                        .where(Runs.id == run_id, Runs.status == "queued")
+                        .values(
+                            status="cancelled",
+                            error=None,
+                            started_at=None,
+                            finished_at=func.now(),
+                            progress_phase=None,
+                            progress_done=None,
+                            progress_total=None,
+                        )
+                    )
+
+            await run_in_threadpool(mark_stopped)
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @application.post("/runs/{run_id}/save-filter")
+    async def save_filter_run(request: Request, run_id: int):
+        if not await validate_csrf(request):
+            return errors.csrf_error_page(request)
+        form = await request.form()
+        name = str(form.get("name", "")).strip()
+        engine = engine_for()
+
+        def load_run() -> dict | None:
+            with engine.connect() as connection:
+                row = (
+                    connection.execute(select(Runs).where(Runs.id == run_id))
+                    .mappings()
+                    .one_or_none()
+                )
+            return dict(row) if row is not None else None
+
+        row = await run_in_threadpool(load_run)
+        if row is None:
+            return HTMLResponse("run not found", status_code=404)
+
+        def save() -> str | None:
+            try:
+                create_filter(engine, name, row["filter_spec"])
+            except LibraryError as exc:
+                return (
+                    exc.code
+                    if exc.code in ("invalid_name", "invalid_spec", "duplicate_name")
+                    else "invalid_spec"
+                )
+            return None
+
+        error = await run_in_threadpool(save)
+        if error is None:
+            return RedirectResponse(f"/runs/{run_id}?saved=1", status_code=303)
+        return RedirectResponse(f"/runs/{run_id}?save_error={error}", status_code=303)
 
     @application.get("/runs/{run_id}/export")
     def export_run_route(run_id: int, format: str = "json"):
@@ -1001,6 +1100,7 @@ def create_app(
         health_snapshot=health_snapshot,
         runner_factory=runner_for,
         find_count_factory=find_count_factory,
+        clone_disk_free=clone_disk_free,
         executor_factory=executor_for,
     )
 

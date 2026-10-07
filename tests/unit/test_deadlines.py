@@ -60,7 +60,7 @@ def test_run_filter_binds_a_deadline_for_the_run_and_clears_it(monkeypatch):
     deps = SimpleNamespace(limiter=limiter, audit_buffer=None)
     seen: dict[str, object] = {}
 
-    def fake_inner(deps, spec, *, config=None):
+    def fake_inner(deps, spec, *, config=None, queue_prefix=None):
         seen["during"] = limiter.deadline
         return "payload"
 

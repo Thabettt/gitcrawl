@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from lib import cancellation
 from limiter.buckets import BucketLimiter
 from limiter.classifier import Action, classify, classify_transport
 
@@ -13,6 +14,12 @@ API_BASE = "https://api.github.com"
 API_VERSION = "2022-11-28"
 USER_AGENT = "gitcrawl/0.0.1"
 ACCEPT = "application/vnd.github+json"
+
+
+def is_api_host(url: str) -> bool:
+    parsed = urlparse(url)
+    base = urlparse(API_BASE)
+    return parsed.scheme == "https" and parsed.netloc == base.netloc
 
 
 def load_tokens() -> list[str]:
@@ -122,6 +129,8 @@ def request_with_retry(
     on_response: Callable[[httpx.Response, float], None] | None = None,
 ) -> httpx.Response:
     resource = resource_for_url(url)
+    if auth and not is_api_host(url):
+        raise ValueError(f"refusing to send credentials to non-GitHub host: {url}")
     request_kwargs: dict = {}
     if json_body is not None:
         request_kwargs["json"] = json_body
@@ -141,6 +150,7 @@ def request_with_retry(
                     raise ThrottledError(acquired.retry_after or 0.0)
                 if limiter.deadline is not None:
                     limiter.deadline.bound_wait(acquired.retry_after or 0.0)
+                cancellation.check()
                 sleep(acquired.retry_after or 0.0)
                 continue
             denials = 0
@@ -162,7 +172,11 @@ def request_with_retry(
             if decision.action is Action.FAIL_LOUD or attempt + 1 >= max_attempts:
                 raise
             attempt += 1
-            sleep(decision.sleep_seconds or 0.0)
+            wait = decision.sleep_seconds or 0.0
+            if limiter is not None and limiter.deadline is not None:
+                limiter.deadline.bound_wait(wait)
+            cancellation.check()
+            sleep(wait)
             continue
         latency_ms = (now() - started) * 1000.0
         if on_response is not None:
@@ -188,6 +202,10 @@ def request_with_retry(
             attempt += 1
             if attempt >= max_attempts:
                 return response
-            sleep(decision.sleep_seconds or 0.0)
+            wait = decision.sleep_seconds or 0.0
+            if limiter is not None and limiter.deadline is not None:
+                limiter.deadline.bound_wait(wait)
+            cancellation.check()
+            sleep(wait)
             continue
         return response

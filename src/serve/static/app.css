@@ -827,6 +827,15 @@ a.htmx-request,
   gap: 0.8rem 1rem;
 }
 
+.field-pair {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem 1rem;
+  align-items: start;
+  min-width: 0;
+}
+
 .field,
 .count-row {
   display: flex;
@@ -1548,3 +1557,31 @@ kbd {
   }
 }
 
+
+/* Live run progress */
+#run-clock-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.progress-track {
+  background: var(--gc-surface-alt);
+  border: 1px solid var(--gc-border);
+  border-radius: 999px;
+  display: inline-block;
+  height: 0.5rem;
+  overflow: hidden;
+  vertical-align: middle;
+  width: 12rem;
+}
+.progress-fill {
+  background: var(--gc-accent);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+  transition: width 0.4s ease;
+}
+#abort-run {
+  margin-top: 0.75rem;
+}

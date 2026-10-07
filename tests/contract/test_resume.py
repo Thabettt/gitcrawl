@@ -143,6 +143,7 @@ def test_resume_failed_run_requeues_and_clears_items(clean, tmp_path, monkeypatc
             {"id": run_id},
         )
     observed: list[int] = []
+    stamps: list[tuple] = []
 
     def recording_factory(engine):
         def runner(run_id: int, spec: dict) -> RunPayload:
@@ -150,7 +151,12 @@ def test_resume_failed_run_requeues_and_clears_items(clean, tmp_path, monkeypatc
                 count = connection.scalar(
                     text("SELECT count(*) FROM run_items WHERE run_id = :id"), {"id": run_id}
                 )
+                stamp = connection.execute(
+                    text("SELECT started_at, finished_at FROM runs WHERE id = :id"),
+                    {"id": run_id},
+                ).one()
             observed.append(int(count))
+            stamps.append((stamp[0], stamp[1]))
             return RunPayload(
                 total_count=1,
                 fetched=1,
@@ -178,6 +184,7 @@ def test_resume_failed_run_requeues_and_clears_items(clean, tmp_path, monkeypatc
             break
         time.sleep(0.05)
     assert observed == [0], f"runner saw {observed} run_items; resume did not reset first"
+    assert stamps and stamps[0][1] is None, f"resume kept a stale finish time: {stamps}"
     with clean.connect() as connection:
         stale = connection.scalar(
             text("SELECT count(*) FROM run_items WHERE run_id=:id AND full_name='octo/world'"),
@@ -185,6 +192,19 @@ def test_resume_failed_run_requeues_and_clears_items(clean, tmp_path, monkeypatc
         )
     assert stale == 0
     assert status in {"queued", "running", "done"}
+
+
+def test_resume_partial_run_requeues(clean, tmp_path, monkeypatch):
+    run_id, _ = seed_run(clean, tmp_path)
+    with clean.begin() as connection:
+        connection.execute(text("UPDATE runs SET status='partial' WHERE id=:id"), {"id": run_id})
+    client = make_client(clean, tmp_path, runner_factory=fake_runner_factory)
+    token = csrf_token(client)
+    response = client.post(
+        f"/runs/{run_id}/resume", headers={"x-csrf-token": token}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/runs/{run_id}"
 
 
 def test_resume_done_run_is_400(clean, tmp_path, monkeypatch):
@@ -208,12 +228,17 @@ def test_resume_requires_csrf(clean, tmp_path, monkeypatch):
     assert client.post(f"/runs/{run_id}/resume").status_code == 403
 
 
-def test_run_detail_shows_resume_only_for_failed(clean, tmp_path, monkeypatch):
+def test_run_detail_shows_resume_for_failed_and_partial(clean, tmp_path, monkeypatch):
     run_id, _ = seed_run(clean, tmp_path)
     client = make_client(clean, tmp_path, runner_factory=fake_runner_factory)
     assert "Resume" not in client.get(f"/runs/{run_id}").text
     with clean.begin() as connection:
         connection.execute(
             text("UPDATE runs SET status='failed', error='boom' WHERE id=:id"), {"id": run_id}
+        )
+    assert "Resume" in client.get(f"/runs/{run_id}").text
+    with clean.begin() as connection:
+        connection.execute(
+            text("UPDATE runs SET status='partial', error=NULL WHERE id=:id"), {"id": run_id}
         )
     assert "Resume" in client.get(f"/runs/{run_id}").text

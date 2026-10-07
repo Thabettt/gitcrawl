@@ -5,6 +5,17 @@
     <span id="run-total" class="muted" data-total="{{ run.total_count if run.total_count is not none else '' }}">total {{ run.total_count if run.total_count is not none else '—' }}</span>
     <span id="status-loading" class="htmx-indicator muted" role="status">Updating…</span>
   </div>
+  <div class="run-status-line" id="run-clock-line" data-started-at="{{ run.started_at }}" data-finished-at="{{ run.finished_at }}">
+    <span id="run-elapsed" class="muted">elapsed {{ run.elapsed if run.elapsed else '—' }}</span>
+    {% if run.progress %}
+    <span id="run-phase" class="muted">{{ run.progress.label }}…</span>
+    <span id="run-progress-numbers" class="muted" data-done="{{ run.progress.done }}" data-total="{{ run.progress.total if run.progress.total is not none else '' }}">{{ run.progress.done }}{% if run.progress.total %} / {{ run.progress.total }}{% endif %}</span>
+    {% if run.progress.percent is not none %}
+    <span class="progress-track" role="progressbar" aria-label="Run progress" aria-valuenow="{{ run.progress.percent }}" aria-valuemin="0" aria-valuemax="100"><span class="progress-fill" style="width: {{ run.progress.percent }}%"></span></span>
+    {% endif %}
+    <span id="run-eta" class="muted"{% if run.progress.eta_seconds is not none %} data-eta-seconds="{{ run.progress.eta_seconds }}"{% endif %}>{% if run.progress.eta %}est. {{ run.progress.eta }} left{% else %}estimating…{% endif %}</span>
+    {% endif %}
+  </div>
   <h2>What happened</h2>
   <div id="run-explained-counts" class="run-counts">
     {% for key, count in counts.items() %}
@@ -23,6 +34,12 @@
     </ul>
   </div>
   {% endif %}
+  {% if run.polling %}
+  <form id="abort-run" method="post" action="/runs/{{ run.id }}/cancel" onsubmit="return confirm('Stop this search? You can resume it later.');">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <button id="abort-run-button" class="button danger" type="submit">Stop search</button>
+  </form>
+  {% endif %}
   <details id="run-technical-details">
     <summary>Technical details</summary>
     <div id="run-counts" class="run-counts">
@@ -34,4 +51,37 @@
       <span class="count" data-count="incomplete">Incomplete <strong>{{ run.incomplete_shards }}</strong></span>
     </div>
   </details>
+  <script>
+  (function () {
+    "use strict";
+    if (window.__gcRunClock) {
+      clearInterval(window.__gcRunClock);
+      window.__gcRunClock = null;
+    }
+    var clock = document.getElementById("run-clock-line");
+    if (!clock) return;
+    var started = clock.getAttribute("data-started-at");
+    var finished = clock.getAttribute("data-finished-at");
+    if (!started || started === "—") return;
+    var startMs = Date.parse(started);
+    if (isNaN(startMs)) return;
+    var endMs = finished && finished !== "—" ? Date.parse(finished) : null;
+    var el = document.getElementById("run-elapsed");
+    function fmt(seconds) {
+      if (seconds < 60) return Math.round(seconds) + "s";
+      var minutes = Math.floor(seconds / 60);
+      var secs = Math.floor(seconds % 60);
+      if (minutes < 60) return minutes + "m " + secs + "s";
+      var hours = Math.floor(minutes / 60);
+      return hours + "h " + (minutes % 60) + "m";
+    }
+    function tick() {
+      var now = endMs || Date.now();
+      var seconds = Math.max(0, (now - startMs) / 1000);
+      if (el) el.textContent = "elapsed " + fmt(seconds);
+    }
+    tick();
+    if (!endMs) window.__gcRunClock = setInterval(tick, 1000);
+  })();
+  </script>
 </div>

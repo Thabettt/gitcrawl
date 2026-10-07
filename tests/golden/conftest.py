@@ -275,6 +275,7 @@ def build_golden_app(engine: Engine, runs_root: Path):
         token_present=lambda: True,
         metrics_redis=lambda: None,
         find_count_factory=find_count_factory,
+        clone_disk_free=lambda _path: 1_000_000.0,
     )
 
 

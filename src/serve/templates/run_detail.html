@@ -47,6 +47,7 @@
     <a id="export-json" class="button" href="/runs/{{ run.id }}/export?format=json">Export JSON</a>
     <a id="export-csv" class="button" href="/runs/{{ run.id }}/export?format=csv">Export CSV</a>
     <button id="clone-open" class="button" type="button" data-open="clone-modal">Clone code…</button>
+    <button id="save-filter-open" class="button" type="button" data-open="save-filter-modal">Save filter…</button>
 {%- if run.status in ('done', 'partial') %}
     <button id="freeze-open" class="button" type="button" data-open="freeze-modal">Freeze as corpus…</button>
 {%- endif %}
@@ -69,13 +70,19 @@
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
       <button class="button primary" type="submit">Search again</button>
     </form>
-{%- if run.status == 'failed' %}
+{%- if run.status in ('failed', 'partial', 'cancelled') %}
     <form id="resume" method="post" action="/runs/{{ run.id }}/resume">
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
       <button class="button primary" type="submit">Resume</button>
     </form>
 {%- endif %}
   </div>
+  {% if save_notice %}
+  <p id="save-filter-ok" class="muted">Saved this filter to your library.</p>
+  {% endif %}
+  {% if save_error %}
+  <p id="save-filter-error" class="flag error">Could not save the filter: {% if save_error == 'duplicate_name' %}a saved filter with that name already exists.{% elif save_error == 'invalid_name' %}that name is not valid.{% else %}the stored filter is not valid.{% endif %}</p>
+  {% endif %}
   <p id="detect-agent-use-note" class="muted">Detect agent use scans the frozen corpus through GitHub’s API on its own allowance and stores evidence per repo. Coming soon.</p>
   <p class="muted">Export downloads the frozen result list as JSON or CSV. Clone copies repo contents to this machine — no GitHub API calls; uses disk and time. Search again starts a new search with the same filter; the old results stay frozen.</p>
 {%- if run.status in ('done', 'partial') %}
@@ -87,6 +94,26 @@
 <div id="run-table" class="table-scroll sticky-head">{% include "partials/table.html" %}</div>
 <p id="view-all-results"><a class="button" href="/runs/{{ run.id }}/results">View all results →</a></p>
 {% include "partials/clone_modal.html" %}
+<div id="save-filter-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="save-filter-title" data-run-id="{{ run.id }}">
+  <div class="modal-panel">
+    <div class="panel-head">
+      <h2 id="save-filter-title">Save filter…</h2>
+      <button id="save-filter-close" class="button ghost" type="button" data-close="save-filter-modal" aria-label="Close save filter dialog">Close</button>
+    </div>
+    <p class="muted">Stores this search's filter in your library so you can run it again later.</p>
+    <form id="save-filter-form" action="/runs/{{ run.id }}/save-filter" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <label class="field" for="save-filter-name">
+        <span class="field-label">Name</span>
+        <input class="field-input" id="save-filter-name" name="name" type="text" required maxlength="120" value="{{ sentence }}">
+      </label>
+      <div class="form-actions">
+        <button id="save-filter-submit" class="button primary" type="submit">Save filter</button>
+        <button class="button" type="button" data-close="save-filter-modal">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 {%- if run.status in ('done', 'partial') %}
 <div id="freeze-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="freeze-modal-title" data-run-id="{{ run.id }}">
   <div class="modal-panel">

@@ -6,6 +6,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from lib import cancellation
 from scheduler.tiering import order_repos
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,8 @@ def execute_segments(
                 stats.calls_spent[field] = stats.calls_spent.get(field, 0) + calls
                 item["field_index"] += 1
                 item["ids"] = ids
+        except cancellation.RunCancelled:
+            raise
         except Exception as exc:
             failed = exc
         if failed is not None:

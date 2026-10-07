@@ -183,6 +183,11 @@ class Runs(Base):
     )
     error: Mapped[str | None] = mapped_column(Text)
     bundle_dir: Mapped[str | None] = mapped_column(Text)
+    progress_phase: Mapped[str | None] = mapped_column(Text)
+    progress_done: Mapped[int | None] = mapped_column(Integer)
+    progress_total: Mapped[int | None] = mapped_column(Integer)
+    progress_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    progress_started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
 class RunItem(Base):
