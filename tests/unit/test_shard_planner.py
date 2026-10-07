@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from scheduler.shard_planner import ShardPlanner, ShardSpec
+from scheduler.shard_planner import ShardSpec, plan_shards
 
 MIN_DATE = date(2020, 1, 1)
 NOW = datetime(2020, 1, 10, 12, 0, tzinfo=UTC)
@@ -14,10 +14,7 @@ RANGE_RE = re.compile(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})")
 
 
 def uniform_count(per_day):
-    calls = []
-
     def count_fn(query):
-        calls.append(query)
         match = RANGE_RE.search(query)
         if match is None:
             return per_day * WINDOW_DAYS
@@ -25,23 +22,34 @@ def uniform_count(per_day):
         end = date.fromisoformat(match.group(2))
         return per_day * ((end - start).days + 1)
 
-    return count_fn, calls
+    return count_fn
+
+
+def probe_from(count_fn):
+    calls = []
+
+    def probe(queries):
+        calls.append(list(queries))
+        return [count_fn(query) for query in queries]
+
+    return probe, calls
+
+
+def all_probed(calls):
+    return [query for batch in calls for query in batch]
 
 
 def test_zero_root_count_returns_no_shards():
-    calls = []
+    probe, calls = probe_from(lambda query: 0)
 
-    def count_fn(query):
-        calls.append(query)
-        return 0
-
-    assert ShardPlanner(count_fn).plan("language:python", now=NOW) == []
-    assert calls == ["language:python"]
+    assert plan_shards("language:python", probe, now=NOW) == ([], False)
+    assert calls == [["language:python"]]
 
 
 def test_under_limit_root_returns_single_unbounded_shard():
-    count_fn, calls = uniform_count(per_day=99)
-    specs = ShardPlanner(count_fn).plan("language:go stars:>100", now=NOW)
+    probe, calls = probe_from(uniform_count(per_day=99))
+
+    specs, capped = plan_shards("language:go stars:>100", probe, now=NOW)
     assert specs == [
         ShardSpec(
             query="language:go stars:>100",
@@ -50,13 +58,15 @@ def test_under_limit_root_returns_single_unbounded_shard():
             total_count=990,
         )
     ]
-    assert calls == ["language:go stars:>100"]
+    assert capped is False
+    assert calls == [["language:go stars:>100"]]
 
 
 def test_over_limit_root_bisects_into_fetchable_gap_free_leaves():
-    count_fn, _ = uniform_count(per_day=500)
-    planner = ShardPlanner(count_fn, min_date=MIN_DATE)
-    specs = planner.plan("language:python", now=NOW)
+    probe, _ = probe_from(uniform_count(per_day=500))
+
+    specs, capped = plan_shards("language:python", probe, min_date=MIN_DATE, now=NOW)
+    assert capped is False
     assert sum(spec.total_count for spec in specs) == 5000
     assert all(spec.total_count < 1000 for spec in specs)
     assert all(not spec.oversized for spec in specs)
@@ -76,36 +86,28 @@ def test_over_limit_root_bisects_into_fetchable_gap_free_leaves():
 
 
 def test_plan_is_deterministic():
-    count_a, _ = uniform_count(per_day=500)
-    count_b, _ = uniform_count(per_day=500)
-    assert ShardPlanner(count_a, min_date=MIN_DATE).plan("q", now=NOW) == ShardPlanner(
-        count_b, min_date=MIN_DATE
-    ).plan("q", now=NOW)
+    probe_a, _ = probe_from(uniform_count(per_day=500))
+    probe_b, _ = probe_from(uniform_count(per_day=500))
+
+    assert plan_shards("q", probe_a, min_date=MIN_DATE, now=NOW) == plan_shards(
+        "q", probe_b, min_date=MIN_DATE, now=NOW
+    )
 
 
 def test_root_count_override_skips_root_probe():
-    count_fn, calls = uniform_count(per_day=500)
+    probe, calls = probe_from(uniform_count(per_day=500))
 
-    planner = ShardPlanner(count_fn, min_date=MIN_DATE, root_count=5000)
-    specs = planner.plan("q", now=NOW)
+    specs, capped = plan_shards("q", probe, min_date=MIN_DATE, root_count=5000, now=NOW)
+    assert capped is False
     assert sum(spec.total_count for spec in specs) == 5000
-    assert "q" not in calls
-
-
-def test_iter_plan_probes_lazily():
-    count_fn, calls = uniform_count(per_day=5000)
-    iterator = ShardPlanner(count_fn, min_date=MIN_DATE).iter_plan("q", now=NOW)
-    first = next(iterator)
-    assert first.range_start.date() == MIN_DATE
-    # A full plan for this window probes 19 times (10 leaves); the first leaf
-    # must require only the root plus its ancestor halves.
-    assert len(calls) < 19
+    assert "q" not in all_probed(calls)
 
 
 def test_scan_target_forces_split_below_max_fetchable():
-    count_fn, _ = uniform_count(per_day=50)
-    planner = ShardPlanner(count_fn, scan_target=300, min_date=MIN_DATE)
-    specs = planner.plan("q", now=NOW)
+    probe, _ = probe_from(uniform_count(per_day=50))
+
+    specs, capped = plan_shards("q", probe, scan_target=300, min_date=MIN_DATE, now=NOW)
+    assert capped is False
     assert len(specs) == 2
     assert sum(spec.total_count for spec in specs) == 500
     assert all(spec.total_count <= 300 for spec in specs)
@@ -113,11 +115,12 @@ def test_scan_target_forces_split_below_max_fetchable():
 
 
 def test_single_day_over_limit_is_marked_oversized():
-    def count_fn(query):
-        return 1500
+    probe, _ = probe_from(lambda query: 1500)
 
-    planner = ShardPlanner(count_fn, min_date=date(2020, 1, 1))
-    specs = planner.plan("q", now=datetime(2020, 1, 5, tzinfo=UTC))
+    specs, capped = plan_shards(
+        "q", probe, min_date=date(2020, 1, 1), now=datetime(2020, 1, 5, tzinfo=UTC)
+    )
+    assert capped is False
     assert len(specs) == 5
     assert [spec.range_start.date() for spec in specs] == [
         date(2020, 1, day) for day in range(1, 6)
@@ -129,11 +132,12 @@ def test_single_day_over_limit_is_marked_oversized():
 
 
 def test_single_day_window_over_limit_is_one_oversized_leaf():
-    def count_fn(query):
-        return 2000
+    probe, _ = probe_from(lambda query: 2000)
 
-    planner = ShardPlanner(count_fn, min_date=date(2020, 1, 5))
-    specs = planner.plan("q", now=datetime(2020, 1, 5, tzinfo=UTC))
+    specs, capped = plan_shards(
+        "q", probe, min_date=date(2020, 1, 5), now=datetime(2020, 1, 5, tzinfo=UTC)
+    )
+    assert capped is False
     assert len(specs) == 1
     assert specs[0].oversized is True
     assert specs[0].range_start.date() == date(2020, 1, 5)
@@ -141,18 +145,14 @@ def test_single_day_window_over_limit_is_one_oversized_leaf():
 
 
 def test_probes_are_clamped_to_the_configured_window():
-    calls = []
+    probe, calls = probe_from(lambda query: 1500)
 
-    def count_fn(query):
-        calls.append(query)
-        return 1500
-
-    planner = ShardPlanner(count_fn, min_date=date(2020, 1, 3))
-    planner.plan("q", now=datetime(2020, 1, 5, tzinfo=UTC))
-    assert calls[0] == "q"
-    ranged_calls = calls[1:]
-    assert ranged_calls
-    for query in ranged_calls:
+    plan_shards("q", probe, min_date=date(2020, 1, 3), now=datetime(2020, 1, 5, tzinfo=UTC))
+    probed = all_probed(calls)
+    assert probed[0] == "q"
+    ranged = probed[1:]
+    assert ranged
+    for query in ranged:
         match = RANGE_RE.search(query)
         assert match is not None
         start = date.fromisoformat(match.group(1))
@@ -161,11 +161,11 @@ def test_probes_are_clamped_to_the_configured_window():
 
 
 def test_count_fn_exception_propagates():
-    def count_fn(query):
+    def probe(queries):
         raise RuntimeError("probe failed")
 
     with pytest.raises(RuntimeError, match="probe failed"):
-        ShardPlanner(count_fn).plan("q", now=NOW)
+        plan_shards("q", probe, now=NOW)
 
 
 def test_split_created_strips_tokens_and_keeps_exclusions():
@@ -191,14 +191,17 @@ def test_replace_created_swaps_the_token_instead_of_appending():
 
 
 def test_plan_replaces_a_user_created_bound_everywhere():
-    def count_fn(query):
-        return 5000
+    probe, _ = probe_from(lambda query: 5000)
 
-    planner = ShardPlanner(count_fn, max_fetchable=1000, root_count=5000)
-    specs = planner.plan(
-        "language:rust created:>=2025-02-24", now=datetime(2026, 10, 6, tzinfo=UTC)
+    specs, capped = plan_shards(
+        "language:rust created:>=2025-02-24",
+        probe,
+        max_fetchable=1000,
+        root_count=5000,
+        now=datetime(2026, 10, 6, tzinfo=UTC),
     )
     assert specs
+    assert capped is False
     for spec in specs:
         assert spec.query.count("created:") == 1
         assert "created:>=" not in spec.query
@@ -208,8 +211,10 @@ def test_plan_replaces_a_user_created_bound_everywhere():
 
 
 def test_plan_keeps_the_original_query_when_the_root_is_fetchable():
-    planner = ShardPlanner(lambda query: 0, root_count=50)
-    specs = planner.plan("language:rust created:>=2025-02-24", now=NOW)
+    def probe(queries):
+        raise AssertionError("a fetchable root must not be probed")
+
+    specs, capped = plan_shards("language:rust created:>=2025-02-24", probe, root_count=50, now=NOW)
     assert specs == [
         ShardSpec(
             query="language:rust created:>=2025-02-24",
@@ -218,15 +223,17 @@ def test_plan_keeps_the_original_query_when_the_root_is_fetchable():
             total_count=50,
         )
     ]
+    assert capped is False
 
 
 def test_plan_stays_inside_a_closed_user_range():
-    def count_fn(query):
-        return 5000
+    probe, _ = probe_from(lambda query: 5000)
 
-    planner = ShardPlanner(count_fn, max_fetchable=1000, root_count=5000)
-    specs = planner.plan(
+    specs, _ = plan_shards(
         "language:rust created:2024-01-01..2024-01-31",
+        probe,
+        max_fetchable=1000,
+        root_count=5000,
         now=datetime(2026, 10, 6, tzinfo=UTC),
     )
     assert specs
@@ -236,12 +243,13 @@ def test_plan_stays_inside_a_closed_user_range():
 
 
 def test_plan_covers_each_window_of_disjoint_created_constraints():
-    def count_fn(query):
-        return 5000
+    probe, _ = probe_from(lambda query: 5000)
 
-    planner = ShardPlanner(count_fn, max_fetchable=1000, root_count=5000)
-    specs = planner.plan(
+    specs, _ = plan_shards(
         "language:rust created:2024-01-01..2024-01-31 created:>=2026-01-01",
+        probe,
+        max_fetchable=1000,
+        root_count=5000,
         now=datetime(2026, 10, 6, tzinfo=UTC),
     )
     assert specs
@@ -254,9 +262,41 @@ def test_plan_covers_each_window_of_disjoint_created_constraints():
 
 
 def test_plan_rejects_an_empty_created_range():
-    planner = ShardPlanner(lambda query: 5000, root_count=5000)
+    probe, _ = probe_from(lambda query: 5000)
+
     with pytest.raises(ValueError):
-        planner.plan(
+        plan_shards(
             "language:rust created:2025-03-01..2025-01-01",
+            probe,
+            root_count=5000,
             now=datetime(2026, 10, 6, tzinfo=UTC),
         )
+
+
+def test_probes_are_batched_by_the_batch_size():
+    days = [MIN_DATE + timedelta(days=2 * index) for index in range(41)]
+    query = "q " + " ".join(f"created:{day.isoformat()}" for day in days)
+    probe, calls = probe_from(uniform_count(per_day=500))
+
+    specs, capped = plan_shards(
+        query, probe, min_date=MIN_DATE, now=datetime(2020, 6, 1, tzinfo=UTC)
+    )
+    assert capped is False
+    assert len(specs) == 41
+    assert all(spec.total_count == 500 for spec in specs)
+    assert max(len(batch) for batch in calls) <= 20
+    assert any(len(batch) == 20 for batch in calls)
+
+
+def test_max_shards_caps_the_plan_to_the_oldest_leaves():
+    probe, _ = probe_from(uniform_count(per_day=500))
+
+    specs, capped = plan_shards(
+        "q", probe, min_date=MIN_DATE, max_shards=3, now=datetime(2020, 1, 3, tzinfo=UTC)
+    )
+    assert capped is True
+    assert [spec.range_start.date() for spec in specs] == [
+        MIN_DATE,
+        MIN_DATE + timedelta(days=1),
+        MIN_DATE + timedelta(days=2),
+    ]
