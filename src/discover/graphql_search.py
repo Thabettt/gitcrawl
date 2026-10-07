@@ -202,7 +202,7 @@ def node_to_item(node: Mapping[str, object]) -> dict:
 def _page_query(query: str, after: str | None) -> str:
     args = [f"first: {PAGE_SIZE}"]
     if after is not None:
-        args.append(f'"after": {json.dumps(after)}')
+        args.append(f"after: {json.dumps(after)}")
     args.append(f"query: {json.dumps(query)}")
     args.append("type: REPOSITORY")
     return (

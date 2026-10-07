@@ -101,7 +101,7 @@ def test_iter_pages_follows_cursor_and_caps_pages():
     assert [page.exhausted for page in pages] == [False, True]
     assert pages[0].items[0]["id"] == 1 and pages[1].items[0]["id"] == 2
     first, second = (json.loads(r.content) for r in captured)
-    assert "after" not in first["query"] and '"after": "c1"' in second["query"]
+    assert "after" not in first["query"] and 'after: "c1"' in second["query"]
     assert "first: 100" in first["query"]
 
 
