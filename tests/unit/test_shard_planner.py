@@ -166,3 +166,97 @@ def test_count_fn_exception_propagates():
 
     with pytest.raises(RuntimeError, match="probe failed"):
         ShardPlanner(count_fn).plan("q", now=NOW)
+
+
+def test_split_created_strips_tokens_and_keeps_exclusions():
+    from scheduler.shard_planner import split_created
+
+    base, windows = split_created("language:rust created:>=2025-02-24 stars:>=4")
+    assert base == "language:rust stars:>=4"
+    assert windows == [(date(2025, 2, 24), None)]
+
+    base, windows = split_created("language:rust -created:2024-01-01")
+    assert base == "language:rust -created:2024-01-01"
+    assert windows == []
+
+
+def test_replace_created_swaps_the_token_instead_of_appending():
+    from scheduler.shard_planner import replace_created
+
+    replaced = replace_created(
+        "language:rust created:>=2025-02-24", date(2025, 3, 1), date(2025, 3, 31)
+    )
+    assert replaced == "language:rust created:2025-03-01..2025-03-31"
+    assert replaced.count("created:") == 1
+
+
+def test_plan_replaces_a_user_created_bound_everywhere():
+    def count_fn(query):
+        return 5000
+
+    planner = ShardPlanner(count_fn, max_fetchable=1000, root_count=5000)
+    specs = planner.plan(
+        "language:rust created:>=2025-02-24", now=datetime(2026, 10, 6, tzinfo=UTC)
+    )
+    assert specs
+    for spec in specs:
+        assert spec.query.count("created:") == 1
+        assert "created:>=" not in spec.query
+        assert spec.range_start is not None and spec.range_end is not None
+        assert spec.range_start.date() >= date(2025, 2, 24)
+        assert spec.range_end.date() <= date(2026, 10, 6)
+
+
+def test_plan_keeps_the_original_query_when_the_root_is_fetchable():
+    planner = ShardPlanner(lambda query: 0, root_count=50)
+    specs = planner.plan("language:rust created:>=2025-02-24", now=NOW)
+    assert specs == [
+        ShardSpec(
+            query="language:rust created:>=2025-02-24",
+            range_start=None,
+            range_end=None,
+            total_count=50,
+        )
+    ]
+
+
+def test_plan_stays_inside_a_closed_user_range():
+    def count_fn(query):
+        return 5000
+
+    planner = ShardPlanner(count_fn, max_fetchable=1000, root_count=5000)
+    specs = planner.plan(
+        "language:rust created:2024-01-01..2024-01-31",
+        now=datetime(2026, 10, 6, tzinfo=UTC),
+    )
+    assert specs
+    for spec in specs:
+        assert spec.range_start.date() >= date(2024, 1, 1)
+        assert spec.range_end.date() <= date(2024, 1, 31)
+
+
+def test_plan_covers_each_window_of_disjoint_created_constraints():
+    def count_fn(query):
+        return 5000
+
+    planner = ShardPlanner(count_fn, max_fetchable=1000, root_count=5000)
+    specs = planner.plan(
+        "language:rust created:2024-01-01..2024-01-31 created:>=2026-01-01",
+        now=datetime(2026, 10, 6, tzinfo=UTC),
+    )
+    assert specs
+    for spec in specs:
+        start = spec.range_start.date()
+        end = spec.range_end.date()
+        in_first = date(2024, 1, 1) <= start and end <= date(2024, 1, 31)
+        in_second = date(2026, 1, 1) <= start and end <= date(2026, 10, 6)
+        assert in_first or in_second
+
+
+def test_plan_rejects_an_empty_created_range():
+    planner = ShardPlanner(lambda query: 5000, root_count=5000)
+    with pytest.raises(ValueError):
+        planner.plan(
+            "language:rust created:2025-03-01..2025-01-01",
+            now=datetime(2026, 10, 6, tzinfo=UTC),
+        )

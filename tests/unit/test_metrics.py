@@ -114,8 +114,11 @@ def test_queue_pel_reflects_delivered_unacked(clean_db):
     queue = ShardQueue(redis)
     queue.enqueue(1)
     queue.claim("gitcrawl-dead", count=1)  # delivered, never acked
+    scoped = ShardQueue(redis, prefix="gitcrawl:shards:run:9")
+    scoped.enqueue(1)
+    scoped.claim("gitcrawl-dead", count=1)
     payload = metrics_payload(engine, redis_client=redis)
-    assert payload["queue"]["pel"] == 1
+    assert payload["queue"]["pel"] == 2
 
 
 def test_metrics_payload_tolerates_malformed_rl_keys(clean_db, monkeypatch):
@@ -135,9 +138,9 @@ def test_metrics_payload_marks_queue_degraded_when_pel_fails(clean_db, monkeypat
     engine = clean_db()
     redis = fakeredis.FakeRedis()
 
-    def boom(self, lane=None):
+    def boom(self):
         raise RuntimeError("down")
 
-    monkeypatch.setattr("scheduler.state_machine.ShardQueue.pel_size", boom)
+    monkeypatch.setattr("scheduler.state_machine.ShardQueue.total_pel", boom)
     payload = metrics_payload(engine, redis_client=redis)
     assert payload["queue"] == {"pel": None, "degraded": True}

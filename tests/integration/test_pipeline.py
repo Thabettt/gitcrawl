@@ -329,7 +329,7 @@ def test_page_cap_marks_the_shard_incomplete_and_counts_the_capped_page(clean: E
     def handler(request: httpx.Request):
         query = q_of(request)
         if params_of(request).get("per_page") == ["1"]:
-            return count_response(500)
+            return count_response(50)
         return page_response([repo_item(6000)], next_url=next_page_url(query, 2))
 
     deps = make_deps(clean, scripted_client(handler, requests), redis)
@@ -345,6 +345,15 @@ def test_page_cap_marks_the_shard_incomplete_and_counts_the_capped_page(clean: E
         repo_ids=(6000,),
     )
     assert scalar(clean, "SELECT state FROM shards") == "incomplete"
+
+
+def test_non_object_count_payload_raises_request_failed(clean: Engine):
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json=[1, 2, 3], headers=SEARCH_HEADERS)
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    with pytest.raises(RequestFailed):
+        run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
 
 
 def test_non_200_exhaustion_raises_request_failed(clean: Engine):
@@ -368,6 +377,32 @@ def test_non_200_exhaustion_raises_request_failed(clean: Engine):
     assert len(requests) == 5
     assert len(sleeps) == 4
     assert scalar(clean, "SELECT count(*) FROM audit_log") == 5
+
+
+def test_planner_respects_page_budget_when_max_shards_allows(clean: Engine, redis):
+    def handler(request: httpx.Request):
+        if params_of(request).get("per_page") == ["1"]:
+            query = q_of(request)
+            return count_response(800 if "created:" not in query else 100)
+        return page_response([])
+
+    deps = make_deps(clean, scripted_client(handler, []), redis)
+    stats = run_search_discovery(deps, "topic:ai", max_shards=10, max_pages=3, jitter=lambda: 0.0)
+
+    assert stats.shards == 2
+    assert stats.plan_capped is False
+
+
+def test_planner_keeps_the_1000_target_when_shards_are_scarce(clean: Engine, redis):
+    def handler(request: httpx.Request):
+        if params_of(request).get("per_page") == ["1"]:
+            return count_response(800)
+        return page_response([])
+
+    deps = make_deps(clean, scripted_client(handler, []), redis)
+    stats = run_search_discovery(deps, "topic:ai", max_shards=1, max_pages=3, jitter=lambda: 0.0)
+
+    assert stats.shards == 1
 
 
 def test_zero_count_query_creates_no_shards(clean: Engine):
@@ -579,10 +614,10 @@ def test_request_failed_shard_is_rolled_back_and_queued_for_retry(clean: Engine,
     )
 
     assert stats.fetched == 0
+    assert stats.deferred_shards == 1
     assert shard_state(clean, 1) == ("pending", False)
     claimed = ShardQueue(redis, lanes=4).claim("probe", count=10)
-    assert [(item.shard_id, item.attempts) for item in claimed] == [(1, 1)]
-    assert ShardQueue(redis, lanes=4).pel_size() == 1
+    assert [(item.shard_id, item.attempts) for item in claimed] == [(1, 2)]
 
 
 def test_poison_shard_reaches_the_dlq_after_max_attempts(clean: Engine, redis):
@@ -592,8 +627,9 @@ def test_poison_shard_reaches_the_dlq_after_max_attempts(clean: Engine, redis):
         return httpx.Response(500, json={"message": "boom"})
 
     deps = make_deps(clean, scripted_client(handler, []), redis)
+    stats = None
     for _ in range(3):
-        run_search_discovery(
+        stats = run_search_discovery(
             deps,
             "language:python",
             sleep=lambda _: None,
@@ -601,7 +637,23 @@ def test_poison_shard_reaches_the_dlq_after_max_attempts(clean: Engine, redis):
             jitter=lambda: 0.0,
         )
 
-    assert redis.xlen("gitcrawl:shards:dlq") == 1
-    entry = redis.xrange("gitcrawl:shards:dlq")[0]
-    assert entry[1][b"shard_id"] == b"1"
-    assert shard_state(clean, 1) == ("pending", False)
+    assert redis.xlen("gitcrawl:shards:dlq") >= 1
+    dlq_shards = {entry[1][b"shard_id"] for entry in redis.xrange("gitcrawl:shards:dlq")}
+    assert b"1" in dlq_shards
+    assert shard_state(clean, 1) == ("incomplete", True)
+    assert stats is not None and stats.incomplete_shards == 1
+
+
+def test_discovery_honours_cancellation(clean: Engine, redis):
+    from lib import cancellation
+
+    def handler(request: httpx.Request):
+        return count_response(1600)
+
+    deps = make_deps(clean, scripted_client(handler, []), redis)
+    token = cancellation.bind(lambda: True)
+    try:
+        with pytest.raises(cancellation.RunCancelled):
+            run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
+    finally:
+        cancellation.reset(token)

@@ -58,6 +58,12 @@ class QueuedShard:
     attempts: int
 
 
+@dataclass(frozen=True)
+class RetryOutcome:
+    stream_id: str
+    dead_lettered: bool
+
+
 def _as_text(value) -> str:
     if isinstance(value, bytes):
         return value.decode()
@@ -69,6 +75,14 @@ def _get_field(fields, name: str) -> str | None:
     if value is None:
         value = fields.get(name.encode())
     return _as_text(value) if value is not None else None
+
+
+def _pending_count(info) -> int:
+    if not info:
+        return 0
+    if isinstance(info, dict):
+        return int(info.get("pending") or 0)
+    return int(info[0] or 0)
 
 
 class ShardStore:
@@ -227,6 +241,27 @@ class ShardQueue:
         )
         return _as_text(stream_id)
 
+    @property
+    def max_attempts(self) -> int:
+        return self._max_attempts
+
+    def requeue(self, shard_id: int, attempts: int) -> str:
+        """Publish a fresh delivery without touching any existing stream entry."""
+        lane = self.lane_for(shard_id)
+        self._ensure_group(lane)
+        stream_id = self._redis.xadd(
+            self._lane_key(lane), {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)}
+        )
+        return _as_text(stream_id)
+
+    def dead_letter(self, shard_id: int, attempts: int) -> str:
+        """Publish a give-up record to the DLQ."""
+        dlq_id = self._redis.xadd(
+            self._dlq_key,
+            {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)},
+        )
+        return _as_text(dlq_id)
+
     def claim(self, consumer: str, *, count: int = 1, block_ms: int = 0) -> list[QueuedShard]:
         claimed: list[QueuedShard] = []
         for lane in range(self._lanes):
@@ -248,17 +283,21 @@ class ShardQueue:
         self._redis.xack(key, _GROUP, stream_id)
         self._redis.xdel(key, stream_id)
 
-    def retry_or_dlq(self, stream_id: str, shard_id: int, *, attempts: int) -> str:
+    def retry_or_dlq(self, stream_id: str, shard_id: int, *, attempts: int) -> RetryOutcome:
         key = self._lane_key(self.lane_for(shard_id))
-        self._redis.xack(key, _GROUP, stream_id)
         fields = {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)}
+        # Publish the replacement before acknowledging the delivery: a crash between
+        # the two leaves a duplicate (harmless, shard processing is idempotent) while
+        # the reverse order would lose the retry entirely.
         if attempts < self._max_attempts:
             new_id = self._redis.xadd(key, fields)
+            self._redis.xack(key, _GROUP, stream_id)
             self._redis.xdel(key, stream_id)
-            return _as_text(new_id)
+            return RetryOutcome(stream_id=_as_text(new_id), dead_lettered=False)
         dlq_id = self._redis.xadd(self._dlq_key, fields)
+        self._redis.xack(key, _GROUP, stream_id)
         self._redis.xdel(key, stream_id)
-        return _as_text(dlq_id)
+        return RetryOutcome(stream_id=_as_text(dlq_id), dead_lettered=True)
 
     def reclaim_stale(
         self, consumer: str, *, min_idle_ms: int = 60000, count: int = 10
@@ -293,10 +332,23 @@ class ShardQueue:
         for index in lanes:
             self._ensure_group(index)
             info = self._redis.xpending(self._lane_key(index), _GROUP)
-            if not info:
+            total += _pending_count(info)
+        return total
+
+    def total_pel(self) -> int:
+        """Sum pending entries across every shard stream under this prefix.
+
+        Metrics read this with the base prefix so per-run lanes are all counted.
+        Unlike ``pel_size`` this never creates groups on missing streams.
+        """
+        total = 0
+        for key in self._redis.scan_iter(match=f"{self._prefix}*"):
+            name = _as_text(key)
+            try:
+                if _as_text(self._redis.type(name)) != "stream":
+                    continue
+                info = self._redis.xpending(name, _GROUP)
+            except ResponseError:
                 continue
-            if isinstance(info, dict):
-                total += int(info.get("pending") or 0)
-            else:
-                total += int(info[0] or 0)
+            total += _pending_count(info)
         return total

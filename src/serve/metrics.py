@@ -75,7 +75,7 @@ def _queue_pel(redis_client) -> int | None:
     try:
         from scheduler.state_machine import ShardQueue
 
-        return int(ShardQueue(redis_client).pel_size())
+        return int(ShardQueue(redis_client).total_pel())
     except Exception:
         return None
 

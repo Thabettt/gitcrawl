@@ -230,10 +230,13 @@ def test_retry_reenqueue_preserves_single_live_copy(redis):
     queue = ShardQueue(redis, lanes=1)
     stream_id = queue.enqueue(7)
     assert [item.shard_id for item in queue.claim("worker-1")] == [7]
-    new_id = queue.retry_or_dlq(stream_id, 7, attempts=1)
+    outcome = queue.retry_or_dlq(stream_id, 7, attempts=1)
+    assert outcome.dead_lettered is False
     assert queue.pel_size() == 0
     assert redis.xlen("gitcrawl:shards:lane:0") == 1
-    assert queue.claim("worker-1") == [QueuedShard(stream_id=new_id, shard_id=7, attempts=1)]
+    assert queue.claim("worker-1") == [
+        QueuedShard(stream_id=outcome.stream_id, shard_id=7, attempts=1)
+    ]
 
 
 def test_retry_reenqueue_redelivers_within_the_same_millisecond(redis, monkeypatch):
@@ -241,19 +244,22 @@ def test_retry_reenqueue_redelivers_within_the_same_millisecond(redis, monkeypat
     queue = ShardQueue(redis, lanes=1)
     stream_id = queue.enqueue(7)
     assert queue.claim("worker-1") == [QueuedShard(stream_id=stream_id, shard_id=7, attempts=0)]
-    new_id = queue.retry_or_dlq(stream_id, 7, attempts=1)
-    assert queue.claim("worker-1") == [QueuedShard(stream_id=new_id, shard_id=7, attempts=1)]
+    outcome = queue.retry_or_dlq(stream_id, 7, attempts=1)
+    assert queue.claim("worker-1") == [
+        QueuedShard(stream_id=outcome.stream_id, shard_id=7, attempts=1)
+    ]
 
 
 def test_failure_after_max_attempts_lands_in_dlq(redis):
     queue = ShardQueue(redis, lanes=1)
     first = queue.enqueue(3)
     queue.claim("worker-1")
-    second = queue.retry_or_dlq(first, 3, attempts=1)
+    second = queue.retry_or_dlq(first, 3, attempts=1).stream_id
     queue.claim("worker-1")
-    third = queue.retry_or_dlq(second, 3, attempts=2)
+    third = queue.retry_or_dlq(second, 3, attempts=2).stream_id
     queue.claim("worker-1")
-    queue.retry_or_dlq(third, 3, attempts=3)
+    outcome = queue.retry_or_dlq(third, 3, attempts=3)
+    assert outcome.dead_lettered is True
     assert redis.xlen("gitcrawl:shards:lane:0") == 0
     assert redis.xlen("gitcrawl:shards:dlq") == 1
     assert queue.pel_size() == 0
@@ -307,3 +313,17 @@ def test_pel_size_accounts_per_lane_and_total(redis):
     queue.ack(claimed[0].stream_id, claimed[0].shard_id)
     assert queue.pel_size(0) == 1
     assert queue.pel_size() == 2
+
+
+def test_total_pel_sums_across_prefixed_streams_without_creating_groups(redis):
+    base = ShardQueue(redis, lanes=2)
+    base.enqueue(0)
+    base.enqueue(1)
+    assert len(base.claim("worker-1", count=2)) == 2
+    scoped = ShardQueue(redis, prefix="gitcrawl:shards:run:9", lanes=2)
+    scoped.enqueue(0)
+    scoped.claim("worker-1", count=1)
+
+    before = set(redis.keys("gitcrawl:*"))
+    assert ShardQueue(redis).total_pel() == 3
+    assert set(redis.keys("gitcrawl:*")) == before
