@@ -2,7 +2,7 @@
 
 **Purpose**: durable, committed record of what has been done, decided, and is next — so nothing is lost when a session, tool, or the temporary SDD workspace disappears. Environment details live in `environment.md`.
 
-**Updated**: 2026-10-01 (overnight console run complete) · **Branch**: `001-gitcrawl` · **HEAD**: `918339e`
+**Updated**: 2026-10-07 (planner fix, parallel hydration, run controls) · **Branch**: `main` · **HEAD**: `c99ee13`
 
 ## Objective (frozen 2026-09-30)
 
@@ -286,3 +286,66 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
   - **P13** — the system page guards the metrics payload so a Redis/metrics outage renders the page with metrics omitted instead of failing.
   - **P14** — unavailable `min_loc`/`max_loc` stay on the search form and round-trip through hidden mirrors while still flagging the run incomplete (R44).
   - **P15** — `describe_spec` states `country match: <tier>` for an explicit `min_geo_confidence`, keeping the gazetteer-city default out of the sentence.
+
+## Planner fix, parallel hydration, run controls (2026-10-06/07)
+
+**Scope:** five commits on `main` — `d04bc34` (discovery plans inside the user's `created:` window; shards no longer stranded), `bf2201d` (valid GraphQL owner selection; parallel batched hydration), `f55dc26` (stop/cancel, live progress + ETA, save-filter), `dc9cc67` (honest partials + scale hardening), `c99ee13` (explicit corpus settings preset). Full suite green, ruff/black/mypy clean; 1,435 tests collected (live golden-org + delta included).
+
+**Discovery — the planner honors the user's window (`d04bc34`)**
+
+- GitHub treats duplicate same-type qualifiers as a **union** (live-verified), not AND and not first-wins. The old planner appended `created:D1..D2` to a query that already carried a user `created:` bound, so every shard effectively asked the same question: bisection never converged, the plan walked single days from 2008, and shards returned repos outside the user's window.
+- `src/scheduler/shard_planner.py` now has `split_created(query)` / `replace_created(query, start, end)`. Supported `created:` forms: `>=D`, `>D`, `<=D`, `<D`, exact `D`, `D1..D2`, `D..*`, `*..D`, and datetime forms (date part used); empty ranges raise `ValueError`.
+- Planning happens only inside the user's `created:` window (constraints merged when several are given); the fallback `2008-01-01 → today` applies only when the query has no date constraint. `pipeline._sub_specs` rebuilds narrower children by replacing the token on the parent query.
+- Planner target = `min(1000, per_page * max_pages)` (GitHub's 1,000-result search cap); if `total_count > max_shards * target` the planner falls back to the 1000 cap so the plan can still fit `max_shards`.
+- Transient shard failures no longer abort the run: the delivery is dropped and recorded, other shards keep processing, deferred shards are retried once after the rest, and a circuit breaker stops after 3 consecutive deferrals (`DiscoveryStats.deferred_shards`, `deadline_hit`). `DeadlineExceededError` during planning or a shard ends the run gracefully as partial, keeping deliveries resumable.
+- Queue retry is crash-safe (the replacement message is published before the old delivery is acked; `RetryOutcome.dead_lettered`; DLQ'd shards become INCOMPLETE and count as incomplete). `count_total` now raises `RequestFailed` for malformed payloads (was silently 0). Resume now accepts failed, partial, and cancelled runs.
+
+**Hydration — owner.databaseId bug and parallel batches (`bf2201d`)**
+
+- The batch query asked for `owner { databaseId ... }`, but `databaseId` does not exist on the `RepositoryOwner` interface. GitHub answered HTTP 200 with a per-alias `undefinedField` error for every repo, so every batch fell back to REST silently since day one. Run #1's own bundle proves it: `requests: 10, values: 0, handled: 200` (2 REST calls per repo). Fixed with `... on User { databaseId } ... on Organization { databaseId }`.
+- Language bytes now come from the same hydration query (`languages(first: 10) { edges { size node { name } } }`); `watchers { totalCount }` replaced `watchers(first: 0)`.
+- `lib/graphql_batch.fetch_batch` fetches with bounded concurrency (`ThreadPoolExecutor`; the cancellation context is copied into workers). Handled fallbacks count toward progress; the audit buffer is thread-safe; transient markers now include rate-limit/abuse/"timed out". SSO `PartialResultsError` degrades to per-repo fallback/unresolved (recorded and flagged, never silent); 401 still fails loudly.
+- REST fallback commit counts are keyed by the candidate key (was the hydrated id — a rename hazard); `hydrate/repo_client.py` follows 301/302/303/307/308.
+- Hydration concurrency = `min(limiter_max_concurrent, 20)` from settings (corpus preset: 10).
+
+**Run controls — stop, live progress/ETA, save-filter (`f55dc26`)**
+
+- New run status `cancelled` ("Stopped"), resumable. `POST /runs/{id}/cancel` (CSRF) plus a Stop button while queued/running; cooperative cancellation via `lib/cancellation.py` contextvar with checkpoints in the planner loop, per shard/page, per GraphQL chunk, and per enrichment segment. The in-flight shard is left PENDING so a resume reclaims it.
+- Migrations `0010`/`0011` add `runs.progress_phase`, `progress_done`, `progress_total`, `progress_updated_at`, and `progress_started_at`. A throttled reporter (1 s; phase changes immediate) writes live counters; phases `starting`, `discovering`, `hydrating`, `enriching`, `writing` (shown as "Saving results").
+- The run page shows phase, done/total, a percent bar, phase-relative ETA (needs done ≥ 2; projections over 24 h show "estimating…"), and a client-side ticking elapsed clock that survives htmx swaps. "Found" shows GitHub's `total_count`; raw fetched stays in Technical details. The truncation flag is evaluated only for finished runs. Orphan recovery clears the progress columns.
+- `POST /runs/{id}/save-filter` (CSRF) opens a modal, stores the run's filter in the library, and reports duplicate names without losing the form.
+
+**Runner honesty and scale (`dc9cc67`)**
+
+- Warnings now cover: deferred shards, deadline, cap splits, page caps, plan caps, skipped results, unique under-coverage (`len(repo_ids) < total_count`), discovered-but-missing-local repos, tombstones, hydration unresolved, and per-filter skips. Warnings live on the run payload/bundle only — they are not persisted to a DB column.
+- `graphql_batch_size` env overrides are clamped to 1..20 at settings load. `_load_owners`, `_detail_map`, and `_snapshot_items` are chunked; bundle JSON is streamed with `json.dump`; `trees_first.fetch_tree` unions the non-recursive root listing when the recursive one is truncated, and the Dockerfile check treats "truncated and not found" as unknown (skip) rather than absent.
+- `serve/runs.py clone_estimate_for_run` accepts `disk_free_mb`; golden tests inject `clone_disk_free` so disk-dependent snapshots are deterministic.
+- `lib/gh_client.py`: authenticated requests refuse non-GitHub hosts (Link-header/redirect token safety); retry sleeps are bounded by the run deadline.
+
+**Settings — explicit corpus preset (`c99ee13`)**
+
+- The console's max preset is now an explicit corpus profile: `max_shards` 1000, `max_candidates`/`max_hydrate`/`max_enrich` 100000, `request_deadline_seconds` 86400, `graphql_batch_size` 20, `limiter_max_concurrent` 10. Bounds unchanged (`max_shards` 1..10000, etc.); env-pinned fields are left alone by the preset.
+- `min_language_bytes` / `max_language_bytes` are virtual filters served from hydration data.
+
+**Live run #9 evidence (same filters as the user's corpus)**
+
+- Filter `created:>=2025-02-24 language:rust`, min_stars 4, min_commits 50, min_language_bytes 175000.
+- 38,833 repos found (GitHub `total_count`; it drifted 38,820 → 38,823 → 38,833 across ~5 h for the same query); hydration: 1,942 GraphQL requests, 38,833 values, 0 fallbacks, 0 unresolved; ~2,800 repos/min at concurrency 10 (was ~300–400 sequential).
+- Funnel from the bundle's `field_stats`: 38,833 → 21,503 (min_commits) → 17,795 exported (min_language_bytes); 0 skipped, 0 incomplete shards, status **done**.
+- Elapsed 78 min for the resumed attempt (includes re-planning and page fetching at the 30/min search cap); hydrate+filter itself ~25 min including per-repo DB writes.
+- `corpus.csv` columns: id, full_name, stargazers, pushed_at, archived, language, license_spdx, country_iso, geo_confidence; the bundle also carries `field_stats` (hydration stats, per-field survivors, calls spent).
+
+**GitHub API facts verified this session (live probes)**
+
+- Duplicate same-type qualifiers union (two `created:` → OR), so clients must replace, not append.
+- Repository search returns at most 1,000 results per query; page 11 at `per_page=100` → 422 "Only the first 1000 search results are available". `total_count` can exceed 1,000 and drifts over hours.
+- Forks are excluded from repository search by default (`fork:true` includes, `fork:only` restricts). GraphQL point cost = round(connection-requests needed / 100), minimum 1; 5,000 points/hour for users, so batching N repos in one request is far cheaper than N requests.
+- `x-github-sso: partial-results; organizations=...` rides on 200 (silently withheld orgs); `required; url=...` is a 403 with a one-hour authorization URL.
+- Search pagination has no stability guarantee (community-documented, GitHub staff acknowledged) — identical paginated requests can shift/skip items. This explains small cross-run corpus deltas (observed: two corpora ~12 h apart differ by 49 added / 11 removed / net 38; 0 deleted, 1 rename pair, several 4-star boundary repos).
+- Git trees endpoint: `{tree_sha}` is a path segment; literal `/`, `%2F`, and `heads/...` refs work.
+
+**Residuals and proposed next**
+
+- Hydration per-repo DB writes are still the slow tail of a corpus run (batching the writes is proposed; the live run spent ~25 min in hydrate + filter).
+- Warnings are not persisted to the DB — they live on the run payload/bundle only, so the run history cannot re-render them once the bundle is gone.
+- Closed this session: retry sleeps are now deadline-bounded, and credentialed requests are allowlisted to GitHub hosts.

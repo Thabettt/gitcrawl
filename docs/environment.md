@@ -161,7 +161,7 @@ $env:PYTHONPATH = 'src'
 | `/` | Dashboard: health badges, quick find, recent runs |
 | `/find` | Full filter form (Find / Download as JSON / Upload and run / Save filter) |
 | `/runs` | Run history (`?status=`, `?hash=` exact or prefix, `?page=`, 50/page) |
-| `/runs/{id}` | Run detail: status polling, sortable results, flags, export/replay/clone, compare-with |
+| `/runs/{id}` | Run detail: status polling, live phase/ETA, stop, save-filter, sortable results, flags, export/replay/clone, compare-with |
 | `/runs/{id}/results` | Full-width result table; every page, sort, and page size lives in the URL (`?page=&per_page=&sort=&dir=`) |
 | `/runs/{id}/diff?against={baseline_id}` | Compare this search with an earlier one; baseline defaults to the previous same-filter run |
 | `/corpora` | Frozen corpora (`/corpora/{id}` detail): name, repos, frozen time, source search |
@@ -174,6 +174,21 @@ $env:PYTHONPATH = 'src'
 - **No Node / no Tailwind at runtime**: styling is the hand-rolled `src/serve/static/app.css` (R46); `htmx.min.js` and `app.js` are vendored and committed — no CDN or build step.
 - **Keyboard**: `/` focuses quick search, `g h`/`g f`/`g r`/`g l` navigate, `j`/`k` select table rows, `Enter` opens the selected row, `?` toggles the shortcut help, `Esc` closes dialogs.
 - **Redis keeper session (R34)**: keep the hidden `wsl.exe -u root -- sleep infinity` session alive so WSL2 localhost forwarding stays up; the `gitcrawl-redis` logon task starts Redis plus that keeper. If `/health` shows Redis down, run `wsl -u root -- service redis-server status` and reopen the keeper.
+
+## Tests and gates
+
+```powershell
+$env:PYTHONPATH = 'src'
+.venv\Scripts\python.exe -m pytest -q                                       # full suite; DB tests need TEST_DATABASE_URL, JS wrappers skip without Node
+.venv\Scripts\python.exe -m pytest tests/unit                              # hermetic unit tests (no services)
+.venv\Scripts\python.exe -m pytest -q --cov=src --cov-report=term-missing  # coverage gate: fail_under = 93
+.venv\Scripts\python.exe -m ruff check src tests                           # lint (rules E, F, I, UP, B; line length 100)
+.venv\Scripts\python.exe -m black --check src tests                        # formatting
+.venv\Scripts\python.exe -m mypy                                           # gated packages: lib, limiter, store, scheduler
+node --test tests/js/*.test.mjs                                            # JS helper tests (optional)
+```
+
+`UPDATE_GOLDEN=1 pytest tests/golden` regenerates the golden snapshots after an intended console/API change (the OpenAPI schema hash is pinned there too). The full matrix and CI notes live in `README.md`.
 
 ## Corpus-build profile (System → Limits vs environment)
 
@@ -194,10 +209,18 @@ shows it read-only):
 
 These are the values the **Set to corpus-build limits** button applies; the ranges shown on the page are safety limits, and the preset sits well inside them. The derivation (and the multi-token scale-up) lives in `design/run-limits.md`.
 
-A corpus run occupies the single executor for its whole duration; run it overnight, and note that
-progress is not checkpointed inside a run (resume re-fetches from the start).
+- `GITCRAWL_GRAPHQL_BATCH_SIZE` env overrides are clamped to 1..20 at settings load (a value above the API cap clamps to 20 instead of failing every run).
+- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 20)` as the GraphQL batch concurrency. The corpus preset's 10 ran ~2,800 repos/min live, against ~300–400 sequential.
+
+A corpus run occupies the single executor for its whole duration; run it overnight. The run page
+shows live phase/done/total/ETA counters (migrations 0010/0011), but those are display-only, not
+checkpoints — a resume still re-fetches from the start. A running search can be stopped (status
+`cancelled`, shown as "Stopped") and resumed later; failed, partial, and cancelled runs are all
+resumable.
 
 ## Migrations
+
+Current head is **`0011`**: `0010` adds the nullable `runs.progress_*` live-progress columns, and `0011` adds `progress_started_at` for the phase-relative ETA clock. Both are plain nullable column additions — no constraint or index rewrites — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
 
 ### Migration locking
 
@@ -249,6 +272,6 @@ During provisioning, a combined setup command was killed by the tool's pipe hand
 - [ ] clone modal estimate + start on a small run
 
 ## After a crash
-1. Restart the app (`python -m serve`) — queued/running runs are marked `failed: orphaned`.
-2. Open the run and click **Resume** (or `POST /runs/{id}/resume` from the console).
+1. Restart the app (`python -m serve`) — queued/running runs are marked `failed: orphaned` and their progress columns are cleared.
+2. Open the run and click **Resume** (or `POST /runs/{id}/resume` from the console) — resume accepts failed, partial, and cancelled runs.
 3. Resume re-fetches from the start; upserts make it safe. Detection runs clear their evidence first.
