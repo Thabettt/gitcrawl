@@ -4,7 +4,7 @@
 
 **The one-paragraph version**: gitcrawl wants filters GitHub never built — `has_dockerfile`, coverage, team, owner country. Every team that wants this tries the same two things first: add `&myfilter=x` to the URL, or put `myfield:value` inside `q`. Both appear to work, and that is the trap: GitHub returns `200 OK` and simply ignores what it doesn't know, so you get unfiltered results while your logs say success. This file settles the question with plain YES/NO verdicts, then gives the sanctioned workarounds — `props.*` (single-org only), `topic:` conventions, and client/proxy/own-database post-filtering — with working code.
 
-> **Date**: 2026-09-29. **Scope**: `GET /search/repositories` REST + `search(type:REPOSITORY)` GraphQL + `gh search repos`.
+> **Date**: 2026-09-29; live API re-verification 2026-10-06/07 (items marked "live-verified"). **Scope**: `GET /search/repositories` REST + `search(type:REPOSITORY)` GraphQL + `gh search repos`.
 
 ## TL;DR verdicts
 
@@ -143,6 +143,8 @@ query ($q: String!, $n: Int = 50) {
 
 No `language:[go,java]` array — use aliases or separate queries. `semantic`/`hybrid` are issues-only.
 
+GraphQL cost and schema traps (live-verified 2026-10-06/07): point cost = `round(connection-requests needed / 100)`, minimum 1, against 5,000 points/hour for users — one request batching N repos is far cheaper than N single-repo requests. `owner.databaseId` is **not valid on the `RepositoryOwner` interface**: selecting it fails per-alias with HTTP `200` (silent `undefinedField`), so use inline fragments — `owner { ... on User { databaseId } ... on Organization { databaseId } }`.
+
 **E. `gh` extensions** — `gh search repos` flags just build the `q` string; write a `gh-mysearch` extension wrapping `gh api search/repositories` + post-filter for virtual params:
 
 ```bash
@@ -170,6 +172,8 @@ Shortcut: **one org + admin → `props.*`; no admin/cross-org → `topics` + cli
 
 - **Undocumented params**: ignored today, `400/422`/redefined tomorrow; `X-GitHub-Api-Version` only pins documented behavior.
 - **Undocumented `q` qualifiers**: parsed as text → wrong `200` results, no alert; validate client-side (the CLI deliberately avoids hard-coding the list for forward-compat).
+- **GraphQL silent per-alias failures**: invalid interface selections (e.g. `owner.databaseId` on `RepositoryOwner`) return HTTP `200` with per-alias errors and `null` values — inspect `errors[]`, use inline fragments on `User`/`Organization`, and fall back (live-verified 2026-10-06/07).
+- **Pagination drift**: search pagination has no stability guarantee — identical pages can shift/skip items across runs (community-documented; GitHub staff acknowledged), so corpora drift slightly even with identical queries (observed 49 added / 11 removed / net 38 over ~12 h; live-verified 2026-10-06/07). Dedupe by `id`.
 - **Rate/abuse**: 30/min auth, 10/min anon/code; `403/429` + `retry-after` + exp backoff; `422 "spammed"` ≠ throttle, don't retry it as one.
 - **ToS Section H**: no token-sharing to evade limits, no spam/selling personal data, resale/high-throughput may need a subscription.
 - **Scraping vs API**: HTML scraping to dodge limits violates "excessive automated bulk activity" and is less reliable; prefer API + caching + `ETag`/`304`.

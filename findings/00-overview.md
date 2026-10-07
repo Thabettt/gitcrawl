@@ -1,6 +1,6 @@
 # 00 — Overview: What This Research Is and How to Read It
 
-**Project**: gitcrawl. **Date**: 2026-09-29. **Method**: parallel research agents + live docs verification (all sources accessed 2026-09-29 unless noted).
+**Project**: gitcrawl. **Date**: 2026-09-29; live API re-verification 2026-10-06/07 (probe-confirmed facts marked with that date). **Method**: parallel research agents + live docs verification (all sources accessed 2026-09-29 unless noted).
 
 ## The one-paragraph version
 
@@ -34,9 +34,11 @@ Each file keeps its tables intact; narrative intros sit above them so a newcomer
 
 - **`q`** — the single query string carrying keywords + `qualifier:value` filters (e.g. `language:python stars:>500`). Everything GitHub filters on lives inside it.
 - **Qualifier** — a documented `name:value` filter inside `q` (a closed set — anything unknown becomes plain text and does nothing).
-- **1000-cap** — only the first 1,000 results per logical query are fetchable (`10×100`). `total_count` may be larger and is approximate.
+- **Qualifier union** — repeating the same qualifier type (two `created:` clauses) is a *union*, not an AND; a shard planner must replace the clause, never append (repo-scoped probe, live-verified 2026-10-06/07).
+- **1000-cap** — only the first 1,000 results per logical query are fetchable (`10×100`); page 11 at `per_page=100` → `422 "Only the first 1000 search results are available"` (live-verified 2026-10-06/07). `total_count` may be larger, is approximate, and drifts over hours (38,820 → 38,823 → 38,833 in ~5 h; same live probe).
 - **4000-scan** — ranking considers at most ~4,000 matching repos per query, so narrow queries rank better.
 - **Watermark** — a persisted `max(pushed_at)` per shard (+1h overlap) for incremental polling; never mix a `pushed_at` watermark with `updated_at` ordering without overlap.
+- **Pagination drift** — search pagination has no stability guarantee; identical paginated requests can shift or skip items between runs (community-documented, GitHub staff acknowledged — live-verified 2026-10-06/07).
 - **`S/R/G/L/C/E/M/X`** — availability codes used in `06`: Search `q` / REST repo / GraphQL / List-enumeration / Custom-props API / Enrichment REST / Mirror dataset / unavailable → workaround.
 
 ## Next steps

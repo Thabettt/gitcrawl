@@ -4,8 +4,8 @@
 
 **The one-paragraph version**: the first research pass got the core parameters right, but when three reviewers went through it against live docs, they found load-bearing blind spots — the `since`-enumeration backfill, lifecycle on immutable IDs, auth/SSO/App rate buckets, watermark/ETag/`total_count` traps, bulk datasets, feed alternatives, and legal/ops gates. Any one of these would break a production crawler, and none of them announce themselves — they just produce a corpus that is quietly wrong or a run that gets throttled forever. This file names every gap with a severity, the evidence, and the concrete fix, in the order the fixes should land.
 
-> **Date**: 2026-09-29 (all evidence links accessed 2026-09-29 unless noted). **Method**: `requesting-code-review` — 3 parallel reviewer subagents (technical-API, landscape/architecture, legal/ops/repro) + re-read of `01–04` + README + live docs verification.
-> **Verdict**: `01–04` are correct on core params/qualifiers/limits but have load-bearing gaps for building gitcrawl. Nothing in `01–04` needs deletion; ~12 Critical gaps need new sections, 12 Important need corrections, and the rest are rot-proofing.
+> **Date**: 2026-09-29 (all evidence links accessed 2026-09-29 unless noted); **live API re-verification and gap closure**: 2026-10-06/07 (see `## F`). **Method**: `requesting-code-review` — 3 parallel reviewer subagents (technical-API, landscape/architecture, legal/ops/repro) + re-read of `01–04` + README + live docs verification.
+> **Verdict**: `01–04` are correct on core params/qualifiers/limits but have load-bearing gaps for building gitcrawl. Nothing in `01–04` needs deletion; ~12 Critical gaps need new sections, 12 Important need corrections, and the rest are rot-proofing. **Live re-verification 2026-10-06/07**: A4, A6, and A7/A11 now have probe evidence (see `## F`); the remaining gaps are unchanged.
 > **Full evidence URLs**: see `## E. Evidence links` at the end of this file; each A/B item also cites inline.
 
 ## A. Critical — will break or misdirect the build if not fixed
@@ -129,3 +129,36 @@ Not fatal, but each one costs time, calls, or trust if unhandled.
 - ToS + Acceptable Use + Privacy + Trademark: https://docs.github.com/site-policy/github-terms/github-terms-of-service (accessed 2026-09-29), https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies (accessed 2026-09-29), https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement (accessed 2026-09-29), https://github.com/github/site-policy (accessed 2026-09-29)
 - `robots.txt` check (run before any HTML fallback): https://github.com/robots.txt (must fetch + record `Disallow: /search` on research date; accessed 2026-09-29)
 - Dependents no-API (SO 2019-11-06, still valid 2026-09-29): https://stackoverflow.com/questions/58734176/how-to-use-github-api-to-get-a-repositorys-dependents-information-in-github (accessed 2026-09-29)
+
+## F. Live re-verification and gap closure (2026-10-06/07)
+
+Probe-confirmed against the live API on 2026-10-06/07, alongside the gitcrawl implementation commits (d04bc34 planner, bf2201d hydration). This section updates the status of the A/B items above; it does not delete the original audit.
+
+### F1. Closed (live evidence landed)
+
+| Gap | Closure |
+|---|---|
+| A4 — SSO semantics | `x-github-sso: partial-results; organizations=...` rides on `200` (orgs silently withheld); `x-github-sso: required; url=...` is a `403` carrying a one-hour authorization URL. Gitcrawl hydration now degrades SSO partials to per-repo fallback/unresolved and still fails loudly on `401`. |
+| A6 — page-11 truth | Confirmed live: page 11 at `per_page=100` → `422 "Only the first 1000 search results are available"` (never `[]`); the `422`-vs-split branch is the correct one. |
+| A6 — `total_count` instability | Confirmed live: `total_count` can exceed 1,000 and drifts over hours (38,820 → 38,823 → 38,833 in ~5 h for the same query). `sum(shards)==total` is a sanity signal only. |
+| A6/B — shard correctness | Duplicate same-type qualifiers (e.g. two `created:`) are a **union**, not an AND (repo-scoped probe, live-verified). This was the root cause of the bisection-never-converges planner bug: appending `created:D1..D2` to a query that already carried a `created:` bound unioned instead of narrowing. Fixed via `split_created` / `replace_created` — the planner replaces the clause on the parent query (d04bc34). |
+| A6 — pagination stability | No stability guarantee (community-documented; GitHub staff acknowledged): identical paginated requests can shift/skip items, which explains observed cross-run corpus deltas (49 added / 11 removed / net 38 over ~12 h; 0 deleted; rename pairs). Reconcile corpora by `id`-set diff, never `total_count`. |
+| A7/A11 — GraphQL schema + cost math | `owner.databaseId` is invalid on the `RepositoryOwner` interface — it fails per-alias under HTTP `200` (`undefinedField`), so every batch silently fell back to REST (run #1 recorded `requests: 10, values: 0, handled: 200`); fixed with inline fragments `... on User { databaseId } ... on Organization { databaseId }` (bf2201d). Point cost = `round(connection-requests / 100)`, minimum 1, 5,000 points/hour; batching N repos per request is far cheaper than N requests. |
+| `06 §6` — git trees refs | Live-verified: `{tree_sha}` is a path segment; literal `/`, `%2F`, and `heads/...` refs all work. |
+| Forks (`01`/`02`/`06`) | Re-verified live: forks excluded by default; `fork:true` includes, `fork:only` restricts. |
+| 1000-cap (`01`/`04`/`06`) | Re-verified live: repository search returns at most 1,000 results per query. |
+
+### F2. Still open / partially closed
+
+| Gap | Status |
+|---|---|
+| A1 (`since`-enumeration backfill) | Guidance landed in `06 §4`; no new live evidence this session — still open for an end-to-end probe. |
+| A2 (org/user enumeration) | Guidance landed in `04 §7` / `06 §4`; no new live evidence this session. |
+| A3 (PK/dedupe/lifecycle) | Partially closed in implementation: hydration keys on the candidate key (not the hydrated id — a rename hazard fixed in bf2201d) and follows `301`/`302`/`303`/`307`/`308` (repo_client). The full lifecycle runbook (tombstones, revalidation cadence, `full_name` history table) remains as specified. |
+| A5 (GHES differences) | Open — no GHES probe this session. |
+| A8 (offline bulk datasets) | Open — landed in `06 §5`; freshness/cost still needs live re-check. |
+| A9 (incremental feeds) | Partially closed: polling with `sort=updated` is implemented; the webhooks/events/GH Archive decision table is still absent. |
+| A10 (legal/ops gates) | Open — gates and runbooks still required before any crawl/serve/scrape step. |
+| A11 (logging/observability) | Partially closed: run progress, phase, ETA, and warning surfaces landed (f55dc26, dc9cc67); full per-request audit spec and SLO dashboards remain. |
+| A12 (reproducibility rot) | Ongoing by design — every fact now carries a date; re-verify quarterly. |
+| B (planner/coordinator/testing) | Partially closed: planner robustness landed (defer/retry once, circuit breaker after 3 deferrals, deadline handling, resumable deliveries — d04bc34) and golden tests cover disk-dependent snapshots. Token coordinator, persisted shard state machine, and the golden-org `id`-set coverage harness remain. |

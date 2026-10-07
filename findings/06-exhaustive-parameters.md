@@ -4,7 +4,7 @@
 
 **The one-paragraph version**: gitcrawl needs every repo attribute — but GitHub spreads them across five different worlds. Some are searchable inside `q` (a closed set). Some live on the REST/GraphQL repo object (nullable, sometimes gated by access). Some come from list/enumeration endpoints (no 1000-cap). Some are org custom properties (single-org only). Some need a per-repo enrichment call. Some exist only in mirrors and datasets (stale, but bulk). And roughly thirty of the things you actually want — Dockerfile, coverage, CI status, LOC, Scorecard — are available nowhere natively and need a workaround. This file is the master matrix: every parameter, its availability code, and for each unavailable one the cheapest working way to get it.
 
-> **Date**: 2026-09-29. **Method**: 3 parallel agents (A: official REST/Search/GraphQL, B: mirrors, C: unavailable+workarounds) + live docs verification.
+> **Date**: 2026-09-29; live API re-verification 2026-10-06/07 (items marked "live-verified" are probe-confirmed). **Method**: 3 parallel agents (A: official REST/Search/GraphQL, B: mirrors, C: unavailable+workarounds) + live docs verification.
 > **Companion**: `01` (canonical ref), `02` (power guide), `03` (custom verdicts), `04` (landscape), `05` (gaps). This file is the master matrix.
 
 ## 0. How to read this file
@@ -32,12 +32,12 @@ The rule: if it's not in the §1–§5 tables, treat it as X and use §6. Unknow
 | `sort` | S opt | `stars\|forks\|help-wanted-issues\|updated`, default best-match | No `created`/`pushed` sort. |
 | `order` | S opt | `desc` (def), `asc` | Ignored without `sort`. |
 | `per_page` | S opt | 1–100, def 30 | `>100` clamped silently. |
-| `page` | S opt | def 1 | Only first 1000 reachable; past cap → `422 Only first 1000`, not `[]`. Follow `Link: rel="next"` verbatim. |
-| envelope | S | `total_count`, `incomplete_results`, `items[]+score`, `text_matches[]` (text-match header only, repos name+desc only) | `total_count` approximate. |
+| `page` | S opt | def 1 | Only first 1000 reachable; page 11 at `per_page=100` → `422 "Only the first 1000 search results are available"`, not `[]` (live-verified 2026-10-06/07). Follow `Link: rel="next"` verbatim. |
+| envelope | S | `total_count`, `incomplete_results`, `items[]+score`, `text_matches[]` (text-match header only, repos name+desc only) | `total_count` approximate and drifts over hours (38,820 → 38,823 → 38,833 in ~5 h; live-verified 2026-10-06/07). |
 
 ## 2. Searchable `q` qualifiers (S) — complete
 
-Comparators `> >= < <=`, ranges `n..n`/`n..*`/`*..n`, dates `YYYY-MM-DD[THH:MM:SS+00:00]`, case-insensitive, quotes for phrases, `-qualifier` exclusion, `user:@me` only with qualifier.
+Comparators `> >= < <=`, ranges `n..n`/`n..*`/`*..n`, dates `YYYY-MM-DD[THH:MM:SS+00:00]`, case-insensitive, quotes for phrases, `-qualifier` exclusion, `user:@me` only with qualifier. Repeating the same qualifier type is a **union**, not an AND (repo-scoped probe, live-verified 2026-10-06/07) — rewrite/merge clients must replace the clause.
 
 | Qualifier | Example | Notes |
 |---|---|---|
@@ -57,7 +57,7 @@ Comparators `> >= < <=`, ranges `n..n`/`n..*`/`*..n`, dates `YYYY-MM-DD[THH:MM:S
 | `is:public/private` | `is:public org:github` | Private needs access; unauth → 422/empty. |
 | `props.NAME:VALUE` | `org:github props.environment:production` | Single-org only. Types `string/single_select/multi_select/true_false/url`. |
 | `mirror:/template:/archived:` | `mirror:true GNOME`, `archived:false` | `archived` read-only flag. |
-| `fork:true/only` | `github fork:true` | **Forks excluded by default.** Code search uses `is:fork` instead. |
+| `fork:true/only` | `github fork:true` | **Forks excluded by default** (live-verified 2026-10-06/07). Code search uses `is:fork` instead. |
 | `good-first-issues:>n`, `help-wanted-issues:>n` | `good-first-issues:>2` | Min labeled-issue counts; the latter is also a `sort=` value. |
 | `is:sponsorable`, `has:funding-file` | `is:sponsorable` | Bool only (tiers/urls need §6). |
 | `deployable:/deployed:` | org linked-artifacts | Org-scoped storage/deployment records. |
@@ -68,7 +68,7 @@ Path params `owner/repo` (case-insensitive, no `.git`); `301` on rename, `403/40
 
 | Field | R | G | Notes |
 |---|---|---|---|
-| `id` / `node_id` | R | `databaseId`/`id` | Immutable PK. `since` cursor. Store this, not `full_name`. |
+| `id` / `node_id` | R | `databaseId`/`id` | Immutable PK. `since` cursor. Store this, not `full_name`. **Live-verified 2026-10-06/07: `owner.databaseId` is invalid on the `RepositoryOwner` interface** — select it via inline fragments (`... on User`/`... on Organization`) or GraphQL returns HTTP `200` with per-alias errors. |
 | `name` / `full_name` | R | `name`/`nameWithOwner` | `full_name` mutable (rename/transfer). |
 | `owner{login,id,type}` / `organization` | R | `owner` | `type` User vs Organization. |
 | `private` / `visibility` | R | `isPrivate`/`visibility` | `public/private/internal`. |
@@ -127,7 +127,7 @@ Enrichment REST (E) needed for full params: `GET .../languages` (bytes), `/contr
 
 | Desired param | Why not | Workaround (cheapest first) | Cost / Freshness |
 |---|---|---|---|
-| `has_file:<path>` (Dockerfile, `*.yml`, `package.json/go.mod/Cargo.toml/pyproject`) | No filename qualifier (only `in:` text; `path:/extension:` code-only) | `GET .../contents/{path}?ref={branch}` (`200` vs `404`); dir `GET .../contents/.github/workflows`; glob `GET .../git/trees/{sha}?recursive=1` filter prefix | `core` 1/repo/file or 1/repo tree (`truncated` → per-subtree/clone); live git. |
+| `has_file:<path>` (Dockerfile, `*.yml`, `package.json/go.mod/Cargo.toml/pyproject`) | No filename qualifier (only `in:` text; `path:/extension:` code-only) | `GET .../contents/{path}?ref={branch}` (`200` vs `404`); dir `GET .../contents/.github/workflows`; glob `GET .../git/trees/{sha}?recursive=1` filter prefix — `{tree_sha}` is a path segment and literal `/`, `%2F`, `heads/...` refs all work (live-verified 2026-10-06/07) | `core` 1/repo/file or 1/repo tree (`truncated` → per-subtree/clone); live git. |
 | coverage % | External (Codecov/Coveralls/Actions) | README badge regex; `GET .../actions/artifacts` → `coverage.xml`; vendor API | `core`+vendor quota; per-run. |
 | CI status | Per-SHA, not repo attr | `GET .../commits/{ref}/check-runs+suites+status`, `GET .../actions/runs?head_sha=` → `conclusion` | `core` 2–3/SHA; HEAD only. |
 | LOC / file count / size split | `size:` total KB only | `GET .../languages` (bytes) + `.../git/trees?recursive=1` (`len/sum/per-ext`); exact `git clone --depth 1; tokei/cloc` | `core` 2/repo; hourly vs live; clone zero-API at scale. |
@@ -188,8 +188,8 @@ ALLOWED = {"in","repo","user","org","size","followers","forks","stars","created"
 
 ## 8. Recommended fetch plan for gitcrawl
 
-1. **Discover:** `GET /repositories?since=` backfill (or sharded `search` `created:` bisect if filtered) → candidate `full_name+id`.
-2. **Hydrate:** `GET /repos/{o}/{r}` (+`ETag`) → R fields; GQL batch for `fundingLinks/discussions/scorecard-linkage` in one shot.
+1. **Discover:** `GET /repositories?since=` backfill (or sharded `search` `created:` bisect if filtered — **replace** the date clause per child; duplicate same-type qualifiers union, live-verified 2026-10-06/07) → candidate `full_name+id`. Expect ranking drift across runs (no pagination stability guarantee; live-verified 2026-10-06/07) and reconcile by `id`-set diff, never `total_count`.
+2. **Hydrate:** `GET /repos/{o}/{r}` (+`ETag`) → R fields; GQL batch for `fundingLinks/discussions/scorecard-linkage` in one shot — batching N repos per request is far cheaper than N requests (cost `round(connection-requests/100)`, min 1 pt, 5,000 pts/hr; live-verified 2026-10-06/07). Select `owner.databaseId` only via inline fragments on `User`/`Organization`, and treat `x-github-sso: partial-results` on `200` as incomplete data (`403 required;url` → authorize and retry; live-verified 2026-10-06/07).
 3. **Enrich:** `languages/contents/trees/releases/commits/issues+search-issues/stats/community/traffic(if owner)/SBOM/OSV/deps.dev+ecosyste.ms` per need; file-existence via ecosyste.ms metafiles to save `core`.
 4. **Mirror-bootstrap:** BQ/WoC/SWH/Stack for history/content without burn; GH Archive/ClickHouse for trends (envelope fields survive the cliff).
 5. **Store:** PK `id`, `full_name` history, `deleted_at`, `custom_properties`, watermark `max(pushed_at)` per shard + 1h overlap, `id` dedupe, audit log per §A11 of `05`.

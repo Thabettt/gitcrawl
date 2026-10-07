@@ -4,7 +4,7 @@
 
 **The one-paragraph version**: this is the file you trust when you need to know exactly what `GET /search/repositories` accepts. The API is small on purpose — five top-level parameters, one query string that carries every filter, and a closed list of qualifiers. The dangerous part is how it handles mistakes: a typo'd qualifier is not an error, it quietly becomes a search word, and you get a `200 OK` full of wrong results. Everything downstream (sharding, validation, workarounds) stands on the tables below, so each claim carries its documentation link.
 
-> **Research date**: 2026-09-29 (all sources accessed 2026-09-29 unless noted)
+> **Research date**: 2026-09-29 (all sources accessed 2026-09-29 unless noted); **live API re-verification**: 2026-10-06/07 — items marked "live-verified" were probe-confirmed on the live API.
 > **Endpoint**: `GET /search/repositories`
 > **Sources:**
 > - REST Search reference + query construction + 1000-cap + 4000-scan + timeouts + 422 rules + text-match: https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28 (accessed 2026-09-29)
@@ -30,7 +30,7 @@ Every knob GitHub gives you for repository search is in this table. If you want 
 | `sort` | no | string | `stars`, `forks`, `help-wanted-issues`, `updated`. Anything else → `422`. Default: `best match` (omit param). |
 | `order` | no | string | `desc`, `asc`. Ignored unless `sort` given. Default: `desc`. |
 | `per_page` | no | integer | `1–100`. Default: `30`. |
-| `page` | no | integer | `>=1`. Default: `1`. Only pages 1–10 usable at `per_page=100` (1000-result cap). |
+| `page` | no | integer | `>=1`. Default: `1`. Only pages 1–10 usable at `per_page=100`; page 11 → `422 "Only the first 1000 search results are available"` (live-verified 2026-10-06/07). |
 
 No `advanced_search` / `search_type` — those are `/search/issues`-only.
 
@@ -38,14 +38,14 @@ No `advanced_search` / `search_type` — those are `/search/issues`-only.
 
 This is the closed set. Anything not listed here — a made-up qualifier, a typo like `updated:` — is not rejected; it becomes a plain-text search term and silently changes nothing about the filtering. That single behavior is why validation matters more here than in a typical API.
 
-Format: `SEARCH_KEYWORD_1 SEARCH_KEYWORD_N QUALIFIER_1 QUALIFIER_N`. Space/`+` = implicit `AND`.
+Format: `SEARCH_KEYWORD_1 SEARCH_KEYWORD_N QUALIFIER_1 QUALIFIER_N`. Space/`+` = implicit `AND`. Repeating the same qualifier type (`created:>=D1 created:>=D2`) is a **union**, not an `AND` and not first-wins (repo-scoped probe, live-verified 2026-10-06/07) — a client that wants to narrow must **replace** the clause.
 
 - **Free text + `in:` scope:** bare keyword (default scope = name+description+topics, NOT README); `in:name`, `in:description`, `in:topics`, `in:readme`, `in:name,description`; `repo:owner/name`
 - **Owner:** `user:USERNAME` (supports `user:@me`), `org:ORGNAME`
 - **Numeric** (all support `> >= < <= n..n n..* *..n`): `stars:`, `forks:`, `size:` (KB), `followers:`, `topics:` (count)
 - **Dates** (`YYYY-MM-DD`, optional `THH:MM:SS+00:00`/`Z`): `created:`, `pushed:` (last push any branch). Note: no documented `updated:` qualifier for repos — use `pushed:` + `sort=updated`.
 - **Meta:** `language:` (e.g. `python`, `typescript`, `c++`, `jupyter-notebook`), `topic:TOPIC` (exact), `license:` (`mit`, `apache-2.0`, `gpl-3.0`, `bsd-3-clause`, `agpl-3.0`, `lgpl-3.0`, `mpl-2.0`, `cc0-1.0`, `unlicense`, `other`, `NOASSERTION`)
-- **Boolean flags:** `fork:true` / `fork:only` (default excludes forks), `archived:true/false`, `mirror:true/false`, `template:true/false`, `is:public` / `is:private`, `is:sponsorable`, `has:funding-file`, `good-first-issues:>n`, `help-wanted-issues:>n`, `props.PROPERTY:VALUE` (org custom properties, **requires single-`org:` scope or silently ignored**), `deployable:true` / `deployed:true`
+- **Boolean flags:** `fork:true` / `fork:only` (default excludes forks; live-verified 2026-10-06/07), `archived:true/false`, `mirror:true/false`, `template:true/false`, `is:public` / `is:private`, `is:sponsorable`, `has:funding-file`, `good-first-issues:>n`, `help-wanted-issues:>n`, `props.PROPERTY:VALUE` (org custom properties, **requires single-`org:` scope or silently ignored**), `deployable:true` / `deployed:true`
 - **Operators:** `-qualifier` exclusion (`-language:javascript`), `NOT` for strings only (`hello NOT world`), quotes for phrases (`"machine learning"`), `AND`/`OR`/`NOT` explicit (max 5 combined), case-insensitive.
 
 Examples:
@@ -75,10 +75,10 @@ X-GitHub-Api-Version: 2022-11-28
 
 Three ceilings define how you must crawl, and each failure mode has a different correct response. Read this section as the "physics" of the API.
 
-- Max 100/page, max 1000 total per logical query; max 4000 repos scanned per query ("The REST API will find up to 4,000 repositories that match your filters" — https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28); `incomplete_results:true` on timeout ("Reaching a timeout does not necessarily mean results are incomplete" — same page).
+- Max 100/page, max 1000 total per logical query; max 4000 repos scanned per query ("The REST API will find up to 4,000 repositories that match your filters" — https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28); `incomplete_results:true` on timeout ("Reaching a timeout does not necessarily mean results are incomplete" — same page). **Live-verified 2026-10-06/07:** page 11 at `per_page=100` returns `422 "Only the first 1000 search results are available"`, and `total_count` can exceed 1,000 and drifts over hours (38,820 → 38,823 → 38,833 in ~5 h for the same query). Pagination has no stability guarantee: identical paginated requests can shift or skip items (community-documented; GitHub staff acknowledged).
 - `q` >256 chars (excl. operators/qualifiers) or >5 `AND`/`OR`/`NOT` → `422 Validation failed` (same page + https://docs.github.com/en/search-github/getting-started-with-searching-on-github/troubleshooting-search-queries).
 - Search rate limit: **30 req/min authenticated, 10 req/min unauthenticated** (code search separate: 10/min auth-required) — https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28. Check `x-ratelimit-*` + `GET /rate_limit` — https://docs.github.com/en/rest/rate-limit/rate-limit?apiVersion=2026-03-10.
-- Auth/access: `repo:`/`user:`/`org:` on inaccessible resources → `422` or silent filtering to accessible subset (same search page, "Access errors or missing search results" section).
+- Auth/access: `repo:`/`user:`/`org:` on inaccessible resources → `422` or silent filtering to accessible subset (same search page, "Access errors or missing search results" section). SSO-gated orgs: `x-github-sso: partial-results` on `200` means orgs were withheld; `x-github-sso: required; url=...` on `403` carries a one-hour authorization URL (live-verified 2026-10-06/07).
 - Success `200`: `{ total_count, incomplete_results, items[] }`. Also `304` (conditional, https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api), `403/429` (throttle, https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), `503`.
 
 ## 5. Example

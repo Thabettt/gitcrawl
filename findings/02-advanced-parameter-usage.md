@@ -2,9 +2,9 @@
 
 **Read this after `01`.** Feeds `06 §8` (fetch plan) and `05 §A6` (watermark/ETag/pagination corrections).
 
-**The one-paragraph version**: knowing the parameters is not enough. At scale you meet three walls — the 1,000-result cap, the ~4,000-repo scan scope, and `incomplete_results` timeouts — plus two separate rate meters (`search` at 30/min and `core` at 5,000/hr). Naive parallel bursts get throttled; naive `page=11` gets a `422`. This file is the power-user playbook: how to build and encode queries, which qualifiers combine well, how to sort and page, what the headers do, how to handle every failure status correctly, and how to poll for changes. It ends with full curl/JS/Python code you can run and 17 pitfalls that silently corrupt crawls.
+**The one-paragraph version**: knowing the parameters is not enough. At scale you meet three walls — the 1,000-result cap, the ~4,000-repo scan scope, and `incomplete_results` timeouts — plus two separate rate meters (`search` at 30/min and `core` at 5,000/hr). Naive parallel bursts get throttled; naive `page=11` gets a `422`. This file is the power-user playbook: how to build and encode queries, which qualifiers combine well, how to sort and page, what the headers do, how to handle every failure status correctly, and how to poll for changes. It ends with full curl/JS/Python code you can run and 18 pitfalls that silently corrupt crawls.
 
-> **Research date**: 2026-09-29. Docs live-fetched 2026-09-29; prefer 2025–2026 API versions where noted.
+> **Research date**: 2026-09-29. Docs live-fetched 2026-09-29; prefer 2025–2026 API versions where noted. **Live API re-verification**: 2026-10-06/07 (items marked "live-verified").
 > Companion to `01-search-repos-parameters.md` (canonical ref). This file is the power-user guide.
 
 ## 0. Endpoint TL;DR
@@ -23,7 +23,9 @@ GET https://api.github.com/search/repositories?q={query}{&sort,order,per_page,pa
 
 Platform limits to internalize first:
 
-* **1,000 fetchable results per logical query** (`10×100`). `total_count` may be far larger.
+* **1,000 fetchable results per logical query** (`10×100`). `total_count` may be far larger, and it drifts over hours (live-verified 2026-10-06/07: 38,820 → 38,823 → 38,833 in ~5 h).
+* **`page=11` at `per_page=100` → `422 "Only the first 1000 search results are available"`**, not `[]` (live-verified 2026-10-06/07).
+* **Pagination has no stability guarantee**: identical paginated requests can shift or skip items between runs (community-documented; GitHub staff acknowledged) — expect small corpus deltas across runs.
 * **4,000-repo scan scope**: the API scans up to 4,000 repos matching your filters.
 * **Timeout → `incomplete_results: true`**, with partial results returned.
 * **256-char query limit** (excluding operators/qualifiers) + **max 5 `AND`/`OR`/`NOT`**.
@@ -118,7 +120,7 @@ language:typescript stars:>1000 created:2020-01-01..2020-06-30
 | `help-wanted-issues` | contributor opportunities |
 | `updated` | incremental crawl / freshness |
 
-`order` ignored without `sort`. Always `per_page=100` for crawls; pages `1..10` = 1000 max. `page=11+` → `[]`/empty by design. Follow `Link: rel="next"/"last"`. Octokit `paginate()` must strip `total_count`/`incomplete_results` before concat.
+`order` ignored without `sort`. Always `per_page=100` for crawls; pages `1..10` = 1000 max. `page=11+` → `422 "Only the first 1000 search results are available"` (not `[]`; live-verified 2026-10-06/07). Follow `Link: rel="next"/"last"`. Octokit `paginate()` must strip `total_count`/`incomplete_results` before concat. Treat cross-run page contents as unstable: pagination has no stability guarantee (community-documented; GitHub staff acknowledged), so reconcile corpora by `id`-set diff.
 
 `incomplete_results:true` → log, retry once after backoff, then narrow the query (add `org:`/`language:`/date shard). The 4000-scan scope means a broad `q=python` ranks poorly; narrow queries rank better.
 
@@ -137,6 +139,8 @@ Every status has exactly one correct response. Treat this table as law — the w
 | Status | Action |
 |---|---|
 | `200` + `incomplete_results:true` | narrow + retry |
+| `200` + `x-github-sso: partial-results` | SSO withheld orgs — partial data; surface loudly, don't mark complete (live-verified 2026-10-06/07) |
+| `403` + `x-github-sso: required; url=…` | authorize via the header URL (valid ~1 h), then retry (live-verified 2026-10-06/07) |
 | `304` | cache hit, no cost |
 | `401` | fix token |
 | `403` remaining=0 | sleep until `x-ratelimit-reset` |
@@ -149,7 +153,7 @@ Sequential + pacing is correct: ~1 req/2s/token (30/min), max ~10 concurrent (10
 ## 6. Performance tips
 
 1. **Narrow first:** `repo:/org:/user:` > `language:+stars:/forks:` > `created:/pushed:` shard > `topic:/license:` > bare keyword.
-2. **Date-shard to bypass the 1000-cap:** if `total_count>1000`, bisect on `created:`/`pushed:` (or `stars:` ranges) until each shard is `<1000`; dedupe by `id`/`full_name`; verify `sum(shard counts)==total`.
+2. **Date-shard to bypass the 1000-cap:** if `total_count>1000`, bisect on `created:`/`pushed:` (or `stars:` ranges) until each shard is `<1000`; **replace** the `created:`/`pushed:` clause when rebuilding narrower children — duplicate same-type qualifiers are a union, not an AND, so appending a second bound silently widens the shard (repo-scoped probe, live-verified 2026-10-06/07); dedupe by `id`/`full_name`; verify `sum(shard counts)==total` as a sanity check only (`total_count` drifts).
 3. **`sort=updated` polling:** `q=org:my-org pushed:>WATERMARK&sort=updated&order=desc&per_page=100`, watermark on `pushed_at`, respect `x-poll-interval`, send `If-None-Match`.
 4. **Avoid >256 chars / >5 operators:** fan out into multiple queries.
 
@@ -403,15 +407,15 @@ def poll():
 
 Note per the `05` gap audit: search `304` hit rate is low (`total_count`/`score` churn, `sort=updated` reorders — https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) — keep the ETag code but budget `x-ratelimit-*`, and never mix a `pushed_at` watermark with `updated_at` ordering without overlap (see `05` A6).
 
-## 8. Common pitfalls (17)
+## 8. Common pitfalls (18)
 
 Each of these has burned someone. None of them errors loudly — that's the point.
 
-1. Forks excluded by default — add `fork:true`/`fork:only`; don't confuse `fork:` vs `forks:`.
+1. Forks excluded by default — add `fork:true`/`fork:only`; don't confuse `fork:` vs `forks:`. (live-verified 2026-10-06/07)
 2. README not in default scope — add `in:readme`.
 3. No `updated:` qualifier — use a `pushed:` filter + `sort=updated` param.
 4. 256-char keyword limit ≠ 1000-result cap ≠ 4000 scan scope.
-5. `total_count` is an estimate, not fetchable — shard, don't `page=11`.
+5. `total_count` is an estimate that drifts, not a fetchable count — shard, don't `page=11` (which returns `422 "Only the first 1000 search results are available"`; live-verified 2026-10-06/07).
 6. `order` ignored without `sort`.
 7. `*` must be encoded (`%2A`).
 8. `NOT` strings-only; use `-qualifier` for exclusion.
@@ -424,6 +428,7 @@ Each of these has burned someone. None of them errors loudly — that's the poin
 15. Search case-insensitive but use canonical `language:` casing in logs.
 16. Omitting the version header = implicit `2022-11-28` — send it explicitly.
 17. `sort:created/comments/interactions` are issues/commits sorts, not repos.
+18. Duplicate same-type qualifiers (`created:` twice) are a union, not an AND — appending to a query widens it instead of narrowing; replace the clause (repo-scoped probe, live-verified 2026-10-06/07).
 
 ## Sources (accessed 2026-09-29)
 

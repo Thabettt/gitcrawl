@@ -1,6 +1,6 @@
 # Findings — GitHub Search Repos API Research for gitcrawl
 
-**Project**: gitcrawl — a planned continuous, large-scale GitHub repository discovery crawler. **Date**: 2026-09-29. **Method**: parallel research agents + live docs verification (dispatching-parallel-agents + last30days-style online reading; all sources accessed 2026-09-29 unless noted).
+**Project**: gitcrawl — a planned continuous, large-scale GitHub repository discovery crawler. **Date**: 2026-09-29. **Live re-verification**: 2026-10-06/07 against the live API — probe-confirmed facts are marked with that date. **Method**: parallel research agents + live docs verification (dispatching-parallel-agents + last30days-style online reading; all sources accessed 2026-09-29 unless noted).
 
 ## The one-paragraph version
 
@@ -39,7 +39,7 @@ Start with `00-overview.md` for the glossary, audience, and next steps.
 
 ## The four things to remember
 
-1. **Only 5 top-level params, and all the power is in `q`.** Validate qualifiers client-side — a typo is a silent text search, not an error.
-2. **The three ceilings shape everything:** 1,000 fetchable results, 30 search requests a minute, ~4,000 repos scanned per query. So date-shard (`created:`/`pushed:` bisect), page sequentially at `per_page=100` with ~2s pacing, and use multiple tokens where allowed. Prefer `GET /repositories?since=` or org enumeration when the scope allows it (see `05` A1–A2, `06` §4).
+1. **Only 5 top-level params, and all the power is in `q`.** Validate qualifiers client-side — a typo is a silent text search, not an error. Duplicate same-type qualifiers are a **union**, not an AND (repo-scoped probe, live-verified 2026-10-06/07) — clients that narrow a query must **replace** the clause, never append a second one.
+2. **The three ceilings shape everything:** 1,000 fetchable results (page 11 at `per_page=100` → `422 "Only the first 1000 search results are available"`; live-verified 2026-10-06/07), 30 search requests a minute, ~4,000 repos scanned per query. `total_count` can exceed 1,000 and drifts over hours (38,820 → 38,823 → 38,833 in ~5 h; live-verified 2026-10-06/07), and pagination has **no stability guarantee** — identical pages can shift or skip items across runs. So date-shard (`created:`/`pushed:` bisect, replacing not appending the clause), page sequentially at `per_page=100` with ~2s pacing, and use multiple tokens where allowed. Prefer `GET /repositories?since=` or org enumeration when the scope allows it (see `05` A1–A2, `06` §4).
 3. **No server-side custom params.** Implement virtual params in a proxy or your own database; use `props.*` only if you administer a single org, otherwise a `topic:` convention plus client filtering.
-4. **Don't re-search broadly on every run.** Store locally on the immutable `id` (the SEART pattern) and query your own database. Handle renames and deletes, watermark with overlap, and respect the legal gates (token-sharing, scraping, deletion/GDPR, resale) per `05`.
+4. **Don't re-search broadly on every run.** Store locally on the immutable `id` (the SEART pattern) and query your own database. Handle renames and deletes, watermark with overlap, and respect the legal gates (token-sharing, scraping, deletion/GDPR, resale) per `05`. Expect small cross-run corpus deltas even with identical queries — observed 49 added / 11 removed / net 38 over ~12 h, 0 deleted, rename pairs (live-verified 2026-10-06/07); reconcile by `id`-set diff, not `total_count`.
