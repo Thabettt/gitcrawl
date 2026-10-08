@@ -252,7 +252,7 @@ class AppSettings(Base):
     __tablename__ = "app_settings"
     __table_args__ = (
         CheckConstraint("id = 1", name="app_settings_single_row"),
-        CheckConstraint("graphql_batch_size BETWEEN 1 AND 20", name="app_settings_batch_size"),
+        CheckConstraint("graphql_batch_size BETWEEN 1 AND 50", name="app_settings_batch_size"),
         CheckConstraint(
             "limiter_max_concurrent BETWEEN 1 AND 100", name="app_settings_concurrency"
         ),

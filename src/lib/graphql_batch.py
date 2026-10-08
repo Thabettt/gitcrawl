@@ -16,7 +16,7 @@ from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError, re
 from limiter.buckets import BucketLimiter
 
 GRAPHQL_URL = "https://api.github.com/graphql"
-MAX_BATCH_SIZE = 20
+MAX_BATCH_SIZE = 50
 DEFAULT_MAX_ATTEMPTS = 3
 _TRANSIENT_MARKERS = (
     "timeout",

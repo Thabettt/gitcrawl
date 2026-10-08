@@ -47,8 +47,13 @@ def test_invalid_env_value_falls_back_to_the_row(clean, monkeypatch):
 
 
 def test_env_graphql_batch_size_is_clamped_to_the_api_cap(clean, monkeypatch):
-    monkeypatch.setenv("GITCRAWL_GRAPHQL_BATCH_SIZE", "50")
-    assert load_run_settings(clean).graphql_batch_size == 20
+    monkeypatch.setenv("GITCRAWL_GRAPHQL_BATCH_SIZE", "51")
+    assert load_run_settings(clean).graphql_batch_size == 50
+
+
+def test_update_persists_batch_size_up_to_the_raised_cap(clean):
+    updated = update_run_settings(clean, {"graphql_batch_size": 40})
+    assert updated.graphql_batch_size == 40
 
 
 def test_unknown_field_is_rejected(clean):

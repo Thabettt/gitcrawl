@@ -285,7 +285,7 @@ def test_pinned_candidates_conflict_with_submitted_hydrate_is_rejected(
 def test_settings_page_shows_every_allowed_range(clean, tmp_path, monkeypatch):
     client = healthy_client(clean, tmp_path, monkeypatch)
     body = client.get("/settings").text
-    for needle in ("1–10,000", "1–1,000,000", "60–86,400", "1–20", "1–100", "1–64"):
+    for needle in ("1–10,000", "1–1,000,000", "60–86,400", "1–50", "1–100", "1–64"):
         assert needle in body
 
 

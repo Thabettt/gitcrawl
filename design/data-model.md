@@ -154,7 +154,7 @@ CREATE INDEX audit_ts_idx ON audit_log (ts);
 
 | Table | Migration | Purpose |
 |---|---|---|
-| `app_settings` | `0008` | Single-row run limits and toggles (`max_shards`, `max_candidates`, `max_hydrate`, `max_enrich`, `request_deadline_seconds`, `graphql_batch`, `graphql_batch_size` 1–20, `limiter_max_concurrent` 1–100); editable at `/settings` (one-click corpus preset: 1,000 shards; 100,000 candidates/hydrate/enrich; 24 h deadline; batch 20; concurrency 10), env-pinnable |
+| `app_settings` | `0008` | Single-row run limits and toggles (`max_shards`, `max_candidates`, `max_hydrate`, `max_enrich`, `request_deadline_seconds`, `graphql_batch`, `graphql_batch_size` 1–50, `limiter_max_concurrent` 1–100); editable at `/settings` (one-click corpus preset: 1,000 shards; 100,000 candidates/hydrate/enrich; 24 h deadline; batch 20; concurrency 10), env-pinnable |
 | `corpora` | `0009` | Named frozen corpora: unique name, `source_run_id` FK → runs, note, `repo_count`, `frozen_at` |
 
 ## Planned tables (designed, not implemented — thesis tracks parked)

@@ -8,7 +8,7 @@ _BOUNDS: dict[str, tuple[int, int]] = {
     "max_hydrate": (1, 1_000_000),
     "max_enrich": (1, 1_000_000),
     "request_deadline_seconds": (60, 86_400),
-    "graphql_batch_size": (1, 20),
+    "graphql_batch_size": (1, 50),
     "limiter_max_concurrent": (1, 100),
     "discovery_concurrency": (1, 64),
 }

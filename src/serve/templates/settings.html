@@ -87,7 +87,7 @@
           <input class="field-input" type="number" name="graphql_batch_size"
                  value="{{ values["graphql_batch_size"] }}"
                  {% if "graphql_batch_size" in pinned %}readonly{% endif %}>
-          <span class="muted">Keep at 20 or below; GitHub cuts off large batches.
+          <span class="muted">Larger batches cut request count but raise timeout risk.
             Allowed: {{ ranges["graphql_batch_size"] }}.</span>
           {% if "graphql_batch_size" in pinned %}<span class="badge">set by environment</span>{% endif %}
         </label>

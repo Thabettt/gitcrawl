@@ -367,7 +367,7 @@ Everything is read from the environment only. Secrets are never stored in the re
 | `GITCRAWL_MAX_HYDRATE` | `200` | Hydration cap per run (must be ≤ candidates). |
 | `GITCRAWL_MAX_ENRICH` | `100` | Enrichment-check cap per run. |
 | `GITCRAWL_GRAPHQL_BATCH` | `true` | Toggle batched GraphQL (falls back to per-repo REST when off). |
-| `GITCRAWL_GRAPHQL_BATCH_SIZE` | `20` | Aliases per GraphQL request (1–20); env overrides are clamped into range at load. |
+| `GITCRAWL_GRAPHQL_BATCH_SIZE` | `20` | Aliases per GraphQL request (1–50); env overrides are clamped into range at load. |
 | `GITCRAWL_MAX_CONCURRENT` | `10` | Max in-flight requests per endpoint/token. |
 | `GITCRAWL_DISCOVERY_CONCURRENCY` | `32` | Discovery worker pool size (1–64); one GraphQL search connection per page. |
 | `TEST_DATABASE_URL` | — | Test database; its name must end in `_test` (destructive-safe). Suites skip without it. |

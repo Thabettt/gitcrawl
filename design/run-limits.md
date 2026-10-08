@@ -22,7 +22,7 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 | `max_enrich` | Extra rules to check | 100 | 1–1,000,000 | Budget for file/country checks on hydrated repos |
 | `request_deadline_seconds` | Stop a search after (seconds) | 3,600 | 60–86,400 | Wall-clock cap; past it the run stops gracefully (partial), marked incomplete and resumable |
 | `graphql_batch` | Batch repo lookups | on | on/off | Whether GraphQL batching is used (off = one REST call per repo) |
-| `graphql_batch_size` | Repos per batch | 20 | 1–20 | Aliases per GraphQL query; GitHub cuts off large batches |
+| `graphql_batch_size` | Repos per batch | 20 | 1–50 | Aliases per GraphQL query; larger batches mean fewer requests but more timeout risk |
 | `limiter_max_concurrent` | Simultaneous requests | 10 | 1–100 | In-flight requests per endpoint/token |
 | `discovery_concurrency` | Discovery workers | 32 | 1–64 | Discovery pages fetched in parallel (one GraphQL connection each) |
 
@@ -31,7 +31,7 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 ## 2. What backs them today (the honest audit)
 
 - **Defaults (10 / 500 / 200 / 100 / 3,600 / on / 20 / 10 / 32)** — inherited, not derived. The settings plan states it explicitly: "defaults equal today's values, so nothing changes until an operator edits." They are sensible interactive values (a run measured in minutes), but no document derived them from the meters. They survive this audit: keep them.
-- **`graphql_batch_size` 1–20** — backed. GitHub's GraphQL resource caps punish large `first` + nesting; the batch engine's own design says 20–50, and the project uses 20. The bound matches the implementation (`MAX_BATCH_SIZE=20`) and the DB check constraint. Env overrides are clamped to the bound at settings load: an override above 20 clamps down to 20, and a non-positive value falls back to the default.
+- **`graphql_batch_size` 1–50** — backed. GitHub's GraphQL resource caps punish large `first` + nesting; the batch engine's own design says 20–50, and the default stays 20. The bound matches the implementation (`MAX_BATCH_SIZE=50`) and the DB check constraint. Env overrides are clamped to the bound at settings load: an override above 50 clamps down to 50, and a non-positive value falls back to the default.
 - **`limiter_max_concurrent` 1–100** — backed, but read it carefully: 100 is GitHub's *documented hard ceiling*, shared across REST and GraphQL. It is not a target. The page's own help text says so. The operational value is ~10 per endpoint per token (900 points/min ÷ ~700 ms p50). Keep the bound at 100 (platform truth); never preset it to 100. Hydration itself runs at `min(limiter_max_concurrent, 20)` workers, so raising the setting past 20 does not raise hydration parallelism.
 - **`discovery_concurrency` 1–64** — backed by the 2026-10-08 measurement: GraphQL discovery rides the points meter with one page per connection, and 32 pages in flight was the measured operating point (`corpus-building-efficient-engineering.md` §9.4) — comfortably under GitHub's 100-concurrent ceiling.
 - **`request_deadline_seconds` 60–86,400** — a product choice: 24 hours is the longest a single run may take. Fine.
