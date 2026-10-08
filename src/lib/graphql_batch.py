@@ -19,6 +19,7 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_BATCH_SIZE = 50
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_MAX_ATTEMPTS = 3
+_TIMEOUT_STATUSES = frozenset({502, 504})
 _TRANSIENT_MARKERS = (
     "timeout",
     "timed out",
@@ -146,6 +147,7 @@ def _post(
         sleep=sleep,
         now=now,
         jitter=jitter,
+        retry_5xx=False,
     )
     if response.status_code == 401:
         raise GraphQLAuthError("github rejected the token (HTTP 401)")
@@ -295,6 +297,7 @@ def fetch_batch(
             done, _pending_futures = wait(in_flight, return_when=FIRST_COMPLETED)
             for future in done:
                 pending = in_flight.pop(future)
+                transient = False
                 try:
                     parsed, batch_errors = future.result()
                 except GraphQLAuthError:
@@ -313,6 +316,7 @@ def fetch_batch(
                 ) as exc:
                     parsed = ParsedBatch()
                     batch_errors = (f"{type(exc).__name__}: {exc}",)
+                    transient = isinstance(exc, RequestFailed) and exc.status in _TIMEOUT_STATUSES
                 resolved = {key: value for key, value in parsed.values.items() if key in pending}
                 values.update(resolved)
                 if on_resolved is not None and resolved:
@@ -320,7 +324,7 @@ def fetch_batch(
                 failed = [key for key in pending if key not in values]
                 if batch_errors:
                     reason = batch_errors[0]
-                    if _is_transient(reason):
+                    if transient or _is_transient(reason):
                         for key in requeue(failed):
                             fall_back(key, reason)
                     else:

@@ -344,3 +344,56 @@ def test_on_resolved_reports_only_values_resolved_by_the_batch():
     )
     assert outcome.values == {"1": "value-1", "2": "rest-2"}
     assert resolved == [(["1"], {"1": "value-1"})]
+
+
+@pytest.mark.parametrize("status", [502, 504])
+def test_http_timeout_status_splits_batches_before_falling_back(status):
+    requests: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys = keys_in(request)
+        requests.append(keys)
+        if len(keys) > 2:
+            return httpx.Response(status, json={"message": "timeout"})
+        data = {f"n{index}": f"value-{key}" for index, key in enumerate(keys)}
+        return httpx.Response(200, json={"data": data})
+
+    adapter = KeyAdapter()
+    adapter.batch_size = 4
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        ["1", "2", "3", "4"],
+        client=client,
+        concurrency=1,
+        fallback=lambda key: f"rest-{key}",
+        sleep=lambda _seconds: None,
+    )
+    assert outcome.values == {"1": "value-1", "2": "value-2", "3": "value-3", "4": "value-4"}
+    assert outcome.stats.fallbacks == 0
+    assert outcome.stats.requeues >= 1
+    assert requests[0] == ["1", "2", "3", "4"]
+    assert {tuple(batch) for batch in requests[1:]} == {("1", "2"), ("3", "4")}
+
+
+def test_http_500_still_falls_back_without_splitting():
+    requests: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(keys_in(request))
+        return httpx.Response(500, json={"message": "server error"})
+
+    adapter = KeyAdapter()
+    adapter.batch_size = 4
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        ["1", "2", "3", "4"],
+        client=client,
+        concurrency=1,
+        fallback=lambda key: f"rest-{key}",
+        sleep=lambda _seconds: None,
+    )
+    assert outcome.values == {"1": "rest-1", "2": "rest-2", "3": "rest-3", "4": "rest-4"}
+    assert outcome.stats.fallbacks == 4
+    assert all(batch == ["1", "2", "3", "4"] for batch in requests)
