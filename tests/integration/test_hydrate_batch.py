@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 
 import httpx
 import pytest
@@ -9,7 +11,9 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+import hydrate.tail as hydrate_tail
 from hydrate.tail import refresh_repos_batched
+from lib import cancellation
 from lib.graphql_batch import GraphQLAuthError
 
 ALIAS_RE = re.compile(r'(n\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')
@@ -173,11 +177,87 @@ def test_apply_batch_size_must_be_positive(clean_db):
 def test_batched_hydration_reports_fetch_and_apply_seconds(clean_db):
     engine = clean_db()
     seed_repos(engine, 1)
-    ticks = iter([0.0, 3.0, 5.0, 9.0])
+    ticks = iter([0.0, 3.0])
     client = httpx.Client(transport=httpx.MockTransport(graphql_handler([])))
     stats = refresh_repos_batched(engine, client, rows_for(1), clock=lambda: next(ticks))
     assert stats.fetch_seconds == 3.0
-    assert stats.apply_seconds == 4.0
+    assert stats.apply_seconds >= 0.0
+
+
+def test_hydration_apply_overlaps_the_next_fetch(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 2)
+    applied_while_fetching: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        aliases = ALIAS_RE.findall(json.loads(request.content)["query"])
+        repo_ids = sorted(int(name.removeprefix("repo")) for _alias, _owner, name in aliases)
+        if repo_ids != [1]:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                with engine.connect() as connection:
+                    stored = connection.scalar(text("SELECT stargazers FROM repos WHERE id = 1"))
+                if stored == 1:
+                    applied_while_fetching.append(True)
+                    break
+                time.sleep(0.01)
+            assert applied_while_fetching, "first chunk was not applied before the next fetch"
+        return graphql_handler([])(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    stats = refresh_repos_batched(engine, client, rows_for(2), batch_size=1, apply_batch_size=1)
+    assert stats.refreshed == 2
+    assert applied_while_fetching == [True]
+
+
+def test_apply_failure_propagates_from_the_consumer(clean_db, monkeypatch):
+    engine = clean_db()
+    seed_repos(engine, 2)
+
+    def boom(_engine, _chunk, *, batch_size):
+        raise RuntimeError("apply exploded")
+
+    monkeypatch.setattr(hydrate_tail, "apply_hydration_batch", boom)
+    client = httpx.Client(transport=httpx.MockTransport(graphql_handler([])))
+    with pytest.raises(RuntimeError, match="apply exploded"):
+        refresh_repos_batched(engine, client, rows_for(2), batch_size=1, apply_batch_size=1)
+
+
+def test_cancel_during_apply_stops_the_consumer(clean_db, monkeypatch):
+    engine = clean_db()
+    seed_repos(engine, 4)
+    cancel = threading.Event()
+    original = hydrate_tail.apply_hydration_batch
+
+    def cancelling_apply(engine_, chunk, *, batch_size):
+        cancel.set()
+        return original(engine_, chunk, batch_size=batch_size)
+
+    monkeypatch.setattr(hydrate_tail, "apply_hydration_batch", cancelling_apply)
+    token = cancellation.bind(cancel.is_set)
+    try:
+        client = httpx.Client(transport=httpx.MockTransport(graphql_handler([])))
+        with pytest.raises(cancellation.RunCancelled):
+            refresh_repos_batched(engine, client, rows_for(4), batch_size=4, apply_batch_size=2)
+    finally:
+        cancellation.reset(token)
+
+
+def test_apply_chunks_coalesce_to_the_configured_batch_size(clean_db, monkeypatch):
+    engine = clean_db()
+    seed_repos(engine, 25)
+    calls: list[int] = []
+    original = hydrate_tail.apply_hydration_batch
+
+    def recording_apply(engine_, chunk, *, batch_size):
+        calls.append(len(chunk))
+        return original(engine_, chunk, batch_size=batch_size)
+
+    monkeypatch.setattr(hydrate_tail, "apply_hydration_batch", recording_apply)
+    client = httpx.Client(transport=httpx.MockTransport(graphql_handler([])))
+    stats = refresh_repos_batched(engine, client, rows_for(25), apply_batch_size=10)
+    assert stats.refreshed == 25
+    assert calls == [10, 10, 5]
 
 
 def test_one_bad_repo_falls_back_to_rest_without_touching_its_neighbours(clean_db):

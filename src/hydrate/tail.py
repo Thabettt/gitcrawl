@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextvars
+import queue
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -10,6 +13,7 @@ from sqlalchemy.engine import Engine
 
 from hydrate.graphql_repo import RepoDetailsAdapter
 from hydrate.repo_client import HydratedRepo, RepoNotFound, fetch_commit_count, hydrate_repo
+from lib import cancellation
 from lib.batching import chunked
 from lib.deadlines import Deadline
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
@@ -20,6 +24,8 @@ from store.models import Repo
 
 _NAME_BATCH = 5000
 _APPLY_BATCH = 500
+_APPLY_QUEUE_DEPTH = 20
+_QUEUE_POLL_SECONDS = 1.0
 
 
 @dataclass
@@ -126,6 +132,7 @@ def refresh_repos_batched(
         return stats
     etags = _stored_etags(engine, [full_name for _, full_name in candidates])
     full_name_by_key = dict(candidates)
+    key_by_full_name = {full_name: key for key, full_name in candidates}
 
     def fallback(key: str) -> object | None:
         full_name = full_name_by_key[key]
@@ -179,54 +186,135 @@ def refresh_repos_batched(
         return None
 
     fetch_started = clock()
-    outcome = fetch_batch(
-        RepoDetailsAdapter(dict(candidates), batch_size=batch_size),
-        [key for key, _ in candidates],
-        client=client,
-        limiter=limiter,
-        token_id=token_id,
-        fallback=fallback,
-        deadline=deadline,
-        on_response=on_response,
-        sleep=sleep,
-        now=now,
-        jitter=jitter,
-        allow_requests=allow_requests,
-        on_progress=on_progress,
-        concurrency=concurrency,
+    applied: list[tuple[str, LifecycleOutcome]] = []
+    apply_events: list[tuple[int, int]] = []
+    details_by_key: dict[str, object] = {}
+    errors: list[BaseException] = []
+    busy_seconds = 0.0
+    total = len(candidates)
+    buffer: list[tuple[str, HydratedRepo]] = []
+    work: queue.Queue[list[tuple[str, HydratedRepo]] | None] = queue.Queue(
+        maxsize=_APPLY_QUEUE_DEPTH
     )
-    stats.fetch_seconds = clock() - fetch_started
-    apply_started = clock()
-    items: list[tuple[str, HydratedRepo]] = []
-    for key, details in outcome.values.items():
-        hydrated = HydratedRepo(
-            id=details.repo_id,
-            node_id=details.node_id,
-            full_name=details.full_name,
-            payload=details.payload,
-            etag=None,
-            not_modified=False,
-        )
-        items.append((full_name_by_key[key], hydrated))
-    total = len(items)
-    results: list[LifecycleOutcome] = []
-    if on_apply_progress is not None:
-        on_apply_progress(0, total)
-    done = 0
-    for chunk in chunked(items, apply_batch_size):
-        results.extend(apply_hydration_batch(engine, chunk, batch_size=apply_batch_size))
-        done += len(chunk)
+    producer_done = threading.Event()
+
+    def consume() -> None:
+        nonlocal busy_seconds
         if on_apply_progress is not None:
-            on_apply_progress(done, total)
-    for (key, details), result in zip(outcome.values.items(), results, strict=True):
+            apply_events.append((0, total))
+        done = 0
+        try:
+            while True:
+                try:
+                    chunk = work.get(timeout=_QUEUE_POLL_SECONDS)
+                except queue.Empty:
+                    if producer_done.is_set():
+                        break
+                    continue
+                if chunk is None:
+                    break
+                cancellation.check()
+                started = time.perf_counter()
+                try:
+                    outcomes = apply_hydration_batch(engine, chunk, batch_size=apply_batch_size)
+                finally:
+                    busy_seconds += time.perf_counter() - started
+                applied.extend(
+                    (key, outcome) for (key, _details), outcome in zip(chunk, outcomes, strict=True)
+                )
+                done += len(chunk)
+                if on_apply_progress is not None:
+                    apply_events.append((done, total))
+        except BaseException as exc:
+            errors.append(exc)
+
+    def enqueue(chunk: list[tuple[str, HydratedRepo]]) -> None:
+        while True:
+            if errors:
+                raise errors[0]
+            try:
+                work.put(chunk, timeout=_QUEUE_POLL_SECONDS)
+                return
+            except queue.Full:
+                cancellation.check()
+
+    def on_resolved(keys: Sequence[str], values: Mapping[str, object]) -> None:
+        for key in keys:
+            details = values.get(key)
+            if details is None:
+                continue
+            details_by_key[full_name_by_key[key]] = details
+            buffer.append(
+                (
+                    full_name_by_key[key],
+                    HydratedRepo(
+                        id=details.repo_id,
+                        node_id=details.node_id,
+                        full_name=details.full_name,
+                        payload=details.payload,
+                        etag=None,
+                        not_modified=False,
+                    ),
+                )
+            )
+        while len(buffer) >= apply_batch_size:
+            enqueue(buffer[:apply_batch_size])
+            del buffer[:apply_batch_size]
+
+    context = contextvars.copy_context()
+    worker = threading.Thread(
+        target=context.run, args=(consume,), name="hydrate-apply", daemon=True
+    )
+    worker.start()
+    try:
+        outcome = fetch_batch(
+            RepoDetailsAdapter(dict(candidates), batch_size=batch_size),
+            [key for key, _ in candidates],
+            client=client,
+            limiter=limiter,
+            token_id=token_id,
+            fallback=fallback,
+            deadline=deadline,
+            on_response=on_response,
+            sleep=sleep,
+            now=now,
+            jitter=jitter,
+            allow_requests=allow_requests,
+            on_progress=on_progress,
+            on_resolved=on_resolved,
+            concurrency=concurrency,
+        )
+        stats.fetch_seconds = clock() - fetch_started
+        if buffer:
+            enqueue(buffer[:])
+            buffer.clear()
+    finally:
+        producer_done.set()
+        if not errors:
+            while True:
+                try:
+                    work.put(None, timeout=_QUEUE_POLL_SECONDS)
+                    break
+                except queue.Full:
+                    if errors:
+                        break
+        worker.join()
+    if errors:
+        raise errors[0]
+    stats.apply_seconds = busy_seconds
+    for full_name, result in applied:
+        details = details_by_key[full_name]
+        repo_key = key_by_full_name[full_name]
         stats.refreshed += 1
         if result.renamed_from is not None:
             stats.renamed += 1
         if details.commit_count is not None:
-            stats.commit_counts[key] = details.commit_count
+            stats.commit_counts[repo_key] = details.commit_count
         if details.language_bytes:
-            stats.language_bytes[key] = details.language_bytes
-    stats.apply_seconds = clock() - apply_started
+            stats.language_bytes[repo_key] = details.language_bytes
     stats.unresolved = {full_name_by_key[key]: reason for key, reason in outcome.unresolved.items()}
     stats.batch = outcome.stats.as_dict()
+    if on_apply_progress is not None:
+        for done, total_count in apply_events:
+            on_apply_progress(done, total_count)
     return stats

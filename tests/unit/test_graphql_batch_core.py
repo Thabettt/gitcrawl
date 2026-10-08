@@ -297,3 +297,50 @@ def test_fetch_batch_runs_chunks_concurrently():
     )
     assert outcome.stats.requests == 3
     assert outcome.stats.unresolved == 9
+
+
+def test_on_resolved_streams_chunks_as_they_complete():
+    resolved: list[tuple[list[str], dict[str, object]]] = []
+    issued = 0
+    responses = iter(
+        [
+            httpx.Response(200, json=node_payload(["1", "2"])),
+            httpx.Response(200, json=node_payload(["3", "4"])),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal issued
+        assert len(resolved) == issued, "a completed chunk must resolve before the next request"
+        issued += 1
+        return next(responses)
+
+    adapter = DictAdapter()
+    adapter.batch_size = 2
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        ["1", "2", "3", "4"],
+        client=client,
+        concurrency=1,
+        on_resolved=lambda keys, values: resolved.append((list(keys), dict(values))),
+    )
+    assert outcome.values == {"1": "value-1", "2": "value-2", "3": "value-3", "4": "value-4"}
+    assert resolved == [
+        (["1", "2"], {"1": "value-1", "2": "value-2"}),
+        (["3", "4"], {"3": "value-3", "4": "value-4"}),
+    ]
+
+
+def test_on_resolved_reports_only_values_resolved_by_the_batch():
+    client = client_from([httpx.Response(200, json=node_payload(["1"]))])
+    resolved: list[tuple[list[str], dict[str, object]]] = []
+    outcome = fetch_batch(
+        DictAdapter(),
+        ["1", "2"],
+        client=client,
+        fallback=lambda key: f"rest-{key}",
+        on_resolved=lambda keys, values: resolved.append((list(keys), dict(values))),
+    )
+    assert outcome.values == {"1": "value-1", "2": "rest-2"}
+    assert resolved == [(["1"], {"1": "value-1"})]

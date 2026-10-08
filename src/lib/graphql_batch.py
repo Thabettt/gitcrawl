@@ -187,6 +187,7 @@ def fetch_batch(
     jitter: Callable[[], float] | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     on_progress: Callable[[int, int], None] | None = None,
+    on_resolved: Callable[[Sequence[str], Mapping[str, object]], None] | None = None,
     concurrency: int = 1,
 ) -> BatchOutcome:
     if max_attempts < 1:
@@ -311,9 +312,10 @@ def fetch_batch(
                 ) as exc:
                     parsed = ParsedBatch()
                     batch_errors = (f"{type(exc).__name__}: {exc}",)
-                for key, value in parsed.values.items():
-                    if key in pending:
-                        values[key] = value
+                resolved = {key: value for key, value in parsed.values.items() if key in pending}
+                values.update(resolved)
+                if on_resolved is not None and resolved:
+                    on_resolved(tuple(resolved), resolved)
                 failed = [key for key in pending if key not in values]
                 if batch_errors:
                     reason = batch_errors[0]
