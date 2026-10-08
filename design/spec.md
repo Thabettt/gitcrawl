@@ -12,6 +12,8 @@
 
 > **Status note (2026-10-07)**: Session fixes that refine (not rewrite) the text above: GitHub unions duplicate same-type qualifiers, so the shard planner now *replaces* the query's `created:` token and plans only inside the user's date window (FR-001/SC-001); runs now include a `cancelled` status ("Stopped", resumable) with cooperative abort and live progress phase/done/total/ETA in the console (US4); hydration is parallel batched GraphQL with owner `databaseId` selected via `... on User` / `... on Organization` inline fragments (it is not on the `RepositoryOwner` interface) plus REST fallback; hydration SSO `partial-results` degrades to per-repo fallback/unresolved and is recorded, while `401` still fails loudly (the Edge Cases line below predates this); `min_language_bytes`/`max_language_bytes` are enforced virtual filters from hydration language bytes (distinct from the recorded-only `min_loc`/`max_loc`).
 
+> **Status note (2026-10-08)**: Discovery now runs on the GraphQL points meter — a batched `repositoryCount` planner plus one search connection per page from a `discovery_concurrency` worker pool (the 1,000-result cap and `max_pages` semantics are unchanged; `since` scan and org/user enumeration stay REST). The SLO `search_remaining` is now `graphql_remaining`. FR-010's requirement text stays frozen; the metric name and engine change are pointers, not rewrites. Spec: `docs/superpowers/specs/2026-10-08-graphql-discovery-design.md`; plan: `docs/superpowers/plans/2026-10-08-graphql-discovery.md`.
+
 **New here? Read `how-the-data-flows.md` first** — it narrates every stage below (filters → Find → hydrate → enrich → display → bundle) with each GitHub limitation explained.
 
 ## User Scenarios & Testing *(mandatory)*

@@ -63,7 +63,7 @@
 - [ ] T006 Implement throttle classifier in `src/limiter/classifier.py` (retry-after → reset → `60s×2^n`+jitter max 5; spam-422 backoff vs cap-422 shard vs validation-422 fix; SSO `partial-results` loud-fail — 2026-10-07: hydration GraphQL SSO `partial-results` now degrades to per-repo fallback/unresolved and is recorded; `401` still fails loudly)
 - [ ] T007 [P] Implement `q` allowlist + delta-test validation in `src/lib/qualify.py` (06 §2 set, `props.*`-only-with-`org:`, local `400`, CI delta test)
 - [ ] T008 Create base models + Alembic migrations in `src/store/models.py` (repos PK `id`, owners, full_name_history, shards, audit_log, geo_cache per data-model.md)
-- [x] T009 Configure audit logging + SLO metric emit in `src/lib/audit.py` (moved from `serve/` during hardening; FR-010 fields; `search_remaining`, `incomplete_results_ratio`, `422/403+429` rates, p95, coverage, geo-unmatched)
+- [x] T009 Configure audit logging + SLO metric emit in `src/lib/audit.py` (moved from `serve/` during hardening; FR-010 fields; `search_remaining`, `incomplete_results_ratio`, `422/403+429` rates, p95, coverage, geo-unmatched — 2026-10-08: the SLO field is renamed `graphql_remaining`, the latest `rl_resource='graphql'` audit row, when discovery moved to the GraphQL points meter)
 
 **Checkpoint**: Foundation ready — `pytest tests/unit/test_classifier.py tests/unit/test_watermark.py` green; limiter + qualify + models reviewable; user stories can now begin
 

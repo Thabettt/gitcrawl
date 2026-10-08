@@ -1,6 +1,6 @@
 # Quickstart: Golden-Org Validation Runbook
 
-**Date**: 2026-09-29 (updated 2026-10-07). Proves US1–US3 on fixtures/small scope before scaling tokens. Collect every output as review evidence. New? Read `how-the-data-flows.md` first — each step below maps to its stages.
+**Date**: 2026-09-29 (updated 2026-10-08). Proves US1–US3 on fixtures/small scope before scaling tokens. Collect every output as review evidence. New? Read `how-the-data-flows.md` first — each step below maps to its stages.
 
 **The one-paragraph version**: this runbook is how you convince yourself the system works before spending real API allowance. It walks the four layers in order — discovery completeness on a known org, lifecycle on fixtures, enrichment/serve/geo on fixtures, and the throttle classifier — and names the evidence to record at each step. If all four pass, you can scale tokens and shards with a clear conscience.
 
@@ -73,9 +73,9 @@ curl "http://localhost:8000/vsearch/repos?q=org:github&has_dockerfile=true&owner
 ## Step 4 — Throttle classifier sanity (5 min)
 
 ```bash
-pytest tests/unit/test_classifier.py tests/contract/test_github_pagination.py -v
+pytest tests/unit/test_classifier.py tests/unit/test_request_with_retry.py -v
 # Expected: PASS — retry-after → exact sleep; remaining==0 → reset sleep (per-bucket);
-# spam-422 backs off, cap-422 shards, validation-422 fails fast; Link followed verbatim.
+# spam-422 backs off, cap-422 classifies as shard (legacy REST search path), validation-422 fails fast.
 ```
 
 ## Done criteria

@@ -1,6 +1,6 @@
 # Run Limits (what they are, what backs them, and how to set them)
 
-**Date**: 2026-10-04. Companions: `corpus-building-efficient-engineering.md` (the meters), `console-ux-redesign.md` §4.9 (the page), `docs/environment.md` (operations), `../docs/superpowers/plans/2026-10-02-console-settings.md` (the implementation plan). Platform numbers re-verified 2026-10-04 against GitHub's docs.
+**Date**: 2026-10-04 (updated 2026-10-08 for the GraphQL discovery engine). Companions: `corpus-building-efficient-engineering.md` (the meters), `console-ux-redesign.md` §4.9 (the page), `docs/environment.md` (operations), `../docs/superpowers/plans/2026-10-02-console-settings.md` (the implementation plan). Platform numbers re-verified 2026-10-04 against GitHub's docs.
 
 **Purpose of this document**: the Limits page (`/settings`, System → Limits) has nine fields. Until now, nobody had written down where their values come from — the defaults were inherited from the console build, the bounds were round ceilings, and the "maximum" preset pushed every dial to its limit at once, which is not an operating point any real run should use. This file derives each limit from the rate budget, defines three coherent presets, and states the rules that keep a run from being configured into nonsense.
 
@@ -8,7 +8,7 @@
 
 ## The one-paragraph version
 
-A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,000/hr, GraphQL 5,000 points/hr per token), GitHub's anti-abuse ceilings (100 concurrent requests shared across REST and GraphQL; 900/2,000 points per minute), and the wall-clock deadline. The Limits page controls how much of those budgets one run may spend. The right values are not "as high as possible" — they are a coherent operating point where discovery, saving, and checking all fit inside the deadline with headroom. The defaults are the interactive point (minutes, laptop-friendly). The old "maximum" preset was replaced with a **corpus-build** preset: 1,000 slices, 100,000 repos at each stage, 24-hour deadline, batching on, 10 concurrent — about four hours of real budget on one token, so it finishes rather than aborting incomplete.
+A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,000/hr, GraphQL 5,000 points/hr per token), GitHub's anti-abuse ceilings (100 concurrent requests shared across REST and GraphQL; 900/2,000 points per minute), and the wall-clock deadline. The Limits page controls how much of those budgets one run may spend. The right values are not "as high as possible" — they are a coherent operating point where discovery, saving, and checking all fit inside the deadline with headroom. The defaults are the interactive point (minutes, laptop-friendly). The old "maximum" preset was replaced with a **corpus-build** preset: 1,000 slices, 100,000 repos at each stage, 24-hour deadline, batching on, 10 concurrent, 32 discovery workers — about four hours of real budget on one token, so it finishes rather than aborting incomplete.
 
 ---
 
@@ -43,14 +43,14 @@ All numbers verified 2026-10-04 (see Sources). Per token:
 
 | Meter | Rate | Buys |
 |---|---|---|
-| Search | 30/min = 1,800/hr | Planning counts + result pages; one page = 100 repos |
+| Search | 30/min = 1,800/hr | `since` cursor scan and org/user enumeration only; discovery no longer uses it |
 | Core (REST) | 5,000/hr | One hydrated repo per call (fallbacks, trees, contents) |
-| GraphQL | 5,000 points/hr | A batch of ≤20 repos ≈ 1 point |
+| GraphQL | 5,000 points/hr | Discovery (20 count probes per query = 1 point; one search connection per page) and hydration batches (≤20 repos ≈ 1 point) |
 | Secondary | 100 concurrent (REST+GraphQL shared); 900 pts/min REST; 2,000 pts/min GraphQL | Pacing ceiling — stay far below |
 
 Time estimates for a run of `C` candidates, `S` shards, batch size `B`:
 
-- **Discovery** ≈ `(S + C/100) / 30` minutes. (Each shard needs a count query; each page returns 100 repos. Planning adds extra count queries while bisecting.)
+- **Discovery** ≈ `(plan probes + pages) / throughput` on the GraphQL points meter with `discovery_concurrency` workers (32 by default). Count probes batch 20 per query at 1 point each; each page is one search connection. Measured 2026-10-08: 8.9 s to plan + 59.0 s to fetch 418 pages / 38,969 repos (`corpus-building-efficient-engineering.md` §9.4). For history, the old REST path cost `(S + C/100) / 30` minutes — a count query per shard, one page per 100 repos, planning bisection extra — but that arithmetic is no longer the shipped engine.
 - **Hydration** ≈ `C / (20 × 1)` GraphQL points ≈ `C/20 / 5,000` hours with batching; ≈ `C / 5,000` hours without.
 - **Enrichment** ≈ per check: one batched query per `B` repos (≈1 point per 20 repos per check type), or one core call per repo without batching.
 - **Wall clock** = discovery + hydration + enrichment + overhead, and must be < `request_deadline_seconds`, or the run stops partial (incomplete, resumable).
@@ -68,22 +68,24 @@ Time estimates for a run of `C` candidates, `S` shards, batch size `B`:
 
 | Stage | Calls / points | Time (one token) |
 |---|---|---|
-| Discovery | ~1,000 shard counts + ~1,000 pages | ~67 min |
+| Discovery | ~1,000 batched count probes + ~1,000 pages | ~2 min (GraphQL points meter, 32 workers) |
 | Hydration | ~5,000 GraphQL points | ~1 h |
 | Enrichment (2 checks, batched) | ~10,000 points | ~2 h |
-| **Total** | | **~4 h** (inside a 24 h deadline, with headroom for fallbacks) |
+| **Total** | | **~3 h** (inside a 24 h deadline, with headroom for fallbacks) |
 
 With batching off, the same run would need ~20 h of core for hydration alone and would likely abort. That is why the corpus preset keeps batching on.
 
-**Measured (2026-10-06/07, run #9).** A live run found 38,833 repos and hydrated all of them in 1,942 GraphQL requests — 0 REST fallbacks, 0 unresolved — at roughly 2,800 repos/min with concurrency 10 (sequential REST was ~300–400/min). Hydrate + local filters took ~25 min including per-repo writes; the resumed attempt took 78 min end-to-end, dominated by re-planning and page fetching at the 30/min search cap. The 100,000-repo estimates above are therefore conservative, not aspirational.
+**Measured (2026-10-06/07, run #9).** A live run found 38,833 repos and hydrated all of them in 1,942 GraphQL requests — 0 REST fallbacks, 0 unresolved — at roughly 2,800 repos/min with concurrency 10 (sequential REST was ~300–400/min). Hydrate + local filters took ~25 min including per-repo writes; the resumed attempt took 78 min end-to-end, dominated by re-planning and page fetching at the 30/min search cap. (Discovery in that run was the REST path; the GraphQL engine replaced it on 2026-10-08 — next paragraph.) The 100,000-repo estimates above are therefore conservative, not aspirational.
+
+**Measured (2026-10-08, GraphQL discovery engine).** The run-#9 filter's shard-and-fetch (38,969 unique repos) planned in 8.9 s (111 count probes in 9 batched queries → 56 shards) and fetched 418 pages in 59.0 s with `discovery_concurrency=32` — 67.9 s total, 0 retries, ~430–500 GraphQL points (~10% of the hourly budget), REST search untouched. The discovery line in the 100,000-repo estimate above is an extrapolation from that operating point. Full ledger: `corpus-building-efficient-engineering.md` §9.4.
 
 ## 5. The presets
 
-| Preset | shards | candidates | hydrate | enrich | deadline | batch | size | concurrent | Use when |
-|---|---|---|---|---|---|---|---|---|---|
-| **Interactive (default)** | 10 | 500 | 200 | 100 | 3,600 | on | 20 | 10 | Exploring a filter; results in minutes |
-| **Corpus build (the button)** | 1,000 | 100,000 | 100,000 | 100,000 | 86,400 | on | 20 | 10 | A real corpus on one token, overnight (~4 h of budget) |
-| **Multi-token scale-up (documented, no button)** | 10,000 | 1,000,000 | 1,000,000 | 1,000,000 | 86,400 | on | 20 | 10/token | Only with 5–10 tokens; single-token 1M runs exceed the deadline and abort incomplete |
+| Preset | shards | candidates | hydrate | enrich | deadline | batch | size | concurrent | discovery | Use when |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Interactive (default)** | 10 | 500 | 200 | 100 | 3,600 | on | 20 | 10 | 32 | Exploring a filter; results in minutes |
+| **Corpus build (the button)** | 1,000 | 100,000 | 100,000 | 100,000 | 86,400 | on | 20 | 10 | 32 | A real corpus on one token, overnight (~3 h of budget) |
+| **Multi-token scale-up (documented, no button)** | 10,000 | 1,000,000 | 1,000,000 | 1,000,000 | 86,400 | on | 20 | 10/token | 32 | Only with 5–10 tokens; single-token 1M runs exceed the deadline and abort incomplete |
 
 The **corpus-build preset replaced the old "maximum" preset** (which set every field to its upper bound: 10,000 shards, 1M everywhere, 100 concurrent). That preset was internally contradictory — it set the concurrency to the ceiling the page warns against, spent hours on shard planning that the candidate cap then threw away, and produced a run that could not finish inside its own deadline on one token.
 

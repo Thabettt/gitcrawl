@@ -117,7 +117,7 @@ Unregister-ScheduledTask -TaskName gitcrawl-redis -Confirm:$false
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://gitcrawl:<pw>@localhost:5433/gitcrawl` | Alembic, app |
 | `TEST_DATABASE_URL` | `postgresql+psycopg://gitcrawl:<pw>@localhost:5433/gitcrawl_test` | DB integration tests (destructive-safe) |
-| `REDIS_URL` | `redis://localhost:6379/0` | limiter / queues at runtime |
+| `REDIS_URL` | `redis://localhost:6379/0` | limiter buckets at runtime |
 | `GITHUB_TOKEN` | OAuth token from the authenticated `gh` CLI keyring | live GitHub calls (fingerprint-only logging) |
 
 **Set/update pattern** (no secret echoed):
@@ -212,8 +212,10 @@ These are the values the **Set to corpus-build limits** button applies; the rang
 
 - `GITCRAWL_GRAPHQL_BATCH_SIZE` env overrides are clamped to 1..20 at settings load (a value above the API cap clamps to 20 instead of failing every run).
 - `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 20)` as the GraphQL batch concurrency. The corpus preset's 10 ran ~2,800 repos/min live, against ~300–400 sequential.
+- `GITCRAWL_DISCOVERY_CONCURRENCY` is the discovery pool size: each run plans shards with batched GraphQL count probes, then fetches pages with one GraphQL search connection per worker. Default and corpus value 32 — the measured operating point (`design/corpus-building-efficient-engineering.md` §9.4).
 
-A corpus run occupies the single executor for its whole duration; run it overnight. The run page
+A corpus run occupies the single executor for its whole duration; within it, discovery fetches
+pages from the 32-worker pool before hydration begins. Run it overnight. The run page
 shows live phase/done/total/ETA counters (migrations 0010/0011), but those are display-only, not
 checkpoints — a resume still re-fetches from the start. A running search can be stopped (status
 `cancelled`, shown as "Stopped") and resumed later; failed, partial, and cancelled runs are all

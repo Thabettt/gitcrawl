@@ -2,7 +2,7 @@
 
 **Purpose**: durable, committed record of what has been done, decided, and is next — so nothing is lost when a session, tool, or the temporary SDD workspace disappears. Environment details live in `environment.md`.
 
-**Updated**: 2026-10-07 (planner fix, parallel hydration, run controls) · **Branch**: `main` · **HEAD**: `c99ee13`
+**Updated**: 2026-10-08 (GraphQL two-phase discovery engine) · **Branch**: `graphql-discovery` · **HEAD**: `61121c2`
 
 ## Objective (frozen 2026-09-30)
 
@@ -349,3 +349,26 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Hydration per-repo DB writes are still the slow tail of a corpus run (batching the writes is proposed; the live run spent ~25 min in hydrate + filter).
 - Warnings are not persisted to the DB — they live on the run payload/bundle only, so the run history cannot re-render them once the bundle is gone.
 - Closed this session: retry sleeps are now deadline-bounded, and credentialed requests are allowlisted to GitHub hosts.
+
+## GraphQL discovery engine (2026-10-08)
+
+**Scope:** twelve commits on `graphql-discovery` (base `78e766b`): `76899fb` (measurement, spec, plan), `a9c1e46` (shared REST helpers to `lib.gh_client`), `99e20f6`/`b1ab600` (GraphQL search client: batched counts + parallel pages), `021218e`/`6d9437d` (level-batched `plan_shards`), `7b4ca68` (`discovery_concurrency`, migration `0012`), `b3cbb70` (pipeline rewrite with parallel shard executor), `c9700e0` (graceful deadline paths), `c1b7350` (delete Redis shard queue + REST search paging), `dd696de`/`61121c2` (GraphQL totals in audit, SLO `graphql_remaining`). Spec: `docs/superpowers/specs/2026-10-08-graphql-discovery-design.md`; plan: `docs/superpowers/plans/2026-10-08-graphql-discovery.md`.
+
+**What shipped**
+
+- Discovery is two-phase and rides the GraphQL points meter: a batched planner probes `repositoryCount` for up to 20 date windows per query (1 point per query) and bisects until every shard is fetchable; the executor fetches shards with one search connection per page from a `ThreadPoolExecutor(discovery_concurrency)` pool (default 32). The 1,000-result cap and `max_pages` semantics are unchanged; `since` scan and org/user enumeration stay on REST.
+- New `src/discover/graphql_search.py`; `plan_shards` replaces the `ShardPlanner` class; `discover/search_shards.py` is deleted; `RequestFailed`/`short_message`/`next_link` moved to `lib/gh_client.py`.
+- Redis Streams shard queue, `ShardQueue`/`RetryOutcome`/`reclaim_stale`/`retry_or_dlq`/PEL metrics deleted (R58); retry/backoff is inline per page; Stop/deadline leave in-flight shards PENDING.
+- Setting `discovery_concurrency` (default 32, bounds 1–64, env `GITCRAWL_DISCOVERY_CONCURRENCY`) + migration `0012`; corpus preset 32.
+- Audit records `repositoryCount` as `total_count` for GraphQL search rows; the SLO is renamed `search_remaining` → `graphql_remaining` (latest `rl_resource='graphql'` audit row), and the queue card is removed.
+
+**Measured ledger (the 2026-10-08 spike the engine was built from; one personal token)** — run-#9 filter (`language:rust stars:>=4 created:>=2025-02-24`): plan 111 probes in 9 batched queries → 56 shards in **8.9 s**; fetch 418 pages (32 in flight) → **38,969 unique ids in 59.0 s**; **67.9 s total, 0 retries/failures, ~430–500 GraphQL points (~10% of the hourly budget)**; 99.93% overlap (17,782/17,795) with the prior REST run's exported survivors. Full ledger: `design/corpus-building-efficient-engineering.md` §9.4. The engine's own live end-to-end validation is the plan's Task 9 (pending).
+
+**Rulings**
+
+- Queue deleted per R58 — dead code is a trap; the deleted work is recoverable from git.
+- `max_pages` semantics kept exactly (spec §11); the 1,000-result cap unchanged.
+- One personal token; no apps and no token-sharing — 32 workers of GitHub's documented 100-concurrent ceiling, with the setting as the single watchpoint.
+- The §9.4 "measured, not built" caveat is resolved: the engine is built; only the live validation run (Task 9) remains.
+
+**Verification:** full suite `1425 passed, 1 warning` at the Task 7 head; `ruff check src tests`, `black --check src tests`, and bare `mypy` clean. This entry lands with `docs: sync discovery docs with the graphql engine`.
