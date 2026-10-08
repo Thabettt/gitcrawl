@@ -279,12 +279,13 @@ class _Worker:
                     self._stop_for_deadline()
                     self._store.set_state(shard_id, ShardState.PENDING)
                     return
+                upserted = upsert_repos(self._deps.engine, dedupe_items(page.items))
                 with self._lock:
                     self._stats.pages += 1
                     self._stats.fetched += len(page.items)
                     fetched += len(page.items)
                     last_total = page.repository_count
-                    _fold(self._stats, upsert_repos(self._deps.engine, dedupe_items(page.items)))
+                    _fold(self._stats, upserted)
                     _collect_ids(self._seen, self._collected, page.items)
                     if page.exhausted:
                         self._stats.page_capped_shards += 1

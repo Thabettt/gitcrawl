@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from datetime import date
 from urllib.parse import parse_qs, urlparse
@@ -193,6 +194,38 @@ def test_search_discovery_fetches_shards_in_parallel_and_dedupes(clean: Engine):
         assert states == {"done": 2}
         assert connection.scalar(text("SELECT count(*) FROM repos")) == 3
         assert connection.scalar(text("SELECT count(*) FROM audit_log")) == len(requests) == 5
+
+
+def test_page_upserts_do_not_serialize_on_the_worker_lock(clean: Engine, monkeypatch):
+    real_upsert = pipeline.upsert_repos
+    guard = threading.Lock()
+    state = {"current": 0, "peak": 0}
+
+    def slow_upsert(engine, items, **kwargs):
+        with guard:
+            state["current"] += 1
+            state["peak"] = max(state["peak"], state["current"])
+        time.sleep(0.25)
+        try:
+            return real_upsert(engine, items, **kwargs)
+        finally:
+            with guard:
+                state["current"] -= 1
+
+    monkeypatch.setattr(pipeline, "upsert_repos", slow_upsert)
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(
+                request, 1500 if span_days(search_query_of(request)) > 4000 else 500
+            )
+        return page_payload([1000], total=1)
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
+
+    assert stats.shards == 2
+    assert state["peak"] >= 2
 
 
 def test_planner_targets_created_windows_from_the_page_budget(clean: Engine):
