@@ -429,6 +429,40 @@ def test_graphql_audit_hook_leaves_total_count_none_without_counts(clean: Engine
     assert scalar(clean, "SELECT total_count FROM audit_log") is None
 
 
+def test_graphql_audit_hook_parses_the_body_once(clean: Engine, monkeypatch):
+    deps = make_deps(clean, scripted_client(lambda request: httpx.Response(500), []))
+    hook = pipeline._graphql_audit_hook(deps)
+    response = page_payload([], total=250)
+    calls = {"n": 0}
+    original_json = response.json
+
+    def counting_json():
+        calls["n"] += 1
+        return original_json()
+
+    monkeypatch.setattr(response, "json", counting_json)
+
+    hook(response, 12.0, {"q": "topic:ai", "after": None})
+
+    assert calls["n"] == 1
+    cached = audit_module.cached_json(response)
+    assert cached is not None
+    assert cached["data"]["s"]["repositoryCount"] == 250
+
+
+def test_graphql_audit_hook_falls_back_to_alias_zero_when_page_count_invalid(clean: Engine):
+    deps = make_deps(clean, scripted_client(lambda request: httpx.Response(500), []))
+    hook = pipeline._graphql_audit_hook(deps)
+    response = httpx.Response(
+        200,
+        json={"data": {"s": {"repositoryCount": None}, "s0": {"repositoryCount": 42}}},
+    )
+
+    hook(response, 8.0, {"q": "topic:ai", "after": None})
+
+    assert scalar(clean, "SELECT total_count FROM audit_log") == 42
+
+
 def test_non_200_count_exhaustion_raises_request_failed(clean: Engine):
     requests: list = []
     sleeps: list[float] = []

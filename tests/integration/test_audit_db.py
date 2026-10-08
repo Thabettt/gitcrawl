@@ -265,3 +265,9 @@ def test_slo_snapshot_graphql_remaining_ignores_other_resources(clean: Engine):
     record_audit(clean, _record(2, rl_resource="search", rl_remaining=88))
     snapshot = slo_snapshot(clean)
     assert snapshot.graphql_remaining == 25
+
+
+def test_slo_snapshot_graphql_remaining_uses_the_latest_graphql_row(clean: Engine):
+    record_audit(clean, _record(0, rl_resource="graphql", rl_remaining=25))
+    record_audit(clean, _record(1, rl_resource="graphql", rl_remaining=19))
+    assert slo_snapshot(clean).graphql_remaining == 19
