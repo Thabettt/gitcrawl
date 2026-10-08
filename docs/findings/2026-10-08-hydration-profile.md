@@ -127,3 +127,27 @@ relatively.
    and free the point budget for larger corpora.
 4. Lower-priority: batch the `apply_hydration` writes to cut the ~50–90 s of SQLAlchemy CPU
    per 39k-repo run.
+
+## Addendum — discovery slot binding fix (2026-10-08)
+
+Fix for the starvation in Part A, proposal 1: `BucketLimiter.bound_concurrency(value)` raises
+the instance's slot ceiling to `max(current, value)` for its body and restores the previous
+cap on exit; `run_search_discovery` wraps planning+fetch in
+`deps.limiter.bound_concurrency(discovery_concurrency)`. Hydration keeps its own
+`min(limiter_max_concurrent, 20)` workers, so the phase binding is a cap, not a target, and
+behavior outside discovery is unchanged.
+
+Confirming re-run with the wired default build path (`build_deps` with
+`max_concurrent=settings.limiter_max_concurrent=10`, pipeline binds the phase to 32),
+same filter and parameters as Part A, stale `active` shard rows repaired first:
+
+| Run | Wall | Plan | Fetch | Shards | Pages | Ids | Avg page | Halving | Incomplete | Page-capped | Plan-capped | Overlap vs spike |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Bound (`build_deps` default 10 slots, phase binds 32) | **109.3 s** | 26.7 s | 82.6 s | 192 | 485 | **39,007** | 80.4 | yes (1.243×) | **0** | 0 | false | 38,965/38,969 = **99.99%** |
+
+- `limiter.max_concurrent` read 10 before the run, 32 inside the binding, and 10 after it, so
+  the context manager raises and restores exactly as specified.
+- 509 audit responses at HTTP 200 and 2 at 502 (adaptive page halving); no `ThrottledError`s.
+  The wired server path now clears the discovery gate that the Part A prescribed row failed.
+- Ids: 39,007 collected (42 ours-only, 4 spike-only against `gql_spike_ids.txt`) — the same
+  search-drift magnitude as the conforming row.

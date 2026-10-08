@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +141,15 @@ class BucketLimiter:
     @property
     def max_concurrent(self) -> int:
         return self._max_concurrent
+
+    @contextmanager
+    def bound_concurrency(self, value: int) -> Iterator[None]:
+        previous = self._max_concurrent
+        self._max_concurrent = max(previous, value)
+        try:
+            yield
+        finally:
+            self._max_concurrent = previous
 
     def _key(self, resource: str, token_id: str) -> str:
         return f"{_KEY_PREFIX}:{resource}:{token_id}"

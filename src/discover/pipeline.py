@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlparse
 
@@ -372,62 +373,67 @@ def run_search_discovery(
     if total_count is not None and total_count > max_shards * target:
         target = 1000
     cancellation.check()
-    try:
-        leaves, plan_capped = plan_shards(
-            query,
-            probe_counts,
-            max_fetchable=target,
-            root_count=total_count,
-            max_shards=max_shards,
-        )
-    except DeadlineExceededError:
-        stats.deadline_hit = True
-        _flush_audit(deps)
-        _log_summary("search", stats)
-        return stats
-    stats.plan_capped = plan_capped
-    shard_ids = [store.create(spec) for spec in leaves]
-    stats.shards = len(shard_ids)
-    progress.report("discovering", 0, stats.shards, **_progress_counters(stats, total_count))
-
-    lock = threading.Lock()
-    stop = threading.Event()
-    seen_ids: set[int] = set()
-    collected_ids: list[int] = []
-    worker = _Worker(
-        deps,
-        stats,
-        lock,
-        stop,
-        seen_ids,
-        collected_ids,
-        hook,
-        max_pages=max_pages,
-        sleep=sleep,
-        now=now,
-        jitter=jitter,
+    limiter = deps.limiter
+    binding = (
+        limiter.bound_concurrency(discovery_concurrency) if limiter is not None else nullcontext()
     )
-    completed = 0
-    with ThreadPoolExecutor(max_workers=discovery_concurrency) as pool:
-        futures = {}
-        for shard_id in shard_ids:
-            if stop.is_set():
-                break
-            context = contextvars.copy_context()
-            futures[pool.submit(context.run, worker.process, shard_id)] = shard_id
-        error: BaseException | None = None
-        for future in as_completed(futures):
-            exc = future.exception()
-            if exc is not None:
-                error = exc
-                pool.shutdown(wait=True, cancel_futures=True)
-                break
-            with lock:
-                completed += 1
-                counters = _progress_counters(stats, total_count)
-            progress.report("discovering", completed, stats.shards, **counters)
-        if error is not None:
-            raise error
+    with binding:
+        try:
+            leaves, plan_capped = plan_shards(
+                query,
+                probe_counts,
+                max_fetchable=target,
+                root_count=total_count,
+                max_shards=max_shards,
+            )
+        except DeadlineExceededError:
+            stats.deadline_hit = True
+            _flush_audit(deps)
+            _log_summary("search", stats)
+            return stats
+        stats.plan_capped = plan_capped
+        shard_ids = [store.create(spec) for spec in leaves]
+        stats.shards = len(shard_ids)
+        progress.report("discovering", 0, stats.shards, **_progress_counters(stats, total_count))
+
+        lock = threading.Lock()
+        stop = threading.Event()
+        seen_ids: set[int] = set()
+        collected_ids: list[int] = []
+        worker = _Worker(
+            deps,
+            stats,
+            lock,
+            stop,
+            seen_ids,
+            collected_ids,
+            hook,
+            max_pages=max_pages,
+            sleep=sleep,
+            now=now,
+            jitter=jitter,
+        )
+        completed = 0
+        with ThreadPoolExecutor(max_workers=discovery_concurrency) as pool:
+            futures = {}
+            for shard_id in shard_ids:
+                if stop.is_set():
+                    break
+                context = contextvars.copy_context()
+                futures[pool.submit(context.run, worker.process, shard_id)] = shard_id
+            error: BaseException | None = None
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc is not None:
+                    error = exc
+                    pool.shutdown(wait=True, cancel_futures=True)
+                    break
+                with lock:
+                    completed += 1
+                    counters = _progress_counters(stats, total_count)
+                progress.report("discovering", completed, stats.shards, **counters)
+            if error is not None:
+                raise error
     stats.repo_ids = tuple(collected_ids)
     _flush_audit(deps)
     _log_summary("search", stats)

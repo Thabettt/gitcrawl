@@ -287,6 +287,38 @@ def test_transient_page_errors_exhausted_mark_the_shard_incomplete(clean: Engine
     assert shard_state(clean, 1) == ("incomplete", True)
 
 
+def test_discovery_binds_limiter_slots_to_discovery_concurrency(clean: Engine):
+    barrier = threading.Barrier(4, timeout=5.0)
+    observed_caps: list[int] = []
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            aliases = re.findall(r"(s\d+): search\(first: 1", graphql_text(request))
+            return count_payload(request, 400 if len(aliases) == 2 else 50)
+        observed_caps.append(limiter.max_concurrent)
+        barrier.wait()
+        return page_payload([])
+
+    limiter = BucketLimiter(fakeredis.FakeRedis(), max_concurrent=1)
+    deps = make_deps(clean, scripted_client(handler, []), limiter=limiter)
+    stats = run_search_discovery(
+        deps,
+        "topic:ai",
+        total_count=400,
+        max_pages=1,
+        max_shards=4,
+        discovery_concurrency=4,
+        sleep=lambda _: None,
+        jitter=lambda: 0.0,
+    )
+
+    assert stats.shards == 4
+    assert stats.pages == 4
+    assert stats.incomplete_shards == 0
+    assert observed_caps == [4, 4, 4, 4]
+    assert limiter.max_concurrent == 1
+
+
 def test_malformed_page_marks_only_that_shard_incomplete(clean: Engine):
     def handler(request: httpx.Request):
         if is_count(request):

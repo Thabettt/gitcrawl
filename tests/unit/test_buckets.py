@@ -191,6 +191,48 @@ def test_custom_max_concurrent(redis):
     assert limiter.acquire("search", "token-a", now=0.0).allowed is False
 
 
+def test_bound_concurrency_raises_the_slot_ceiling_for_the_body(redis):
+    limiter = BucketLimiter(redis, max_concurrent=2)
+    with limiter.bound_concurrency(5):
+        assert limiter.max_concurrent == 5
+        results = [limiter.acquire("core", "token-a", now=0.0) for _ in range(5)]
+        assert all(result.allowed for result in results)
+    assert limiter.max_concurrent == 2
+    assert limiter.acquire("core", "token-b", now=0.0).allowed is True
+    assert limiter.acquire("core", "token-b", now=0.0).allowed is True
+    assert limiter.acquire("core", "token-b", now=0.0).allowed is False
+
+
+def test_bound_concurrency_restores_across_nested_and_repeated_bodies(redis):
+    limiter = BucketLimiter(redis, max_concurrent=2)
+    with limiter.bound_concurrency(5):
+        assert limiter.max_concurrent == 5
+        with limiter.bound_concurrency(8):
+            assert limiter.max_concurrent == 8
+        assert limiter.max_concurrent == 5
+        with limiter.bound_concurrency(3):
+            assert limiter.max_concurrent == 5
+    assert limiter.max_concurrent == 2
+    with limiter.bound_concurrency(5):
+        assert limiter.max_concurrent == 5
+    assert limiter.max_concurrent == 2
+
+
+def test_bound_concurrency_never_lowers_the_current_cap(redis):
+    limiter = BucketLimiter(redis, max_concurrent=10)
+    with limiter.bound_concurrency(4):
+        assert limiter.max_concurrent == 10
+    assert limiter.max_concurrent == 10
+
+
+def test_bound_concurrency_restores_the_cap_after_an_exception(redis):
+    limiter = BucketLimiter(redis, max_concurrent=2)
+    with pytest.raises(RuntimeError):
+        with limiter.bound_concurrency(5):
+            raise RuntimeError("boom")
+    assert limiter.max_concurrent == 2
+
+
 def test_release_floors_at_zero(redis):
     limiter = BucketLimiter(redis)
     limiter.release("search", "token-a")

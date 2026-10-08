@@ -88,7 +88,7 @@ query {
 ## 5. Settings and limits
 
 - New `discovery_concurrency` setting: default **32**, bounds **1–64**, env `GITCRAWL_DISCOVERY_CONCURRENCY`, corpus preset 32, migration `0012` (`ADD COLUMN … NOT NULL DEFAULT 32` + CHECK, no table rewrite beyond the new check), `AppSettings` column, settings page row, `RunSettings`/`RunnerConfig` fields.
-- `limiter_max_concurrent` (default 10) keeps governing hydration; the discovery pool is the only new concurrency knob, which matches the measured operating point (32 of GitHub's documented 100 concurrent-request ceiling).
+- `limiter_max_concurrent` (default 10) keeps governing hydration; the discovery pool is the only new concurrency knob, which matches the measured operating point (32 of GitHub's documented 100 concurrent-request ceiling). During discovery the `graphql` bucket's slot ceiling is raised to `discovery_concurrency` for the phase (a cap, not a target); hydration is unchanged.
 - The `graphql` bucket (5,000 points/hour) meters discovery exactly as it meters hydration; the REST `search` bucket is no longer consumed by discovery.
 
 ## 6. Audit, SLO, metrics
