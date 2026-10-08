@@ -156,6 +156,27 @@ $env:PYTHONPATH = 'src'
 
 `GITCRAWL_HOST` / `GITCRAWL_PORT` override host/port for `python -m serve` (defaults `127.0.0.1:8000`). The console binds localhost only, has no auth (single operator), and never renders secrets.
 
+### Start / restart from bash
+
+Two root scripts bring the whole stack up from Git Bash (they orchestrate the Windows dev services,
+so they do not apply to the Compose/macOS/Linux paths):
+
+```bash
+./start      # ensure Postgres + Redis, apply migrations, launch the server detached
+./restart    # stop the running server, then run the full start flow
+```
+
+- The server runs detached; its PID lives in `%LOCALAPPDATA%\gitcrawl\serve.pid` and stdout/stderr go
+  to `serve.log` / `serve.err.log` in the same folder as `pg.log`. `start` prints the exact log path
+  and a `tail -f` command when it finishes.
+- `start` is idempotent: if the recorded PID is alive it prints the URL and exits 0. It fails early
+  with a clear message when `DATABASE_URL`, `REDIS_URL`, or `GITHUB_TOKEN` are missing, when the venv
+  is absent, or when port 8000 is already taken.
+- Down services are started through the existing `gitcrawl-postgres` / `gitcrawl-redis` scheduled
+  tasks (Redis includes the WSL keeper session) and then polled for up to 30 s.
+- `restart` stops only the app process; Postgres and Redis are checked but not bounced, because the
+  test suites share them.
+
 | Path | What it does |
 |---|---|
 | `/` | Dashboard: health badges, quick find, recent runs |

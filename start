@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# gitcrawl dev launcher: services -> migrations -> detached server.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+PY="$ROOT/.venv/Scripts/python.exe"
+STATE_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/gitcrawl"
+PID_FILE="$STATE_DIR/serve.pid"
+LOG_FILE="$STATE_DIR/serve.log"
+ERR_FILE="$STATE_DIR/serve.err.log"
+PROBE_HOST="127.0.0.1"
+PORT="${GITCRAWL_PORT:-8000}"
+HEALTH="http://$PROBE_HOST:$PORT/health"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+port_open() {
+  "$PY" - "$1" <<'PYEOF'
+import socket
+import sys
+
+try:
+    socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2).close()
+except OSError:
+    sys.exit(1)
+PYEOF
+}
+
+process_alive() {
+  powershell.exe -NoProfile -Command \
+    "if (Get-Process -Id $1 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" \
+    >/dev/null 2>&1
+}
+
+ensure_service() {
+  local name="$1" port="$2" task="$3"
+  if port_open "$port"; then
+    say "$name is up (port $port)"
+    return 0
+  fi
+  say "$name is down - starting scheduled task $task ..."
+  powershell.exe -NoProfile -Command "Start-ScheduledTask -TaskName $task" >/dev/null
+  local _attempt
+  for _attempt in $(seq 1 30); do
+    if port_open "$port"; then
+      say "$name is up (port $port)"
+      return 0
+    fi
+    sleep 1
+  done
+  die "$name did not come up on port $port within 30s - see docs/environment.md"
+}
+
+[[ -x "$PY" ]] || die "missing $PY - create the venv and install requirements (docs/environment.md)"
+for _name in DATABASE_URL REDIS_URL GITHUB_TOKEN; do
+  [[ -n "${!_name:-}" ]] || die "$_name is not set in this shell (docs/environment.md)"
+done
+
+mkdir -p "$STATE_DIR"
+
+if [[ -f "$PID_FILE" ]]; then
+  old_pid="$(tr -d '[:space:]' < "$PID_FILE")"
+  if [[ -n "$old_pid" ]] && process_alive "$old_pid"; then
+    say "gitcrawl is already running (pid $old_pid) at http://$PROBE_HOST:$PORT"
+    say "run ./restart to restart it"
+    exit 0
+  fi
+  rm -f "$PID_FILE"
+fi
+
+if port_open "$PORT"; then
+  die "port $PORT is already in use by another process; stop it or set GITCRAWL_PORT"
+fi
+
+ensure_service "PostgreSQL" 5433 "gitcrawl-postgres"
+ensure_service "Redis" 6379 "gitcrawl-redis"
+
+say "applying migrations ..."
+PYTHONPATH=src "$PY" -m alembic upgrade head
+
+say "starting the server ..."
+export GC_PY_WIN="$(cygpath -w "$PY")"
+export GC_ROOT_WIN="$(cygpath -w "$ROOT")"
+export GC_LOG_WIN="$(cygpath -w "$LOG_FILE")"
+export GC_ERR_WIN="$(cygpath -w "$ERR_FILE")"
+export GC_PID_WIN="$(cygpath -w "$PID_FILE")"
+ps_script="\$ErrorActionPreference = 'Stop'; \$env:PYTHONPATH = 'src'; \$process = Start-Process -FilePath \$env:GC_PY_WIN -ArgumentList '-m','serve' -WorkingDirectory \$env:GC_ROOT_WIN -WindowStyle Hidden -RedirectStandardOutput \$env:GC_LOG_WIN -RedirectStandardError \$env:GC_ERR_WIN -PassThru; \$process.Id | Out-File -Encoding ascii \$env:GC_PID_WIN"
+powershell.exe -NoProfile -Command "$ps_script" </dev/null
+[[ -s "$PID_FILE" ]] || die "the server process did not start - see $ERR_FILE"
+
+pid="$(tr -d '[:space:]' < "$PID_FILE")"
+for _attempt in $(seq 1 30); do
+  if curl -fsS "$HEALTH" >/dev/null 2>&1; then
+    listener_pid="$(powershell.exe -NoProfile -Command \
+      "(Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess" \
+      </dev/null | tr -d '[:space:]')"
+    if [[ -n "$listener_pid" ]]; then
+      printf '%s\n' "$listener_pid" > "$PID_FILE"
+      pid="$listener_pid"
+    fi
+    say "gitcrawl is up at http://$PROBE_HOST:$PORT (pid $pid)"
+    say "log: $LOG_FILE"
+    say "follow: tail -f \"$LOG_FILE\""
+    exit 0
+  fi
+  if ! process_alive "$pid"; then
+    say "server process $pid exited during startup - last errors:"
+    tail -n 20 "$ERR_FILE" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 1
+done
+
+say "server did not answer $HEALTH within 30s - last errors:"
+tail -n 20 "$ERR_FILE" 2>/dev/null || true
+exit 1
