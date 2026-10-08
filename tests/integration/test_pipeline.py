@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 import lib.audit as audit_module
+from discover import pipeline
 from discover.pipeline import (
     Deps,
     DiscoveryStats,
@@ -25,7 +26,7 @@ from discover.pipeline import (
     run_since_scan,
 )
 from lib import cancellation
-from lib.deadlines import Deadline
+from lib.deadlines import Deadline, DeadlineExceededError
 from lib.gh_client import RequestFailed
 from limiter.buckets import BucketLimiter
 
@@ -301,6 +302,38 @@ def test_expired_deadline_leaves_shards_pending(clean: Engine):
     assert stats.fetched == 0
     assert stats.deadline_hit is True
     assert shard_state(clean, 1) == ("pending", False)
+
+
+def test_mid_fetch_deadline_leaves_the_shard_pending(clean: Engine):
+    clock = [0.0]
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 50)
+        clock[0] = 6.0
+        return httpx.Response(503, json={"message": "server error"})
+
+    limiter = BucketLimiter(fakeredis.FakeRedis())
+    limiter.bind_deadline(Deadline(10.0, clock=lambda: clock[0]))
+    deps = make_deps(clean, scripted_client(handler, []), limiter=limiter)
+    stats = run_search_discovery(deps, "topic:ai", sleep=lambda _: None, jitter=lambda: 0.0)
+
+    assert stats.deadline_hit is True
+    assert stats.fetched == 0
+    assert stats.incomplete_shards == 0
+    assert shard_state(clean, 1) == ("pending", False)
+
+
+def test_deadline_during_planning_returns_partial_stats(clean: Engine, monkeypatch):
+    def raise_deadline(*args, **kwargs):
+        raise DeadlineExceededError(5.0)
+
+    monkeypatch.setattr(pipeline, "count_queries", raise_deadline)
+    deps = make_deps(clean, scripted_client(lambda request: httpx.Response(500), []))
+    stats = run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
+
+    assert stats == DiscoveryStats(deadline_hit=True)
+    assert scalar(clean, "SELECT count(*) FROM shards") == 0
 
 
 def test_cancellation_mid_page_leaves_the_shard_pending(clean: Engine):

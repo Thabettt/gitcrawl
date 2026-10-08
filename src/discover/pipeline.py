@@ -16,6 +16,7 @@ from discover.graphql_search import count_queries, iter_pages
 from discover.org_enum import iter_org_repos, iter_user_repos
 from discover.since_scan import iter_since_pages, save_checkpoint
 from lib import audit, cancellation, progress
+from lib.deadlines import DeadlineExceededError
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
 from limiter.buckets import BucketLimiter
 from scheduler.shard_planner import plan_shards
@@ -274,6 +275,10 @@ class _Worker:
         except cancellation.RunCancelled:
             self._store.set_state(shard_id, ShardState.PENDING)
             raise
+        except DeadlineExceededError:
+            self._stop_for_deadline()
+            self._store.set_state(shard_id, ShardState.PENDING)
+            return
         except BaseException:
             try:
                 self._store.set_state(
@@ -331,13 +336,19 @@ def run_search_discovery(
     if total_count is not None and total_count > max_shards * target:
         target = 1000
     cancellation.check()
-    leaves, plan_capped = plan_shards(
-        query,
-        probe_counts,
-        max_fetchable=target,
-        root_count=total_count,
-        max_shards=max_shards,
-    )
+    try:
+        leaves, plan_capped = plan_shards(
+            query,
+            probe_counts,
+            max_fetchable=target,
+            root_count=total_count,
+            max_shards=max_shards,
+        )
+    except DeadlineExceededError:
+        stats.deadline_hit = True
+        _flush_audit(deps)
+        _log_summary("search", stats)
+        return stats
     stats.plan_capped = plan_capped
     shard_ids = [store.create(spec) for spec in leaves]
     stats.shards = len(shard_ids)
