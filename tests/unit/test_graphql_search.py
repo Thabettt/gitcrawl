@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from discover.graphql_search import count_queries, iter_pages, node_to_item
+from lib.gh_client import RequestFailed
 from lib.graphql_batch import GraphQLAuthError
 
 GRAPHQL_URL = "https://api.github.com/graphql"
@@ -103,6 +104,124 @@ def test_iter_pages_follows_cursor_and_caps_pages():
     first, second = (json.loads(r.content) for r in captured)
     assert "after" not in first["query"] and 'after: "c1"' in second["query"]
     assert "first: 100" in first["query"]
+
+
+def test_page_timeout_halves_size_and_replays_the_same_cursor():
+    captured = []
+    payloads = [
+        page_payload([node()] * 100, count=500, has_next=True, cursor="c1"),
+        httpx.Response(502),
+        page_payload([node()] * 50, count=500),
+    ]
+    pages = list(
+        iter_pages(
+            graphql_client(payloads, captured),
+            "q",
+            sleep=lambda _: None,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+    )
+    assert [len(page.items) for page in pages] == [100, 50]
+    queries = [json.loads(request.content)["query"] for request in captured]
+    assert len(queries) == 3
+    assert "s: search(first: 100," in queries[0] and "after" not in queries[0]
+    assert "s: search(first: 100," in queries[1] and 'after: "c1"' in queries[1]
+    assert "s: search(first: 50," in queries[2] and 'after: "c1"' in queries[2]
+
+
+def test_page_size_stays_halved_for_later_pages():
+    captured = []
+    payloads = [
+        httpx.Response(502),
+        page_payload([node()] * 50, count=500, has_next=True, cursor="c1"),
+        page_payload([node()] * 50, count=500),
+    ]
+    pages = list(
+        iter_pages(
+            graphql_client(payloads, captured),
+            "q",
+            sleep=lambda _: None,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+    )
+    assert [len(page.items) for page in pages] == [50, 50]
+    queries = [json.loads(request.content)["query"] for request in captured]
+    assert "s: search(first: 100," in queries[0]
+    assert "s: search(first: 50," in queries[1] and "after" not in queries[1]
+    assert "s: search(first: 50," in queries[2] and 'after: "c1"' in queries[2]
+
+
+def test_page_timeouts_at_the_floor_raise_request_failed():
+    captured = []
+    payloads = [httpx.Response(502), httpx.Response(502), httpx.Response(502)]
+    with pytest.raises(RequestFailed) as excinfo:
+        list(
+            iter_pages(
+                graphql_client(payloads, captured),
+                "q",
+                sleep=lambda _: None,
+                now=lambda: 1000.0,
+                jitter=lambda: 0.0,
+            )
+        )
+    assert excinfo.value.status == 502
+    assert "minimum page size" in excinfo.value.message
+    queries = [json.loads(request.content)["query"] for request in captured]
+    assert len(queries) == 3
+    assert "s: search(first: 100," in queries[0]
+    assert "s: search(first: 50," in queries[1]
+    assert "s: search(first: 25," in queries[2]
+
+
+def test_item_budget_marks_a_truncated_shard_exhausted():
+    captured = []
+    payloads = [
+        page_payload([node()] * 100, count=500, has_next=True, cursor="c1"),
+        page_payload([node()] * 50, count=500, has_next=True, cursor="c2"),
+    ]
+    pages = list(
+        iter_pages(
+            graphql_client(payloads, captured),
+            "q",
+            max_pages=2,
+            sleep=lambda _: None,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+    )
+    assert [page.exhausted for page in pages] == [False, True]
+    assert len(captured) == 2
+
+
+def test_item_budget_is_preserved_when_pages_are_halved():
+    captured = []
+    payloads = [
+        page_payload([node()] * 100, count=500, has_next=True, cursor="c1"),
+        httpx.Response(504),
+        page_payload([node()] * 50, count=500, has_next=True, cursor="c2"),
+        page_payload([node()] * 50, count=500, has_next=True, cursor="c3"),
+    ]
+    pages = list(
+        iter_pages(
+            graphql_client(payloads, captured),
+            "q",
+            max_pages=2,
+            sleep=lambda _: None,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+    )
+    assert [page.exhausted for page in pages] == [False, False, True]
+    queries = [json.loads(request.content)["query"] for request in captured]
+    sizes = [
+        100 if "s: search(first: 100," in query else 50 if "s: search(first: 50," in query else 0
+        for query in queries
+    ]
+    assert sizes == [100, 100, 50, 50]
+    assert 'after: "c1"' in queries[1] and 'after: "c1"' in queries[2]
+    assert 'after: "c2"' in queries[3]
 
 
 def test_count_queries_batches_twenty_aliases_in_one_request():

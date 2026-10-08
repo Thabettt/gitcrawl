@@ -311,7 +311,7 @@ def test_mid_fetch_deadline_leaves_the_shard_pending(clean: Engine):
         if is_count(request):
             return count_payload(request, 50)
         clock[0] = 6.0
-        return httpx.Response(503, json={"message": "server error"})
+        return httpx.Response(429, headers={"retry-after": "6"}, json={"message": "slow down"})
 
     limiter = BucketLimiter(fakeredis.FakeRedis())
     limiter.bind_deadline(Deadline(10.0, clock=lambda: clock[0]))

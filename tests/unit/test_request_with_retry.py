@@ -85,6 +85,25 @@ def test_service_unavailable_backs_off_then_retries():
     assert sleeps == [60.0]
 
 
+def test_retry_5xx_false_returns_the_error_after_one_request_without_sleep():
+    captured = []
+    sleeps = []
+    responses = [httpx.Response(502, json={"message": "server error"})]
+    client = client_from(responses, captured)
+    response = request_with_retry(
+        client,
+        "GET",
+        SEARCH_URL,
+        retry_5xx=False,
+        sleep=sleeps.append,
+        now=lambda: 1000.0,
+        jitter=lambda: 0.0,
+    )
+    assert response.status_code == 502
+    assert len(captured) == 1
+    assert sleeps == []
+
+
 def test_unauthorized_fails_loud_without_sleep_or_retry():
     captured = []
     sleeps = []

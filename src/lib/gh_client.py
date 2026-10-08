@@ -53,6 +53,7 @@ def create_client(token: str | None = None, *, timeout: float = 30.0) -> httpx.C
 
 
 _TRIAGE_STATUSES = frozenset({403, 429, 422, 500, 502, 503, 504})
+_SERVER_ERROR_STATUSES = frozenset({500, 502, 503, 504})
 _RETRYABLE_ACTIONS = frozenset({Action.RETRY_AFTER, Action.WAIT_RESET, Action.BACKOFF})
 _BODY_FALLBACK_CHARS = 300
 
@@ -160,6 +161,7 @@ def request_with_retry(
     now: Callable[[], float] = time.time,
     jitter: Callable[[], float] | None = None,
     on_response: Callable[[httpx.Response, float], None] | None = None,
+    retry_5xx: bool = True,
 ) -> httpx.Response:
     resource = resource_for_url(url)
     if auth and not is_api_host(url):
@@ -216,6 +218,8 @@ def request_with_retry(
             on_response(response, latency_ms)
         if limiter is not None:
             limiter.update_from_headers(resource, limiter_key, response.headers, now=now())
+        if not retry_5xx and response.status_code in _SERVER_ERROR_STATUSES:
+            return response
         if _sso_partial_results(response.headers):
             raise PartialResultsError(response)
         if response.status_code not in _TRIAGE_STATUSES:

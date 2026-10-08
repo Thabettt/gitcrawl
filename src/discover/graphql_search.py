@@ -19,6 +19,8 @@ from limiter.buckets import BucketLimiter
 
 MAX_ALIASES = 20
 PAGE_SIZE = 100
+MIN_PAGE_SIZE = 25
+_TIMEOUT_STATUSES = frozenset({502, 504})
 AuditHook = Callable[[httpx.Response, float, Mapping[str, object]], None]
 
 _NODE_FIELDS = """      databaseId
@@ -199,8 +201,8 @@ def node_to_item(node: Mapping[str, object]) -> dict:
     }
 
 
-def _page_query(query: str, after: str | None) -> str:
-    args = [f"first: {PAGE_SIZE}"]
+def _page_query(query: str, after: str | None, size: int = PAGE_SIZE) -> str:
+    args = [f"first: {size}"]
     if after is not None:
         args.append(f"after: {json.dumps(after)}")
     args.append(f"query: {json.dumps(query)}")
@@ -242,7 +244,8 @@ def _post(
     sleep: Callable[[float], None],
     now: Callable[[], float],
     jitter: Callable[[], float] | None,
-) -> tuple[dict, list[str]]:
+    retry_5xx: bool = True,
+) -> tuple[int, dict, list[str]]:
     transport_hook = (
         None
         if on_response is None
@@ -259,11 +262,13 @@ def _post(
         sleep=sleep,
         now=now,
         jitter=jitter,
+        retry_5xx=retry_5xx,
     )
-    if response.status_code == 401:
+    status = int(response.status_code)
+    if status == 401:
         raise GraphQLAuthError("github rejected the token (HTTP 401)")
-    if response.status_code != 200:
-        raise RequestFailed(int(response.status_code), "graphql request failed")
+    if status != 200:
+        return status, {}, []
     body = audit.cached_json(response)
     if body is None:
         try:
@@ -276,7 +281,7 @@ def _post(
     errors = [
         str(entry.get("message")) for entry in body.get("errors") or [] if isinstance(entry, dict)
     ]
-    return (data if isinstance(data, dict) else {}), errors
+    return 200, (data if isinstance(data, dict) else {}), errors
 
 
 def _retry_wait(attempt: int, jitter: Callable[[], float] | None) -> float:
@@ -307,7 +312,7 @@ def _probe_batch(
     attempt = 0
     while True:
         attempt += 1
-        data, errors = _post(
+        status, data, errors = _post(
             client,
             _count_query(pending),
             limiter=limiter,
@@ -318,6 +323,8 @@ def _probe_batch(
             now=now,
             jitter=jitter,
         )
+        if status != 200:
+            raise RequestFailed(status, "graphql request failed")
         missing: list[str] = []
         for index, query in enumerate(pending):
             count = _count_value(data.get(f"s{index}"))
@@ -371,6 +378,7 @@ def _fetch_search(
     query: str,
     after: str | None,
     *,
+    size: int,
     limiter: BucketLimiter | None,
     token_id: str | None,
     on_response: AuditHook | None,
@@ -378,13 +386,12 @@ def _fetch_search(
     now: Callable[[], float],
     jitter: Callable[[], float] | None,
     max_attempts: int,
-) -> tuple[Mapping[str, object], list[str]]:
+) -> tuple[Mapping[str, object], list[str], int]:
     attempt = 0
     while True:
-        attempt += 1
-        data, errors = _post(
+        status, data, errors = _post(
             client,
-            _page_query(query, after),
+            _page_query(query, after, size),
             limiter=limiter,
             token_id=token_id,
             on_response=on_response,
@@ -392,10 +399,19 @@ def _fetch_search(
             sleep=sleep,
             now=now,
             jitter=jitter,
+            retry_5xx=False,
         )
+        if status in _TIMEOUT_STATUSES:
+            if size <= MIN_PAGE_SIZE:
+                raise RequestFailed(502, "graphql page timed out at the minimum page size")
+            size = max(MIN_PAGE_SIZE, size // 2)
+            continue
+        if status != 200:
+            raise RequestFailed(status, "graphql request failed")
+        attempt += 1
         search = data.get("s")
         if isinstance(search, Mapping):
-            return search, errors
+            return search, errors, size
         if errors and not any(is_transient_error(message) for message in errors):
             raise RequestFailed(200, errors[0])
         if attempt >= max_attempts:
@@ -417,12 +433,15 @@ def iter_pages(
     jitter: Callable[[], float] | None = None,
     max_attempts: int = 3,
 ) -> Iterator[SearchPage]:
+    budget = max_pages * PAGE_SIZE
+    size = PAGE_SIZE
     after: str | None = None
-    for page_number in range(1, max_pages + 1):
-        search, errors = _fetch_search(
+    while budget > 0:
+        search, errors, size = _fetch_search(
             client,
             query,
             after,
+            size=size,
             limiter=limiter,
             token_id=token_id,
             on_response=on_response,
@@ -431,6 +450,7 @@ def iter_pages(
             jitter=jitter,
             max_attempts=max_attempts,
         )
+        budget -= size
         repository_count = _as_int(search.get("repositoryCount")) or 0
         page_info = search.get("pageInfo")
         info = page_info if isinstance(page_info, Mapping) else {}
@@ -440,7 +460,7 @@ def iter_pages(
         entries = nodes if isinstance(nodes, list) else []
         items = tuple(node_to_item(entry) for entry in entries if isinstance(entry, Mapping))
         incomplete = bool(errors)
-        exhausted = has_next and page_number >= max_pages
+        exhausted = has_next and budget <= 0
         yield SearchPage(
             query=query,
             items=items,
