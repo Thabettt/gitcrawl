@@ -767,7 +767,6 @@ def run_filter(
     spec: FilterSpec,
     *,
     config: RunnerConfig | None = None,
-    queue_prefix: str | None = None,
 ) -> RunPayload:
     cfg = config or RunnerConfig()
     if deps.limiter is not None:
@@ -778,7 +777,7 @@ def run_filter(
         )
         deps.limiter.bind_deadline(Deadline(seconds))
     try:
-        return _run_filter(deps, spec, config=config, queue_prefix=queue_prefix)
+        return _run_filter(deps, spec, config=config)
     finally:
         if deps.limiter is not None:
             deps.limiter.bind_deadline(None)
@@ -791,7 +790,6 @@ def _run_filter(
     spec: FilterSpec,
     *,
     config: RunnerConfig | None = None,
-    queue_prefix: str | None = None,
 ) -> RunPayload:
     cfg = config or RunnerConfig()
     virtual = dict(spec.virtual)
@@ -804,24 +802,14 @@ def _run_filter(
         max_shards=cfg.max_shards,
         max_pages=spec.max_pages,
         total_count=total_count,
-        queue_prefix=queue_prefix,
+        discovery_concurrency=cfg.discovery_concurrency,
     )
     if stats.incomplete_shards > 0:
         warnings.append(
             f"{stats.incomplete_shards} discovery shard(s) incomplete; results are partial"
         )
-    if stats.deferred_shards > 0:
-        warnings.append(
-            f"{stats.deferred_shards} discovery shard(s) deferred for retry; "
-            "results are incomplete until this search is resumed"
-        )
     if stats.deadline_hit:
         warnings.append("the run deadline was reached during discovery; results are incomplete")
-    if stats.cap_splits > 0:
-        warnings.append(
-            f"{stats.cap_splits} discovery shard(s) exceeded GitHub's result cap and were "
-            "split; results are incomplete until the narrower shards finish"
-        )
     if stats.page_capped_shards > 0:
         warnings.append(
             f"{stats.page_capped_shards} discovery shard(s) hit the page cap "

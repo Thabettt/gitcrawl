@@ -292,9 +292,23 @@ def test_max_shards_caps_the_plan_to_the_oldest_leaves():
     probe, _ = probe_from(uniform_count(per_day=500))
 
     specs, capped = plan_shards(
-        "q", probe, min_date=MIN_DATE, max_shards=3, now=datetime(2020, 1, 3, tzinfo=UTC)
+        "q", probe, min_date=MIN_DATE, max_shards=3, now=datetime(2020, 1, 4, tzinfo=UTC)
     )
     assert capped is True
+    assert [spec.range_start.date() for spec in specs] == [
+        MIN_DATE,
+        MIN_DATE + timedelta(days=1),
+        MIN_DATE + timedelta(days=2),
+    ]
+
+
+def test_plan_capped_false_on_exact_fill():
+    probe, _ = probe_from(uniform_count(per_day=500))
+
+    specs, capped = plan_shards(
+        "q", probe, min_date=MIN_DATE, max_shards=3, now=datetime(2020, 1, 3, tzinfo=UTC)
+    )
+    assert capped is False
     assert [spec.range_start.date() for spec in specs] == [
         MIN_DATE,
         MIN_DATE + timedelta(days=1),

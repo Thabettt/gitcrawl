@@ -9,7 +9,6 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import cast
-from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -342,17 +341,6 @@ class _LazyLoaders:
             return value
 
 
-def _shard_queue_prefix(run_id: int) -> str:
-    """Scope shard queue keys per run so runs never reclaim each other's shards.
-
-    Persisted runs keep a stable prefix so resuming a failed run can reclaim its
-    own interrupted deliveries; ad-hoc (vsearch) runs get an isolated prefix.
-    """
-    if run_id > 0:
-        return f"gitcrawl:shards:run:{run_id}"
-    return f"gitcrawl:shards:adhoc:{uuid4().hex}"
-
-
 def create_app(
     *,
     engine: Engine | None = None,
@@ -405,13 +393,11 @@ def create_app(
 
                 settings = load_run_settings(engine_for())
                 deps = build_deps(engine_for(), max_concurrent=settings.limiter_max_concurrent)
-                queue_prefix = _shard_queue_prefix(run_id)
                 try:
                     return run_filter(
                         deps,
                         parse_filter_spec(filter_spec),
                         config=runner_config_from(settings),
-                        queue_prefix=queue_prefix,
                     )
                 finally:
                     deps.client.close()

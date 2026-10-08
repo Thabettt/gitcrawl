@@ -10,8 +10,8 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from discover.graphql_search import iter_pages
 from discover.pipeline import Deps, run_org_enum
-from discover.search_shards import iter_shard_pages
 from discover.since_scan import iter_since_pages
 from lib.gh_client import build_headers, token_fingerprint
 from lib.qualify import validate
@@ -51,12 +51,11 @@ def _stored_github_repos(engine: Engine) -> tuple[set[int], list[str]]:
 
 def _search_ids(deps: Deps) -> set[int]:
     found: set[int] = set()
-    for page in iter_shard_pages(
+    for page in iter_pages(
         deps.client,
         SEARCH_QUERY,
         limiter=deps.limiter,
         token_id=deps.token_fp,
-        per_page=100,
         max_pages=10,
     ):
         found.update(item["id"] for item in page.items if isinstance(item.get("id"), int))

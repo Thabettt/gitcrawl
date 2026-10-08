@@ -3,15 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
-from serve.app import _LazyLoaders, _shard_queue_prefix, create_app
-
-
-def test_shard_queue_prefix_is_stable_per_run_and_unique_for_adhoc():
-    assert _shard_queue_prefix(7) == "gitcrawl:shards:run:7"
-    first = _shard_queue_prefix(0)
-    second = _shard_queue_prefix(0)
-    assert first.startswith("gitcrawl:shards:adhoc:")
-    assert first != second
+from serve.app import _LazyLoaders, create_app
 
 
 def test_lazy_loader_constructs_once_under_concurrency():

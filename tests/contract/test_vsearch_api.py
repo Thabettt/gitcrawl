@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import fakeredis
 import httpx
@@ -18,8 +20,7 @@ from serve.executor import RunPayload, RunPayloadItem, create_run, execute_run
 from serve.filter_spec import parse_filter_spec, spec_hash, spec_to_dict
 from serve.runner import RunnerConfig, build_deps, make_runner
 
-SEARCH_PATH = "/search/repositories"
-SEARCH_HEADERS = {"x-ratelimit-resource": "search"}
+SEARCH_ARG_RE = re.compile(r'query: ("(?:[^"\\]|\\.)*")')
 ITEM_KEYS = {
     "id",
     "full_name",
@@ -171,6 +172,29 @@ def repo_item(repo_id: int, *, login: str = "alice", stars: int = 10, topics=())
         "open_issues_count": 0,
         "default_branch": "main",
         "pushed_at": "2026-01-01T00:00:00Z",
+    }
+
+
+def repo_node(repo_id: int, *, login: str = "alice", stars: int = 10, topics=()) -> dict:
+    return {
+        "databaseId": repo_id,
+        "id": f"R_{repo_id}",
+        "name": f"repo{repo_id}",
+        "nameWithOwner": f"{login}/repo{repo_id}",
+        "owner": {"databaseId": repo_id * 10, "login": login, "__typename": "User"},
+        "primaryLanguage": {"name": "Rust"},
+        "licenseInfo": {"spdxId": "MIT"},
+        "repositoryTopics": {"nodes": [{"topic": {"name": topic}} for topic in topics]},
+        "stargazerCount": stars,
+        "forkCount": 1,
+        "watchers": {"totalCount": 1},
+        "issues": {"totalCount": 0},
+        "defaultBranchRef": {"name": "main"},
+        "pushedAt": "2026-01-01T00:00:00Z",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-01T00:00:00Z",
+        "isArchived": False,
+        "isFork": False,
     }
 
 
@@ -536,22 +560,30 @@ def test_get_never_forwards_unknown_params_upstream(clean: Engine, tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         path = urlparse(str(request.url)).path
-        params = parse_qs(urlparse(str(request.url)).query)
-        if path == SEARCH_PATH:
-            if params.get("per_page") == ["1"]:
-                return httpx.Response(
-                    200,
-                    json={"total_count": 1, "items": [], "incomplete_results": False},
-                    headers=SEARCH_HEADERS,
-                )
+        body = request.content.decode()
+        if path == "/graphql" and "search(first: 1," in body:
             return httpx.Response(
                 200,
                 json={
-                    "total_count": 1,
-                    "items": [repo_item(7001, topics=("rust",))],
-                    "incomplete_results": False,
+                    "data": {
+                        "s0": {"repositoryCount": 1},
+                        "rateLimit": {"cost": 1, "remaining": 100},
+                    }
                 },
-                headers=SEARCH_HEADERS,
+            )
+        if path == "/graphql" and "search(first: 100," in body:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "s": {
+                            "repositoryCount": 1,
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [repo_node(7001, topics=("rust",))],
+                        },
+                        "rateLimit": {"cost": 1, "remaining": 100},
+                    }
+                },
             )
         if path == "/repos/alice/repo7001":
             return httpx.Response(200, json=repo_item(7001, topics=("rust",)))
@@ -585,19 +617,17 @@ def test_get_never_forwards_unknown_params_upstream(clean: Engine, tmp_path):
     assert body["total_count"] == 1
     assert body["items"][0]["has_dockerfile"] is True
     assert body["items"][0]["owner"]["country_iso"] == "DE"
-    for request in requests:
-        parsed = urlparse(str(request.url))
-        raw = str(request.url)
+    search_bodies = [
+        json.loads(request.content)["query"]
+        for request in requests
+        if request.url.path == "/graphql"
+        and "search(first:" in json.loads(request.content)["query"]
+    ]
+    assert search_bodies
+    for raw in [str(request.url) for request in requests] + search_bodies:
         assert "min_stars" not in raw
         assert "team_topic" not in raw
         assert "owner_country" not in raw
         assert "has_dockerfile" not in raw
-        if parsed.path != SEARCH_PATH:
-            continue
-        assert set(parse_qs(parsed.query)) <= {"q", "sort", "order", "per_page", "page"}
-    search_queries = [
-        parse_qs(urlparse(str(request.url)).query).get("q", [""])[0]
-        for request in requests
-        if urlparse(str(request.url)).path == SEARCH_PATH
-    ]
+    search_queries = [json.loads(SEARCH_ARG_RE.search(body).group(1)) for body in search_bodies]
     assert any("stars:>=5" in query and "topic:rust" in query for query in search_queries)

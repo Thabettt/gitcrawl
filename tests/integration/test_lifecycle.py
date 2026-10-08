@@ -9,7 +9,8 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from discover.search_shards import RequestFailed, iter_shard_pages
+from discover.graphql_search import iter_pages
+from discover.search_shards import RequestFailed
 from store.upserts import upsert_repos
 
 
@@ -263,11 +264,19 @@ def test_search_path_never_sends_if_none_match():
         requests.append(request)
         return httpx.Response(
             200,
-            json={"total_count": 0, "items": [], "incomplete_results": False},
-            headers={"x-ratelimit-resource": "search"},
+            json={
+                "data": {
+                    "s": {
+                        "repositoryCount": 0,
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [],
+                    },
+                    "rateLimit": {"cost": 1, "remaining": 1},
+                }
+            },
         )
 
-    assert list(iter_shard_pages(mock_client(handler), "language:python", now=lambda: 1000.0))
+    assert list(iter_pages(mock_client(handler), "language:python", now=lambda: 1000.0))
     assert requests
     assert all("if-none-match" not in request.headers for request in requests)
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import dataclasses
+import json
 import logging
+import re
+import threading
 from collections.abc import Callable
 from datetime import date
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import fakeredis
 import httpx
@@ -17,16 +19,31 @@ import lib.audit as audit_module
 from discover.pipeline import (
     Deps,
     DiscoveryStats,
+    count_total,
     run_org_enum,
     run_search_discovery,
     run_since_scan,
 )
-from discover.search_shards import RequestFailed, iter_shard_pages
-from lib.gh_client import PartialResultsError
-from scheduler.state_machine import ShardQueue
+from lib import cancellation
+from lib.deadlines import Deadline
+from lib.gh_client import RequestFailed
+from limiter.buckets import BucketLimiter
 
-SEARCH_HEADERS = {"x-ratelimit-resource": "search"}
-NEXT_PAGE_BASE = "https://api.github.com/search/repositories"
+SEARCH_ARG_RE = re.compile(r'search\(first: (?P<first>\d+), query: (?P<query>"(?:[^"\\]|\\.)*")')
+
+
+def repo_node(repo_id: int, owner_login: str | None = None) -> dict:
+    login = owner_login or f"owner{repo_id}"
+    return {
+        "databaseId": repo_id,
+        "id": f"R_{repo_id}",
+        "name": f"repo{repo_id}",
+        "nameWithOwner": f"{login}/repo{repo_id}",
+        "owner": {"databaseId": repo_id * 10, "login": login, "__typename": "User"},
+        "createdAt": "2020-01-01T00:00:00Z",
+        "pushedAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }
 
 
 def repo_item(repo_id: int, owner_login: str | None = None) -> dict:
@@ -41,67 +58,68 @@ def repo_item(repo_id: int, owner_login: str | None = None) -> dict:
     }
 
 
-def scalar(engine: Engine, sql: str):
-    with engine.connect() as connection:
-        return connection.scalar(text(sql))
+def graphql_text(request: httpx.Request) -> str:
+    return json.loads(request.content)["query"]
 
 
-def params_of(request: httpx.Request) -> dict[str, list[str]]:
-    return parse_qs(urlparse(str(request.url)).query)
+def search_query_of(request: httpx.Request) -> str:
+    match = SEARCH_ARG_RE.search(graphql_text(request))
+    return json.loads(match.group("query")) if match else ""
 
 
-def q_of(request: httpx.Request) -> str:
-    return params_of(request).get("q", [""])[0]
+def is_count(request: httpx.Request) -> bool:
+    return "search(first: 1," in graphql_text(request)
 
 
-def span_days(query: str) -> int | None:
-    tokens = [token for token in query.split() if token.startswith("created:")]
-    if not tokens:
-        return None
-    start_raw, _, end_raw = tokens[-1][len("created:") :].partition("..")
-    return (date.fromisoformat(end_raw) - date.fromisoformat(start_raw)).days
+def count_payload(request: httpx.Request, total: int) -> httpx.Response:
+    aliases = re.findall(r"(s\d+): search\(first: 1", graphql_text(request))
+    data: dict[str, object] = {alias: {"repositoryCount": total} for alias in aliases}
+    data["rateLimit"] = {"cost": 1, "remaining": 5000}
+    return httpx.Response(200, json={"data": data})
 
 
-def range_start(query: str) -> date | None:
-    tokens = [token for token in query.split() if token.startswith("created:")]
-    if not tokens:
-        return None
-    return date.fromisoformat(tokens[-1][len("created:") :].partition("..")[0])
+def page_payload(
+    items,
+    *,
+    total: int | None = None,
+    has_next: bool = False,
+    cursor: str | None = None,
+    errors: list[dict] | None = None,
+) -> httpx.Response:
+    nodes = [repo_node(item) if isinstance(item, int) else item for item in items]
+    search = {
+        "repositoryCount": len(nodes) if total is None else total,
+        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        "nodes": nodes,
+    }
+    payload: dict[str, object] = {
+        "data": {"s": search, "rateLimit": {"cost": 1, "remaining": 5000}}
+    }
+    if errors:
+        payload["errors"] = errors
+    return httpx.Response(200, json=payload)
 
 
-def count_response(total: int) -> httpx.Response:
-    return httpx.Response(
-        200,
-        json={"total_count": total, "items": [], "incomplete_results": False},
-        headers=SEARCH_HEADERS,
-    )
-
-
-def page_response(items, *, incomplete: bool = False, next_url: str | None = None):
-    headers = dict(SEARCH_HEADERS)
-    if next_url is not None:
-        headers["Link"] = f'<{next_url}>; rel="next"'
+def transient_payload() -> httpx.Response:
     return httpx.Response(
         200,
         json={
-            "total_count": len(items),
-            "items": items,
-            "incomplete_results": incomplete,
+            "data": {"rateLimit": {"cost": 1, "remaining": 5000}},
+            "errors": [{"message": "Something went wrong while executing your query"}],
         },
-        headers=headers,
     )
 
 
-def cap_response() -> httpx.Response:
-    return httpx.Response(
-        422,
-        json={"message": "Only the first 1000 search results are available"},
-        headers=SEARCH_HEADERS,
-    )
+def span_days(query: str) -> int:
+    match = re.search(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", query)
+    if match is None:
+        return 10**9
+    return (date.fromisoformat(match.group(2)) - date.fromisoformat(match.group(1))).days
 
 
-def next_page_url(query: str, page: int) -> str:
-    return f"{NEXT_PAGE_BASE}?{urlencode({'q': query, 'per_page': 100, 'page': page})}"
+def scalar(engine: Engine, sql: str):
+    with engine.connect() as connection:
+        return connection.scalar(text(sql))
 
 
 def scripted_client(
@@ -114,8 +132,14 @@ def scripted_client(
     return httpx.Client(transport=httpx.MockTransport(wrapped))
 
 
-def make_deps(engine: Engine, client: httpx.Client, redis=None, token_fp: str = "test-fp") -> Deps:
-    return Deps(client=client, engine=engine, redis=redis, limiter=None, token_fp=token_fp)
+def make_deps(
+    engine: Engine,
+    client: httpx.Client,
+    *,
+    limiter: BucketLimiter | None = None,
+    token_fp: str = "test-fp",
+) -> Deps:
+    return Deps(client=client, engine=engine, redis=None, limiter=limiter, token_fp=token_fp)
 
 
 def shard_state(engine: Engine, shard_id: int) -> tuple[str, bool]:
@@ -124,13 +148,6 @@ def shard_state(engine: Engine, shard_id: int) -> tuple[str, bool]:
             text("SELECT state, incomplete FROM shards WHERE id = :id"), {"id": shard_id}
         ).one()
     return str(row[0]), bool(row[1])
-
-
-def queue_is_empty(redis) -> bool:
-    queue = ShardQueue(redis)
-    if queue.claim("probe", count=10):
-        return False
-    return not any(redis.xlen(key) > 0 for key in redis.scan_iter("gitcrawl:shards:*"))
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -143,196 +160,75 @@ def clean(clean_db):
     return clean_db()
 
 
-@pytest.fixture()
-def redis():
-    return fakeredis.FakeRedis()
-
-
-def test_search_discovery_bisects_upserts_audits_and_drains_queue(clean: Engine, redis):
+def test_search_discovery_fetches_shards_in_parallel_and_dedupes(clean: Engine):
     requests: list = []
-    page_items: dict[str, list[dict]] = {}
-    next_id = [1000]
-
-    def count_for(query: str) -> int:
-        span = span_days(query)
-        if span is None or span >= 3000:
-            return 2500
-        return 600
+    issued: list[int] = []
+    page_lock = threading.Lock()
 
     def handler(request: httpx.Request):
-        query = q_of(request)
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(count_for(query))
-        if query not in page_items:
-            page_items[query] = [repo_item(next_id[0]), repo_item(next_id[0] + 1)]
-            next_id[0] += 2
-        return page_response(page_items[query])
+        if is_count(request):
+            return count_payload(
+                request, 1500 if span_days(search_query_of(request)) > 4000 else 500
+            )
+        with page_lock:
+            issued.append(len(issued) + 1)
+            index = issued[-1]
+        items = (1000, 1001) if index == 1 else (1001, 1002)
+        return page_payload(items)
 
-    deps = make_deps(clean, scripted_client(handler, requests), redis)
+    deps = make_deps(clean, scripted_client(handler, requests))
     stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(
-        shards=4,
-        pages=4,
-        fetched=8,
-        inserted=8,
-        repo_ids=(1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007),
-    )
+    assert stats.shards == 2
+    assert stats.pages == 2
+    assert stats.fetched == 4
+    assert stats.inserted == 3
+    assert stats.incomplete_shards == 0
+    assert sorted(stats.repo_ids) == [1000, 1001, 1002]
     with clean.connect() as connection:
         states = dict(
             connection.execute(text("SELECT state, count(*) FROM shards GROUP BY state")).all()
         )
-        assert states == {"done": 4}
-        assert connection.scalar(text("SELECT count(*) FROM repos")) == 8
-        assert connection.scalar(text("SELECT count(*) FROM audit_log")) == len(requests) == 11
-        audit = (
-            connection.execute(
-                text("SELECT params, token_fp, query_hash FROM audit_log ORDER BY id LIMIT 1")
-            )
-            .mappings()
-            .one()
-        )
-    assert audit["token_fp"] == "test-fp"
-    assert audit["query_hash"] == audit_module.query_hash(audit["params"])
-    assert audit["params"]["q"] == "language:python"
-    assert audit["params"]["per_page"] == 1
-    page_queries = [
-        q_of(request) for request in requests if params_of(request).get("per_page") == ["100"]
-    ]
-    assert all("created:" in query for query in page_queries)
-    assert queue_is_empty(redis)
+        assert states == {"done": 2}
+        assert connection.scalar(text("SELECT count(*) FROM repos")) == 3
+        assert connection.scalar(text("SELECT count(*) FROM audit_log")) == len(requests) == 5
 
 
-def test_cap_422_splits_shard_into_two_subshards(clean: Engine, redis):
+def test_planner_targets_created_windows_from_the_page_budget(clean: Engine):
     requests: list = []
-    page_requests: list = []
-
-    def count_for(query: str) -> int:
-        if span_days(query) is None:
-            return 1500
-        if range_start(query) == date(2008, 1, 1):
-            return 0
-        return 500
 
     def handler(request: httpx.Request):
-        query = q_of(request)
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(count_for(query))
-        page_requests.append(query)
-        if len(page_requests) == 1:
-            return cap_response()
-        return page_response([repo_item(2000 + len(page_requests))])
+        if is_count(request):
+            query = search_query_of(request)
+            return count_payload(request, 800 if span_days(query) > 4000 else 100)
+        return page_payload(range(2000, 2100), total=100)
 
-    deps = make_deps(clean, scripted_client(handler, requests), redis)
-    stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
+    deps = make_deps(clean, scripted_client(handler, requests))
+    stats = run_search_discovery(deps, "topic:ai", max_pages=3, max_shards=10, jitter=lambda: 0.0)
 
-    assert stats == DiscoveryStats(
-        shards=3,
-        pages=2,
-        fetched=2,
-        inserted=2,
-        cap_splits=1,
-        repo_ids=(2002, 2003),
-    )
-    assert len(page_requests) == 3
-    assert len(set(page_requests)) == 3
-    with clean.connect() as connection:
-        rows = connection.execute(text("SELECT id, state, query FROM shards ORDER BY id")).all()
-        assert [row[1] for row in rows] == ["done", "done", "done"]
-        original = str(rows[0][2])
-        assert rows[1][2] != original and rows[2][2] != original
-        assert connection.scalar(text("SELECT count(*) FROM repos")) == 2
-        assert connection.scalar(text("SELECT count(*) FROM audit_log")) == len(requests) == 6
-    assert page_requests[0] == original
-    assert all("created:" in query for query in page_requests)
-    assert queue_is_empty(redis)
-
-
-def test_incomplete_results_narrow_once_then_mark_incomplete(clean: Engine, redis):
-    requests: list = []
-    page_requests: list[tuple[str, dict]] = []
-
-    def count_for(query: str) -> int:
-        if span_days(query) is None:
-            return 1500
-        if range_start(query) == date(2008, 1, 1):
-            return 0
-        return 500
-
-    def handler(request: httpx.Request):
-        query = q_of(request)
-        params = params_of(request)
-        if params.get("per_page") == ["1"]:
-            return count_response(count_for(query))
-        page_requests.append((query, params))
-        if len(page_requests) == 1:
-            return page_response(
-                [repo_item(3000)], incomplete=True, next_url=next_page_url(query, 2)
-            )
-        if params.get("page") == ["2"]:
-            return page_response([repo_item(3001)], incomplete=True)
-        return page_response([repo_item(3000 + len(page_requests))])
-
-    deps = make_deps(clean, scripted_client(handler, requests), redis)
-    stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
-
-    assert stats == DiscoveryStats(
-        shards=3,
-        pages=4,
-        fetched=4,
-        inserted=4,
-        incomplete_shards=1,
-        repo_ids=(3000, 3001, 3003, 3004),
-    )
+    assert stats.shards == 2
+    assert stats.plan_capped is False
+    assert stats.incomplete_shards == 0
     with clean.connect() as connection:
         rows = connection.execute(
-            text("SELECT id, state, incomplete FROM shards ORDER BY id")
+            text("SELECT query, total_count, state FROM shards ORDER BY id")
         ).all()
-    assert rows[0][1] == "incomplete" and rows[0][2] is True
-    assert rows[1][1] == "done" and rows[2][1] == "done"
-    initial_query = page_requests[0][0]
-    assert [query for query, _ in page_requests].count(initial_query) == 2
-    assert len({query for query, _ in page_requests}) == 3
-    assert scalar(clean, "SELECT count(*) FROM audit_log") == len(requests) == 7
-    assert queue_is_empty(redis)
+    assert len(rows) == 2
+    for query, total_count, state in rows:
+        assert "created:" in query
+        assert total_count == 100
+        assert state == "done"
+    probed = [search_query_of(request) for request in requests if is_count(request)]
+    assert probed and any("created:" in query for query in probed)
 
 
-def test_max_shards_bound_creates_only_cap(clean: Engine, redis):
-    requests: list = []
-    page_requests: list = []
-
-    def count_for(query: str) -> int:
-        return 1600 if span_days(query) is None else 500
-
+def test_page_cap_marks_the_shard_incomplete(clean: Engine):
     def handler(request: httpx.Request):
-        query = q_of(request)
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(count_for(query))
-        page_requests.append(query)
-        return page_response([repo_item(4000 + len(page_requests))])
+        if is_count(request):
+            return count_payload(request, 50)
+        return page_payload([6000], total=50, has_next=True, cursor="c1")
 
-    deps = make_deps(clean, scripted_client(handler, requests), redis)
-    stats = run_search_discovery(deps, "topic:ai", max_shards=1, jitter=lambda: 0.0)
-
-    assert stats == DiscoveryStats(
-        shards=1, pages=1, fetched=1, inserted=1, repo_ids=(4001,), plan_capped=True
-    )
-    assert len(page_requests) == 1
-    assert scalar(clean, "SELECT count(*) FROM shards") == 1
-    assert scalar(clean, "SELECT state FROM shards") == "done"
-    assert queue_is_empty(redis)
-
-
-def test_page_cap_marks_the_shard_incomplete_and_counts_the_capped_page(clean: Engine, redis):
-    requests: list = []
-
-    def handler(request: httpx.Request):
-        query = q_of(request)
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(50)
-        return page_response([repo_item(6000)], next_url=next_page_url(query, 2))
-
-    deps = make_deps(clean, scripted_client(handler, requests), redis)
+    deps = make_deps(clean, scripted_client(handler, []))
     stats = run_search_discovery(deps, "topic:ai", max_pages=1, jitter=lambda: 0.0)
 
     assert stats == DiscoveryStats(
@@ -344,19 +240,122 @@ def test_page_cap_marks_the_shard_incomplete_and_counts_the_capped_page(clean: E
         page_capped_shards=1,
         repo_ids=(6000,),
     )
-    assert scalar(clean, "SELECT state FROM shards") == "incomplete"
+    assert shard_state(clean, 1) == ("incomplete", True)
 
 
-def test_non_object_count_payload_raises_request_failed(clean: Engine):
+def test_transient_page_error_is_retried_then_succeeds(clean: Engine):
+    attempts = {"n": 0}
+
     def handler(request: httpx.Request):
-        return httpx.Response(200, json=[1, 2, 3], headers=SEARCH_HEADERS)
+        if is_count(request):
+            return count_payload(request, 1)
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return transient_payload()
+        return page_payload([7000])
 
     deps = make_deps(clean, scripted_client(handler, []))
-    with pytest.raises(RequestFailed):
-        run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
+    stats = run_search_discovery(
+        deps, "topic:ai", sleep=lambda _: None, now=lambda: 1000.0, jitter=lambda: 0.0
+    )
+
+    assert attempts["n"] == 2
+    assert stats.pages == 1
+    assert stats.fetched == 1
+    assert stats.incomplete_shards == 0
+    assert shard_state(clean, 1) == ("done", False)
 
 
-def test_non_200_exhaustion_raises_request_failed(clean: Engine):
+def test_transient_page_errors_exhausted_mark_the_shard_incomplete(clean: Engine):
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 1)
+        attempts["n"] += 1
+        return transient_payload()
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(
+        deps, "topic:ai", sleep=lambda _: None, now=lambda: 1000.0, jitter=lambda: 0.0
+    )
+
+    assert attempts["n"] == 3
+    assert stats.fetched == 0
+    assert stats.incomplete_shards == 1
+    assert shard_state(clean, 1) == ("incomplete", True)
+
+
+def test_expired_deadline_leaves_shards_pending(clean: Engine):
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 50)
+        return page_payload([8000])
+
+    limiter = BucketLimiter(fakeredis.FakeRedis())
+    limiter.bind_deadline(Deadline(0.0))
+    deps = make_deps(clean, scripted_client(handler, []), limiter=limiter)
+    stats = run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
+
+    assert stats.shards == 1
+    assert stats.fetched == 0
+    assert stats.deadline_hit is True
+    assert shard_state(clean, 1) == ("pending", False)
+
+
+def test_cancellation_mid_page_leaves_the_shard_pending(clean: Engine):
+    state = {"cancel": False}
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 50)
+        state["cancel"] = True
+        return page_payload([9000])
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    token = cancellation.bind(lambda: state["cancel"])
+    try:
+        with pytest.raises(cancellation.RunCancelled):
+            run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
+    finally:
+        cancellation.reset(token)
+
+    assert shard_state(clean, 1) == ("pending", False)
+
+
+def test_plan_capped_when_max_shards_is_small(clean: Engine):
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(
+                request, 1500 if span_days(search_query_of(request)) > 4000 else 500
+            )
+        return page_payload([])
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(deps, "topic:ai", max_shards=1, jitter=lambda: 0.0)
+
+    assert stats.plan_capped is True
+    assert stats.shards == 1
+
+
+def test_count_total_returns_the_graphql_repository_count(clean: Engine):
+    requests: list = []
+
+    def handler(request: httpx.Request):
+        return count_payload(request, 321)
+
+    deps = make_deps(clean, scripted_client(handler, requests))
+    assert count_total(deps, "language:python") == 321
+
+    assert len(requests) == 1
+    assert urlparse(str(requests[0].url)).path == "/graphql"
+    with clean.connect() as connection:
+        row = connection.execute(text("SELECT params, token_fp FROM audit_log")).mappings().one()
+    assert row["params"]["q"] == "language:python"
+    assert row["token_fp"] == "test-fp"
+
+
+def test_non_200_count_exhaustion_raises_request_failed(clean: Engine):
     requests: list = []
     sleeps: list[float] = []
 
@@ -373,75 +372,22 @@ def test_non_200_exhaustion_raises_request_failed(clean: Engine):
             jitter=lambda: 0.0,
         )
     assert excinfo.value.status == 500
-    assert excinfo.value.message == "boom"
     assert len(requests) == 5
     assert len(sleeps) == 4
     assert scalar(clean, "SELECT count(*) FROM audit_log") == 5
-
-
-def test_planner_respects_page_budget_when_max_shards_allows(clean: Engine, redis):
-    def handler(request: httpx.Request):
-        if params_of(request).get("per_page") == ["1"]:
-            query = q_of(request)
-            return count_response(800 if "created:" not in query else 100)
-        return page_response([])
-
-    deps = make_deps(clean, scripted_client(handler, []), redis)
-    stats = run_search_discovery(deps, "topic:ai", max_shards=10, max_pages=3, jitter=lambda: 0.0)
-
-    assert stats.shards == 2
-    assert stats.plan_capped is False
-
-
-def test_planner_keeps_the_1000_target_when_shards_are_scarce(clean: Engine, redis):
-    def handler(request: httpx.Request):
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(800)
-        return page_response([])
-
-    deps = make_deps(clean, scripted_client(handler, []), redis)
-    stats = run_search_discovery(deps, "topic:ai", max_shards=1, max_pages=3, jitter=lambda: 0.0)
-
-    assert stats.shards == 1
 
 
 def test_zero_count_query_creates_no_shards(clean: Engine):
     requests: list = []
 
     def handler(request: httpx.Request):
-        return count_response(0)
+        return count_payload(request, 0)
 
     deps = make_deps(clean, scripted_client(handler, requests))
     stats = run_search_discovery(deps, "language:python", jitter=lambda: 0.0)
     assert stats == DiscoveryStats()
     assert scalar(clean, "SELECT count(*) FROM shards") == 0
     assert len(requests) == 1
-
-
-def test_sequential_path_without_queue(clean: Engine):
-    requests: list = []
-    page_requests: list = []
-
-    def count_for(query: str) -> int:
-        return 1600 if span_days(query) is None else 500
-
-    def handler(request: httpx.Request):
-        query = q_of(request)
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(count_for(query))
-        page_requests.append(query)
-        return page_response([repo_item(5000 + len(page_requests))])
-
-    deps = make_deps(clean, scripted_client(handler, requests), redis=None)
-    stats = run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
-
-    assert stats == DiscoveryStats(shards=2, pages=2, fetched=2, inserted=2, repo_ids=(5001, 5002))
-    assert len(page_requests) == 2
-    with clean.connect() as connection:
-        states = dict(
-            connection.execute(text("SELECT state, count(*) FROM shards GROUP BY state")).all()
-        )
-    assert states == {"done": 2}
 
 
 def test_since_scan_upserts_and_advances_checkpoint(clean: Engine):
@@ -453,7 +399,7 @@ def test_since_scan_upserts_and_advances_checkpoint(clean: Engine):
     next_url = "https://api.github.com/repositories?since=20&per_page=100"
 
     def handler(request: httpx.Request):
-        if params_of(request).get("since") == ["3"]:
+        if request.url.params.get("since") == "3":
             return httpx.Response(
                 200,
                 json=[repo_item(5), repo_item(15)],
@@ -487,7 +433,7 @@ def test_org_enum_upserts_repos(clean: Engine):
 
     def handler(request: httpx.Request):
         assert urlparse(str(request.url)).path == "/orgs/acme/repos"
-        assert params_of(request) == {"type": ["all"], "per_page": ["100"]}
+        assert parse_qs(request.url.query.decode()) == {"type": ["all"], "per_page": ["100"]}
         return httpx.Response(200, json=[repo_item(42, owner_login="acme")])
 
     deps = make_deps(clean, scripted_client(handler, requests))
@@ -504,7 +450,7 @@ def test_user_enum_upserts_repos(clean: Engine):
 
     def handler(request: httpx.Request):
         assert urlparse(str(request.url)).path == "/users/octocat/repos"
-        assert params_of(request) == {"type": ["all"], "per_page": ["100"]}
+        assert parse_qs(request.url.query.decode()) == {"type": ["all"], "per_page": ["100"]}
         return httpx.Response(200, json=[repo_item(43, owner_login="octocat")])
 
     deps = make_deps(clean, scripted_client(handler, requests))
@@ -537,19 +483,6 @@ def test_audit_hook_exception_propagates(clean: Engine, monkeypatch):
     with pytest.raises(RuntimeError, match="audit sink down"):
         run_org_enum(deps, org="acme", jitter=lambda: 0.0)
     assert len(requests) == 1
-
-
-def test_sso_partial_results_aborts_shard_pagination():
-    def handler(request: httpx.Request):
-        return httpx.Response(
-            200,
-            json={"total_count": 1, "items": [repo_item(1)], "incomplete_results": False},
-            headers={"x-github-sso": "required; partial-results"},
-        )
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    with pytest.raises(PartialResultsError):
-        list(iter_shard_pages(client, "language:python", now=lambda: 1000.0))
 
 
 def test_run_emits_single_info_summary(clean: Engine, caplog):
@@ -588,72 +521,15 @@ def test_audit_buffer_defers_record_audit_until_run_end(clean: Engine, monkeypat
     def handler(request: httpx.Request):
         return httpx.Response(200, json=[repo_item(46, owner_login="acme")])
 
-    deps = dataclasses.replace(
-        make_deps(clean, scripted_client(handler, [])),
+    deps = Deps(
+        client=scripted_client(handler, []),
+        engine=clean,
+        redis=None,
+        limiter=None,
+        token_fp="test-fp",
         audit_buffer=AuditBuffer(clean, batch_size=100),
     )
     stats = run_org_enum(deps, org="acme", jitter=lambda: 0.0)
 
     assert stats.fetched == 1
     assert scalar(clean, "SELECT count(*) FROM audit_log") == 1
-
-
-def test_request_failed_shard_is_rolled_back_and_queued_for_retry(clean: Engine, redis):
-    def handler(request: httpx.Request):
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(500)
-        return httpx.Response(500, json={"message": "boom"})
-
-    deps = make_deps(clean, scripted_client(handler, []), redis)
-    stats = run_search_discovery(
-        deps,
-        "language:python",
-        sleep=lambda _: None,
-        now=lambda: 1000.0,
-        jitter=lambda: 0.0,
-    )
-
-    assert stats.fetched == 0
-    assert stats.deferred_shards == 1
-    assert shard_state(clean, 1) == ("pending", False)
-    claimed = ShardQueue(redis, lanes=4).claim("probe", count=10)
-    assert [(item.shard_id, item.attempts) for item in claimed] == [(1, 2)]
-
-
-def test_poison_shard_reaches_the_dlq_after_max_attempts(clean: Engine, redis):
-    def handler(request: httpx.Request):
-        if params_of(request).get("per_page") == ["1"]:
-            return count_response(500)
-        return httpx.Response(500, json={"message": "boom"})
-
-    deps = make_deps(clean, scripted_client(handler, []), redis)
-    stats = None
-    for _ in range(3):
-        stats = run_search_discovery(
-            deps,
-            "language:python",
-            sleep=lambda _: None,
-            now=lambda: 1000.0,
-            jitter=lambda: 0.0,
-        )
-
-    assert redis.xlen("gitcrawl:shards:dlq") >= 1
-    dlq_shards = {entry[1][b"shard_id"] for entry in redis.xrange("gitcrawl:shards:dlq")}
-    assert b"1" in dlq_shards
-    assert shard_state(clean, 1) == ("incomplete", True)
-    assert stats is not None and stats.incomplete_shards == 1
-
-
-def test_discovery_honours_cancellation(clean: Engine, redis):
-    from lib import cancellation
-
-    def handler(request: httpx.Request):
-        return count_response(1600)
-
-    deps = make_deps(clean, scripted_client(handler, []), redis)
-    token = cancellation.bind(lambda: True)
-    try:
-        with pytest.raises(cancellation.RunCancelled):
-            run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
-    finally:
-        cancellation.reset(token)
