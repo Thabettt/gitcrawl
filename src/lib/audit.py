@@ -35,7 +35,7 @@ class AuditRecord:
 
 @dataclass(frozen=True)
 class SloSnapshot:
-    search_remaining: int | None
+    graphql_remaining: int | None
     incomplete_results_ratio: float | None
     rate_422: float | None
     rate_403_429: float | None
@@ -93,6 +93,7 @@ def record_from_response(
     etag_sent: str | None = None,
     now: datetime | None = None,
     body: object | None = None,
+    total_count: int | None = None,
 ) -> AuditRecord:
     headers = response.headers
     if body is None:
@@ -101,10 +102,10 @@ def record_from_response(
         except Exception:
             body = None
     response.extensions[_PARSED_BODY_KEY] = body
-    total_count: int | None = None
+    extracted_total_count: int | None = None
     incomplete_results: bool | None = None
     if isinstance(body, Mapping):
-        total_count = _as_int(body.get("total_count"))
+        extracted_total_count = _as_int(body.get("total_count"))
         incomplete = body.get("incomplete_results")
         if isinstance(incomplete, bool):
             incomplete_results = incomplete
@@ -120,7 +121,7 @@ def record_from_response(
         rl_resource=_header(headers, "x-ratelimit-resource"),
         retry_after=_as_int(_header(headers, "retry-after")),
         link_next=_has_next_link(_header(headers, "link")),
-        total_count=total_count,
+        total_count=extracted_total_count if total_count is None else total_count,
         incomplete_results=incomplete_results,
         token_fp=token_fp,
         latency_ms=int(latency_ms),
@@ -164,9 +165,9 @@ _AUDIT_WINDOW_SQL = text("""
     SELECT
         (
             SELECT rl_remaining FROM window_rows
-            WHERE rl_resource = 'search' AND rl_remaining IS NOT NULL
+            WHERE rl_resource = 'graphql' AND rl_remaining IS NOT NULL
             ORDER BY ts DESC, id DESC LIMIT 1
-        ) AS search_remaining,
+        ) AS graphql_remaining,
         count(*) AS total,
         count(incomplete_results) AS incomplete_known,
         count(*) FILTER (WHERE incomplete_results) AS incomplete_true,
@@ -205,7 +206,7 @@ def slo_snapshot(engine: Engine, *, window: int = 1000) -> SloSnapshot:
         shards = connection.execute(_SHARD_SQL).mappings().one()
         geo = connection.execute(_GEO_SQL).mappings().one()
     return SloSnapshot(
-        search_remaining=audit["search_remaining"],
+        graphql_remaining=audit["graphql_remaining"],
         incomplete_results_ratio=_ratio(audit["incomplete_true"], audit["incomplete_known"]),
         rate_422=_ratio(audit["n422"], audit["total"]),
         rate_403_429=_ratio(audit["n403_429"], audit["total"]),

@@ -91,7 +91,7 @@ def test_metrics_page_renders_cards(clean, tmp_path, monkeypatch):
     response = client.get("/metrics")
     assert response.status_code == 200
     for label in (
-        "Search remaining",
+        "GraphQL remaining",
         "Incomplete ratio",
         "422 rate",
         "403/429 rate",

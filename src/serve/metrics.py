@@ -12,7 +12,7 @@ from store.models import Runs
 _PREFIX = "gitcrawl:rl:"
 
 THRESHOLDS = {
-    "search_remaining": ("lt", 100, 10),
+    "graphql_remaining": ("lt", 100, 10),
     "incomplete_results_ratio": ("gt", 0.05, 0.2),
     "rate_422": ("gt", 0.0, 0.02),
     "rate_403_429": ("gt", 0.0, 0.05),
@@ -22,7 +22,7 @@ THRESHOLDS = {
 }
 
 LABELS = {
-    "search_remaining": "Search remaining",
+    "graphql_remaining": "GraphQL remaining",
     "incomplete_results_ratio": "Incomplete ratio",
     "rate_422": "422 rate",
     "rate_403_429": "403/429 rate",

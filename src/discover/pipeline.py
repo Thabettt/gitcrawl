@@ -82,6 +82,26 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
     return hook
 
 
+def _graphql_total_count(response: httpx.Response) -> int | None:
+    body = audit.cached_json(response)
+    if body is None:
+        try:
+            body = response.json()
+        except Exception:
+            return None
+    if not isinstance(body, Mapping):
+        return None
+    data = body.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    for alias in ("s", "s0"):
+        node = data.get(alias)
+        if isinstance(node, Mapping):
+            count = node.get("repositoryCount")
+            return count if isinstance(count, int) and not isinstance(count, bool) else None
+    return None
+
+
 def _graphql_audit_hook(
     deps: Deps,
 ) -> Callable[[httpx.Response, float, Mapping[str, object]], None]:
@@ -91,6 +111,7 @@ def _graphql_audit_hook(
             response,
             token_fp=deps.token_fp,
             latency_ms=latency_ms,
+            total_count=_graphql_total_count(response),
         )
         if deps.audit_buffer is not None:
             deps.audit_buffer.add(record)

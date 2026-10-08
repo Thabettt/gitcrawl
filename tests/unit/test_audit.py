@@ -218,3 +218,34 @@ def test_record_from_response_accepts_preparsed_body():
     record = record_from_response({}, response, token_fp="fp", latency_ms=1, now=NOW, body=body)
     assert record.total_count == 9
     assert cached_json(response) is body
+
+
+def test_record_from_response_total_count_override_wins_over_body():
+    response = _response(200, json={"total_count": 1234, "incomplete_results": True})
+    record = record_from_response(
+        {}, response, token_fp="fp", latency_ms=1, now=NOW, total_count=42
+    )
+    assert record.total_count == 42
+    assert record.incomplete_results is True
+
+
+def test_record_from_response_total_count_override_without_body():
+    record = record_from_response(
+        {}, _response(204), token_fp="fp", latency_ms=1, now=NOW, total_count=42
+    )
+    assert record.total_count == 42
+
+
+def test_record_from_response_total_count_override_zero_is_kept():
+    record = record_from_response(
+        {}, _response(200), token_fp="fp", latency_ms=1, now=NOW, total_count=0
+    )
+    assert record.total_count == 0
+
+
+def test_record_from_response_total_count_none_keeps_body_value():
+    response = _response(200, json={"total_count": 7})
+    record = record_from_response(
+        {}, response, token_fp="fp", latency_ms=1, now=NOW, total_count=None
+    )
+    assert record.total_count == 7

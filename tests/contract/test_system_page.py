@@ -94,7 +94,7 @@ def test_system_page_has_three_plain_sections(clean: Engine, tmp_path, monkeypat
     assert response.status_code == 200
     for text in ("Status", "Performance", "Limits"):
         assert text in response.text
-    assert "Requests left this hour" in response.text
+    assert "GraphQL points left this hour" in response.text
     assert "/settings" in response.text
 
 
@@ -116,7 +116,7 @@ def test_system_page_lists_status_facts_without_secret_values(clean: Engine, tmp
 
     assert response.status_code == 200
     assert "Database" in response.text
-    assert "Queue" in response.text
+    assert "Redis" in response.text
     assert "GitHub token" in response.text
     assert "present" in response.text
     assert "super-secret-token-value" not in response.text

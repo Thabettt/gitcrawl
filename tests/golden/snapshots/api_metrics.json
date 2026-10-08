@@ -4,5 +4,5 @@
   "headers": {
     "content-type": "application/json"
   },
-  "body": "{\"slo\":{\"search_remaining\":null,\"incomplete_results_ratio\":null,\"rate_422\":0.0,\"rate_403_429\":0.0,\"p95_latency_ms\":12.0,\"shard_coverage\":null,\"geo_unmatched_rate\":0.0},\"runs\":{\"queued\":0,\"running\":0,\"done\":1,\"failed\":0,\"partial\":1},\"limiter\":{\"paused\":[],\"degraded\":true}}"
+  "body": "{\"slo\":{\"graphql_remaining\":null,\"incomplete_results_ratio\":null,\"rate_422\":0.0,\"rate_403_429\":0.0,\"p95_latency_ms\":12.0,\"shard_coverage\":null,\"geo_unmatched_rate\":0.0},\"runs\":{\"queued\":0,\"running\":0,\"done\":1,\"failed\":0,\"partial\":1},\"limiter\":{\"paused\":[],\"degraded\":true}}"
 }

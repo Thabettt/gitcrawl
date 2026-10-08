@@ -388,6 +388,47 @@ def test_count_total_returns_the_graphql_repository_count(clean: Engine):
     assert row["token_fp"] == "test-fp"
 
 
+def test_graphql_audit_hook_records_page_repository_count(clean: Engine):
+    deps = make_deps(clean, scripted_client(lambda request: httpx.Response(500), []))
+    hook = pipeline._graphql_audit_hook(deps)
+
+    hook(page_payload([], total=250), 12.0, {"q": "topic:ai", "after": None})
+
+    with clean.connect() as connection:
+        row = connection.execute(text("SELECT params, total_count FROM audit_log")).mappings().one()
+    assert row["params"] == {"q": "topic:ai", "after": None}
+    assert row["total_count"] == 250
+
+
+def test_graphql_audit_hook_records_count_batch_alias_zero(clean: Engine):
+    deps = make_deps(clean, scripted_client(lambda request: httpx.Response(500), []))
+    hook = pipeline._graphql_audit_hook(deps)
+    response = httpx.Response(
+        200,
+        json={
+            "data": {
+                "s0": {"repositoryCount": 321},
+                "s1": {"repositoryCount": 5},
+                "rateLimit": {"cost": 1, "remaining": 5000},
+            }
+        },
+    )
+
+    hook(response, 8.0, {"q": "language:python", "after": None})
+
+    assert scalar(clean, "SELECT total_count FROM audit_log") == 321
+
+
+def test_graphql_audit_hook_leaves_total_count_none_without_counts(clean: Engine):
+    deps = make_deps(clean, scripted_client(lambda request: httpx.Response(500), []))
+    hook = pipeline._graphql_audit_hook(deps)
+    response = httpx.Response(200, json={"data": {"rateLimit": {"cost": 1, "remaining": 5000}}})
+
+    hook(response, 3.0, {"q": "topic:ai", "after": None})
+
+    assert scalar(clean, "SELECT total_count FROM audit_log") is None
+
+
 def test_non_200_count_exhaustion_raises_request_failed(clean: Engine):
     requests: list = []
     sleeps: list[float] = []

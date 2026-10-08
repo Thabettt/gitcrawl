@@ -9,7 +9,7 @@ from serve import pages
 from serve.metrics import LABELS, metrics_payload
 
 _PLAIN = {
-    "search_remaining": "Requests left this hour",
+    "graphql_remaining": "GraphQL points left this hour",
     "incomplete_results_ratio": "Searches that came back incomplete",
     "rate_422": "Rejected filters",
     "rate_403_429": "Throttled responses",

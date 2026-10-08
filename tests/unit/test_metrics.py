@@ -38,9 +38,9 @@ def test_metrics_payload_includes_all_slo_keys(clean_db):
     seed_audit(
         engine,
         [
-            (200, 120, False, 100, "search"),
-            (200, 90, True, 900, "search"),
-            (422, 80, None, 1200, "search"),
+            (200, 120, False, 100, "graphql"),
+            (200, 90, True, 900, "graphql"),
+            (422, 80, None, 1200, "graphql"),
             (429, 70, None, 50, "core"),
         ],
     )
@@ -48,7 +48,7 @@ def test_metrics_payload_includes_all_slo_keys(clean_db):
     assert set(payload) == {"slo", "runs", "limiter"}
     slo = payload["slo"]
     assert set(slo) == {
-        "search_remaining",
+        "graphql_remaining",
         "incomplete_results_ratio",
         "rate_422",
         "rate_403_429",
@@ -56,8 +56,8 @@ def test_metrics_payload_includes_all_slo_keys(clean_db):
         "shard_coverage",
         "geo_unmatched_rate",
     }
-    # most recent search-resource row (the 422 also carries the search budget headers)
-    assert slo["search_remaining"] == 80
+    # most recent graphql-resource row (the trailing 429 is core budget)
+    assert slo["graphql_remaining"] == 80
     assert slo["incomplete_results_ratio"] == 0.5
     assert slo["rate_422"] == 0.25
     assert payload["runs"]["done"] == 0
@@ -71,7 +71,7 @@ def test_slo_snapshot_keys_match_thresholds_and_labels():
     from serve.metrics import LABELS, THRESHOLDS
 
     snapshot = SloSnapshot(
-        search_remaining=None,
+        graphql_remaining=None,
         incomplete_results_ratio=None,
         rate_422=None,
         rate_403_429=None,

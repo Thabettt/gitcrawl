@@ -18,7 +18,7 @@
       <span class="badge {{ 'ok' if status.database else 'down' }}">{{ 'ok' if status.database else 'down' }}</span>
     </div>
     <div class="card health-card">
-      <span class="health-label">Queue</span>
+      <span class="health-label">Redis</span>
       <span class="badge {{ 'ok' if status.redis else 'down' }}">{{ 'ok' if status.redis else 'down' }}</span>
     </div>
     <div class="card health-card">
@@ -27,7 +27,7 @@
     </div>
   </div>
   {% if status.redis_degraded %}
-  <p class="muted">The queue is configured but did not answer; searches still run with reduced pacing.</p>
+  <p class="muted">Redis is configured but did not answer; searches still run with reduced pacing.</p>
   {% endif %}
 </section>
 

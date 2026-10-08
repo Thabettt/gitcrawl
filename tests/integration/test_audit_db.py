@@ -26,7 +26,7 @@ def _record(
     index: int,
     *,
     status: int = 200,
-    rl_resource: str | None = "search",
+    rl_resource: str | None = "graphql",
     rl_remaining: int | None = 30,
     incomplete_results: bool | None = False,
     latency_ms: int = 100,
@@ -149,7 +149,7 @@ def test_audit_buffer_rejects_non_positive_batch_size(clean: Engine):
 
 def test_slo_snapshot_empty_tables_returns_all_none(clean: Engine):
     assert slo_snapshot(clean) == SloSnapshot(
-        search_remaining=None,
+        graphql_remaining=None,
         incomplete_results_ratio=None,
         rate_422=None,
         rate_403_429=None,
@@ -184,7 +184,7 @@ def test_slo_snapshot_computes_audit_metrics(clean: Engine):
         _record(3, status=429, rl_remaining=28, incomplete_results=True, latency_ms=400),
     )
     snapshot = slo_snapshot(clean)
-    assert snapshot.search_remaining == 28
+    assert snapshot.graphql_remaining == 28
     assert snapshot.incomplete_results_ratio == pytest.approx(2 / 3)
     assert snapshot.rate_422 == pytest.approx(0.25)
     assert snapshot.rate_403_429 == pytest.approx(0.5)
@@ -200,7 +200,7 @@ def test_slo_snapshot_respects_window(clean: Engine):
     assert snapshot.rate_403_429 == 1.0
     assert snapshot.incomplete_results_ratio == 1.0
     assert snapshot.p95_latency_ms == pytest.approx(395.0)
-    assert snapshot.search_remaining == 30
+    assert snapshot.graphql_remaining == 30
 
 
 def test_slo_snapshot_computes_shard_coverage_and_geo_rate(clean: Engine):
@@ -223,7 +223,7 @@ def test_slo_snapshot_computes_shard_coverage_and_geo_rate(clean: Engine):
     snapshot = slo_snapshot(clean)
     assert snapshot.shard_coverage == pytest.approx(2 / 3)
     assert snapshot.geo_unmatched_rate == pytest.approx(0.5)
-    assert snapshot.search_remaining is None
+    assert snapshot.graphql_remaining is None
     assert snapshot.rate_422 is None
 
 
@@ -243,7 +243,7 @@ def test_slo_snapshot_zeros_are_not_none(clean: Engine):
     assert snapshot.incomplete_results_ratio == 0.0
     assert snapshot.shard_coverage == 0.0
     assert snapshot.geo_unmatched_rate == 0.0
-    assert snapshot.search_remaining == 30
+    assert snapshot.graphql_remaining == 30
 
 
 def test_slo_snapshot_ratio_is_none_without_known_incomplete_values(clean: Engine):
@@ -253,7 +253,15 @@ def test_slo_snapshot_ratio_is_none_without_known_incomplete_values(clean: Engin
     assert snapshot.rate_422 == 0.0
 
 
-def test_slo_snapshot_search_remaining_is_none_without_search_rows(clean: Engine):
+def test_slo_snapshot_graphql_remaining_is_none_without_graphql_rows(clean: Engine):
     record_audit(clean, _record(0, rl_resource="core"))
     snapshot = slo_snapshot(clean)
-    assert snapshot.search_remaining is None
+    assert snapshot.graphql_remaining is None
+
+
+def test_slo_snapshot_graphql_remaining_ignores_other_resources(clean: Engine):
+    record_audit(clean, _record(0, rl_resource="graphql", rl_remaining=25))
+    record_audit(clean, _record(1, rl_resource="core", rl_remaining=99))
+    record_audit(clean, _record(2, rl_resource="search", rl_remaining=88))
+    snapshot = slo_snapshot(clean)
+    assert snapshot.graphql_remaining == 25
