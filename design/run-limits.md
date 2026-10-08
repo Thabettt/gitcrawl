@@ -8,7 +8,7 @@
 
 ## The one-paragraph version
 
-A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,000/hr, GraphQL 5,000 points/hr per token), GitHub's anti-abuse ceilings (100 concurrent requests shared across REST and GraphQL; 900/2,000 points per minute), and the wall-clock deadline. The Limits page controls how much of those budgets one run may spend. The right values are not "as high as possible" — they are a coherent operating point where discovery, saving, and checking all fit inside the deadline with headroom. The defaults are the interactive point (minutes, laptop-friendly). The old "maximum" preset was replaced with a **corpus-build** preset: 1,000 slices, 100,000 repos at each stage, 24-hour deadline, batching on, 10 concurrent, 32 discovery workers — about four hours of real budget on one token, so it finishes rather than aborting incomplete.
+A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,000/hr, GraphQL 5,000 points/hr per token), GitHub's anti-abuse ceilings (100 concurrent requests shared across REST and GraphQL; 900/2,000 points per minute), and the wall-clock deadline. The Limits page controls how much of those budgets one run may spend. The right values are not "as high as possible" — they are a coherent operating point where discovery, saving, and checking all fit inside the deadline with headroom. The defaults are the interactive point (minutes, laptop-friendly). The old "maximum" preset was replaced with a **corpus-build** preset: 1,000 slices, 100,000 repos at each stage, 24-hour deadline, batching on, 10 concurrent, 32 discovery workers — about three hours of real budget on one token, so it finishes rather than aborting incomplete.
 
 ---
 
@@ -43,14 +43,14 @@ All numbers verified 2026-10-04 (see Sources). Per token:
 
 | Meter | Rate | Buys |
 |---|---|---|
-| Search | 30/min = 1,800/hr | `since` cursor scan and org/user enumeration only; discovery no longer uses it |
+| Search | 30/min = 1,800/hr | Not used by the shipped paths — discovery is GraphQL, and `since`/org enumeration run on core |
 | Core (REST) | 5,000/hr | One hydrated repo per call (fallbacks, trees, contents) |
 | GraphQL | 5,000 points/hr | Discovery (20 count probes per query = 1 point; one search connection per page) and hydration batches (≤20 repos ≈ 1 point) |
 | Secondary | 100 concurrent (REST+GraphQL shared); 900 pts/min REST; 2,000 pts/min GraphQL | Pacing ceiling — stay far below |
 
 Time estimates for a run of `C` candidates, `S` shards, batch size `B`:
 
-- **Discovery** ≈ `(plan probes + pages) / throughput` on the GraphQL points meter with `discovery_concurrency` workers (32 by default). Count probes batch 20 per query at 1 point each; each page is one search connection. Measured 2026-10-08: 8.9 s to plan + 59.0 s to fetch 418 pages / 38,969 repos (`corpus-building-efficient-engineering.md` §9.4). For history, the old REST path cost `(S + C/100) / 30` minutes — a count query per shard, one page per 100 repos, planning bisection extra — but that arithmetic is no longer the shipped engine.
+- **Discovery** ≈ `(plan probes + pages) / throughput` on the GraphQL points meter with `discovery_concurrency` workers (32 by default). Count probes batch 20 per query at 1 point per query; each page is one search connection. Measured 2026-10-08: 8.9 s to plan + 59.0 s to fetch 418 pages / 38,969 repos (`corpus-building-efficient-engineering.md` §9.4). For history, the old REST path cost `(S + C/100) / 30` minutes — a count query per shard, one page per 100 repos, planning bisection extra — but that arithmetic is no longer the shipped engine.
 - **Hydration** ≈ `C / (20 × 1)` GraphQL points ≈ `C/20 / 5,000` hours with batching; ≈ `C / 5,000` hours without.
 - **Enrichment** ≈ per check: one batched query per `B` repos (≈1 point per 20 repos per check type), or one core call per repo without batching.
 - **Wall clock** = discovery + hydration + enrichment + overhead, and must be < `request_deadline_seconds`, or the run stops partial (incomplete, resumable).

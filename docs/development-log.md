@@ -356,7 +356,7 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 
 **What shipped**
 
-- Discovery is two-phase and rides the GraphQL points meter: a batched planner probes `repositoryCount` for up to 20 date windows per query (1 point per query) and bisects until every shard is fetchable; the executor fetches shards with one search connection per page from a `ThreadPoolExecutor(discovery_concurrency)` pool (default 32). The 1,000-result cap and `max_pages` semantics are unchanged; `since` scan and org/user enumeration stay on REST.
+- Discovery is two-phase and rides the GraphQL points meter: a batched planner probes `repositoryCount` for up to 20 date windows per query (1 point per query) and bisects until every shard is fetchable; the executor fetches shards with one search connection per page from a `ThreadPoolExecutor(discovery_concurrency)` pool (default 32). The 1,000-result cap and `max_pages` semantics are unchanged; `since` scan and org/user enumeration stay on the core REST meter.
 - New `src/discover/graphql_search.py`; `plan_shards` replaces the `ShardPlanner` class; `discover/search_shards.py` is deleted; `RequestFailed`/`short_message`/`next_link` moved to `lib/gh_client.py`.
 - Redis Streams shard queue, `ShardQueue`/`RetryOutcome`/`reclaim_stale`/`retry_or_dlq`/PEL metrics deleted (R58); retry/backoff is inline per page; Stop/deadline leave in-flight shards PENDING.
 - Setting `discovery_concurrency` (default 32, bounds 1–64, env `GITCRAWL_DISCOVERY_CONCURRENCY`) + migration `0012`; corpus preset 32.
