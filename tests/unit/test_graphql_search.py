@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 
+import fakeredis
 import httpx
 import pytest
 
 from discover.graphql_search import count_queries, iter_pages, node_to_item
+from lib.deadlines import Deadline, DeadlineExceededError
 from lib.gh_client import RequestFailed
 from lib.graphql_batch import GraphQLAuthError
+from limiter.buckets import BucketLimiter
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 
@@ -88,6 +91,11 @@ def test_node_to_item_maps_rest_shape():
     assert item["has_pages"] is None and item["custom_properties"] == {}
 
 
+def test_node_to_item_maps_fork_and_private_visibility():
+    item = node_to_item(node(isFork=True, visibility="PRIVATE"))
+    assert item["fork"] is True and item["visibility"] == "private"
+
+
 def test_page_query_requests_only_the_lean_node_fields():
     captured = []
     payloads = [page_payload([node()])]
@@ -99,6 +107,8 @@ def test_page_query_requests_only_the_lean_node_fields():
         "stargazerCount",
         "forkCount",
         "isArchived",
+        "isFork",
+        "visibility",
         "primaryLanguage { name }",
         "licenseInfo { spdxId }",
         "pushedAt",
@@ -116,8 +126,6 @@ def test_page_query_requests_only_the_lean_node_fields():
         "defaultBranchRef",
         "description",
         "homepageUrl",
-        "visibility",
-        "isFork",
         "parent",
         "isDisabled",
         "isTemplate",
@@ -197,9 +205,10 @@ def test_page_size_stays_halved_for_later_pages():
     assert "s: search(first: 50," in queries[2] and 'after: "c1"' in queries[2]
 
 
-def test_page_timeouts_at_the_floor_raise_request_failed():
+@pytest.mark.parametrize("status", [502, 504])
+def test_page_timeouts_at_the_floor_raise_request_failed(status):
     captured = []
-    payloads = [httpx.Response(502), httpx.Response(502), httpx.Response(502)]
+    payloads = [httpx.Response(status), httpx.Response(status), httpx.Response(status)]
     with pytest.raises(RequestFailed) as excinfo:
         list(
             iter_pages(
@@ -210,7 +219,7 @@ def test_page_timeouts_at_the_floor_raise_request_failed():
                 jitter=lambda: 0.0,
             )
         )
-    assert excinfo.value.status == 502
+    assert excinfo.value.status == status
     assert "minimum page size" in excinfo.value.message
     queries = [json.loads(request.content)["query"] for request in captured]
     assert len(queries) == 3
@@ -309,6 +318,59 @@ def test_page_transient_error_retries_then_succeeds():
         )
     )
     assert len(pages) == 1 and len(captured) == 2
+
+
+def test_page_retry_backoff_is_bounded_by_the_run_deadline():
+    limiter = BucketLimiter(fakeredis.FakeRedis(), deadline=Deadline(1.0, clock=lambda: 0.0))
+    payloads = [httpx.Response(200, json={"errors": [{"message": "resource limits exceeded"}]})]
+    with pytest.raises(DeadlineExceededError):
+        list(
+            iter_pages(
+                graphql_client(payloads),
+                "q",
+                limiter=limiter,
+                token_id="tok",
+                sleep=lambda _: None,
+                now=lambda: 1000.0,
+                jitter=lambda: 0.0,
+            )
+        )
+
+
+def test_probe_retry_backoff_is_bounded_by_the_run_deadline():
+    limiter = BucketLimiter(fakeredis.FakeRedis(), deadline=Deadline(1.0, clock=lambda: 0.0))
+    payloads = [httpx.Response(200, json={"data": {}})]
+    with pytest.raises(DeadlineExceededError):
+        count_queries(
+            graphql_client(payloads),
+            ["q"],
+            limiter=limiter,
+            token_id="tok",
+            sleep=lambda _: None,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+
+
+def test_page_retry_backoff_within_the_deadline_still_sleeps():
+    sleeps = []
+    limiter = BucketLimiter(fakeredis.FakeRedis(), deadline=Deadline(100.0, clock=lambda: 0.0))
+    payloads = [
+        httpx.Response(200, json={"errors": [{"message": "resource limits exceeded"}]}),
+        page_payload([node()]),
+    ]
+    pages = list(
+        iter_pages(
+            graphql_client(payloads),
+            "q",
+            limiter=limiter,
+            token_id="tok",
+            sleep=sleeps.append,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.0,
+        )
+    )
+    assert len(pages) == 1 and sleeps == [2.0]
 
 
 def test_page_partial_data_with_errors_is_incomplete_but_kept():

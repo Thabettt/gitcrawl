@@ -36,6 +36,8 @@ _NODE_FIELDS = """      databaseId
       stargazerCount
       forkCount
       isArchived
+      isFork
+      visibility
       primaryLanguage { name }
       licenseInfo { spdxId }
       pushedAt
@@ -270,6 +272,14 @@ def _retry_wait(attempt: int, jitter: Callable[[], float] | None) -> float:
     return min(2.0**attempt, 30.0) + extra
 
 
+def _bounded_sleep(
+    limiter: BucketLimiter | None, wait: float, sleep: Callable[[float], None]
+) -> None:
+    if limiter is not None and limiter.deadline is not None:
+        limiter.deadline.bound_wait(wait)
+    sleep(wait)
+
+
 def _count_value(node: object) -> int | None:
     if not isinstance(node, Mapping):
         return None
@@ -320,7 +330,7 @@ def _probe_batch(
         if attempt >= max_attempts:
             detail = errors[0] if errors else f"graphql count probe missing for {missing[0]}"
             raise RequestFailed(200, detail)
-        sleep(_retry_wait(attempt, jitter))
+        _bounded_sleep(limiter, _retry_wait(attempt, jitter), sleep)
         pending = missing
 
 
@@ -384,7 +394,7 @@ def _fetch_search(
         )
         if status in _TIMEOUT_STATUSES:
             if size <= MIN_PAGE_SIZE:
-                raise RequestFailed(502, "graphql page timed out at the minimum page size")
+                raise RequestFailed(status, "graphql page timed out at the minimum page size")
             size = max(MIN_PAGE_SIZE, size // 2)
             continue
         if status != 200:
@@ -398,7 +408,7 @@ def _fetch_search(
         if attempt >= max_attempts:
             detail = errors[0] if errors else "graphql search connection missing"
             raise RequestFailed(200, detail)
-        sleep(_retry_wait(attempt, jitter))
+        _bounded_sleep(limiter, _retry_wait(attempt, jitter), sleep)
 
 
 def iter_pages(

@@ -362,13 +362,13 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - Setting `discovery_concurrency` (default 32, bounds 1–64, env `GITCRAWL_DISCOVERY_CONCURRENCY`) + migration `0012`; corpus preset 32.
 - Audit records `repositoryCount` as `total_count` for GraphQL search rows; the SLO is renamed `search_remaining` → `graphql_remaining` (latest `rl_resource='graphql'` audit row), and the queue card is removed.
 
-**Measured ledger (the 2026-10-08 spike the engine was built from; one personal token)** — run-#9 filter (`language:rust stars:>=4 created:>=2025-02-24`): plan 111 probes in 9 batched queries → 56 shards in **8.9 s**; fetch 418 pages (32 in flight) → **38,969 unique ids in 59.0 s**; **67.9 s total, 0 retries/failures, ~430–500 GraphQL points (~10% of the hourly budget)**; 99.93% overlap (17,782/17,795) with the prior REST run's exported survivors. Full ledger: `design/corpus-building-efficient-engineering.md` §9.4. The engine's own live end-to-end validation is the plan's Task 9 (pending).
+**Measured ledger (the 2026-10-08 spike the engine was built from; one personal token)** — run-#9 filter (`language:rust stars:>=4 created:>=2025-02-24`): plan 111 probes in 9 batched queries → 56 shards in **8.9 s**; fetch 418 pages (32 in flight) → **38,969 unique ids in 59.0 s**; **67.9 s total, 0 retries/failures, ~430–500 GraphQL points (~10% of the hourly budget)**; 99.93% overlap (17,782/17,795) with the prior REST run's exported survivors. Full ledger: `design/corpus-building-efficient-engineering.md` §9.4. The engine's own live end-to-end validation (plan Task 9) landed the same day on the wired default build path (`build_deps` at 10 slots with the discovery phase bound to 32): the run-#9 filter planned 192 shards and fetched 39,007 ids in **109.3 s** with 0/192 incomplete — see `docs/findings/2026-10-08-hydration-profile.md` (addendum).
 
 **Rulings**
 
 - Queue deleted per R58 — dead code is a trap; the deleted work is recoverable from git.
 - `max_pages` semantics kept exactly (spec §11); the 1,000-result cap unchanged.
 - One personal token; no apps and no token-sharing — 32 workers of GitHub's documented 100-concurrent ceiling, with the setting as the single watchpoint.
-- The §9.4 "measured, not built" caveat is resolved: the engine is built; only the live validation run (Task 9) remains.
+- The §9.4 "measured, not built" caveat is resolved: the engine is built and live-validated (Task 9: default build path, 109.3 s, 39,007 ids, 0/192 incomplete; `docs/findings/2026-10-08-hydration-profile.md`).
 
 **Verification:** full suite `1425 passed, 1 warning` at the Task 7 head; `ruff check src tests`, `black --check src tests`, and bare `mypy` clean. This entry lands with `docs: sync discovery docs with the graphql engine`.

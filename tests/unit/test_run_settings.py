@@ -1,6 +1,32 @@
 from __future__ import annotations
 
-from store.settings import SETTINGS_ENV, RunSettings, env_pinned_fields
+import pytest
+
+from store.settings import SETTINGS_ENV, RunSettings, env_pinned_fields, load_run_settings
+
+
+class _EmptyResult:
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return None
+
+
+class _EmptyConnection:
+    def execute(self, statement):
+        return _EmptyResult()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _EmptyEngine:
+    def connect(self):
+        return _EmptyConnection()
 
 
 def test_settings_env_names_are_stable():
@@ -24,3 +50,14 @@ def test_env_pinned_fields_lists_only_set_variables(monkeypatch):
 def test_as_dict_round_trips():
     settings = RunSettings()
     assert RunSettings(**settings.as_dict()) == settings
+
+
+@pytest.mark.parametrize("raw", ["65", "999"])
+def test_env_discovery_concurrency_is_clamped_to_the_form_bound(monkeypatch, raw):
+    monkeypatch.setenv("GITCRAWL_DISCOVERY_CONCURRENCY", raw)
+    assert load_run_settings(_EmptyEngine()).discovery_concurrency == 64
+
+
+def test_env_discovery_concurrency_within_bounds_is_kept(monkeypatch):
+    monkeypatch.setenv("GITCRAWL_DISCOVERY_CONCURRENCY", "48")
+    assert load_run_settings(_EmptyEngine()).discovery_concurrency == 48

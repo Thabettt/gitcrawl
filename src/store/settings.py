@@ -24,6 +24,7 @@ SETTINGS_ENV: Mapping[str, str] = {
 }
 
 _BOOL_FIELDS = frozenset({"graphql_batch"})
+_DISCOVERY_CONCURRENCY_MAX = 64
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,10 @@ def load_run_settings(engine: Engine) -> RunSettings:
     if resolved.graphql_batch_size > MAX_BATCH_SIZE:
         # Env overrides bypass form bounds; a batch size above the API cap would
         # make every GraphQL call raise. Clamp instead of failing every run.
-        return replace(resolved, graphql_batch_size=MAX_BATCH_SIZE)
+        resolved = replace(resolved, graphql_batch_size=MAX_BATCH_SIZE)
+    clamped = min(_DISCOVERY_CONCURRENCY_MAX, max(1, resolved.discovery_concurrency))
+    if clamped != resolved.discovery_concurrency:
+        resolved = replace(resolved, discovery_concurrency=clamped)
     return resolved
 
 
