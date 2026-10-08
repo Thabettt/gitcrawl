@@ -217,7 +217,9 @@ def _payload(repo_id: int, node: dict) -> dict:
 class RepoDetailsAdapter:
     name = "repo_details"
 
-    def __init__(self, full_names: Mapping[str, str], *, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
+    def __init__(
+        self, full_names: Mapping[str, str], *, batch_size: int = DEFAULT_BATCH_SIZE
+    ) -> None:
         self._full_names = dict(full_names)
         self.batch_size = batch_size
 
