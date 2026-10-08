@@ -405,6 +405,132 @@ def test_repeated_rename_does_not_duplicate_history(clean: Engine):
     assert count == 1
 
 
+def test_apply_hydration_batch_writes_one_repo_statement_for_the_chunk(clean: Engine):
+    from sqlalchemy import event
+
+    from hydrate.repo_client import HydratedRepo
+    from store.lifecycle import apply_hydration_batch
+
+    seed(clean, "octo/one", repo_id=1)
+    seed(clean, "octo/two", repo_id=2)
+    items = [
+        (
+            "octo/one",
+            HydratedRepo(
+                id=1,
+                node_id="R_1",
+                full_name="octo/one",
+                payload=payload(1, full_name="octo/one", description="changed-a"),
+                etag=None,
+                not_modified=False,
+            ),
+        ),
+        (
+            "octo/two",
+            HydratedRepo(
+                id=2,
+                node_id="R_2",
+                full_name="octo/two",
+                payload=payload(2, full_name="octo/two", description="changed-b"),
+                etag=None,
+                not_modified=False,
+            ),
+        ),
+    ]
+    statements: list[str] = []
+
+    def listener(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(clean, "before_cursor_execute", listener)
+    try:
+        outcomes = apply_hydration_batch(clean, items)
+    finally:
+        event.remove(clean, "before_cursor_execute", listener)
+    assert [outcome.repo_id for outcome in outcomes] == [1, 2]
+    writes = [
+        statement
+        for statement in statements
+        if "INTO REPOS" in statement.upper() or statement.upper().startswith("UPDATE REPOS")
+    ]
+    assert len(writes) == 1
+
+
+def test_apply_hydration_batch_records_requested_and_previous_names(clean: Engine):
+    from hydrate.repo_client import HydratedRepo
+    from store.lifecycle import apply_hydration_batch
+
+    seed(clean, "octo/old", repo_id=1)
+    hydrated = HydratedRepo(
+        id=1,
+        node_id="R_1",
+        full_name="octo/new",
+        payload=payload(1, full_name="octo/new"),
+        etag=None,
+        not_modified=False,
+    )
+    outcomes = apply_hydration_batch(clean, [("stale/requested", hydrated)])
+    assert outcomes[0].renamed_from == "stale/requested"
+    assert outcomes[0].history_added is True
+    assert repo_count(clean) == 1
+    assert repo_row(clean, 1)["full_name"] == "octo/new"
+    assert set(history_names(clean, 1)) == {"octo/old", "stale/requested"}
+
+
+def test_apply_hydration_batch_dedupes_duplicate_payload_ids(clean: Engine):
+    from hydrate.repo_client import HydratedRepo
+    from store.lifecycle import apply_hydration_batch
+
+    seed(clean, "octo/one", repo_id=1)
+    first = HydratedRepo(
+        id=1,
+        node_id="R_1",
+        full_name="octo/first",
+        payload=payload(1, full_name="octo/first"),
+        etag=None,
+        not_modified=False,
+    )
+    second = HydratedRepo(
+        id=1,
+        node_id="R_1",
+        full_name="octo/second",
+        payload=payload(1, full_name="octo/second"),
+        etag=None,
+        not_modified=False,
+    )
+    outcomes = apply_hydration_batch(clean, [("octo/one", first), ("octo/one", second)])
+    assert [outcome.repo_id for outcome in outcomes] == [1, 1]
+    assert repo_count(clean) == 1
+    assert repo_row(clean, 1)["full_name"] == "octo/second"
+
+
+def test_apply_hydration_batch_keeps_etags_from_mixed_items(clean: Engine):
+    from hydrate.repo_client import HydratedRepo
+    from store.lifecycle import apply_hydration_batch
+
+    seed(clean, "octo/one", repo_id=1)
+    seed(clean, "octo/two", repo_id=2)
+    etagged = HydratedRepo(
+        id=1,
+        node_id="R_1",
+        full_name="octo/one",
+        payload=payload(1, full_name="octo/one", description="changed-a"),
+        etag='W/"e1"',
+        not_modified=False,
+    )
+    plain = HydratedRepo(
+        id=2,
+        node_id="R_2",
+        full_name="octo/two",
+        payload=payload(2, full_name="octo/two", description="changed-b"),
+        etag=None,
+        not_modified=False,
+    )
+    apply_hydration_batch(clean, [("octo/one", etagged), ("octo/two", plain)])
+    assert repo_row(clean, 1)["etag"] == 'W/"e1"'
+    assert repo_row(clean, 2)["etag"] is None
+
+
 def test_apply_hydration_304_leaves_the_row_unchanged(clean: Engine):
     from hydrate.repo_client import hydrate_repo
     from store.lifecycle import LifecycleOutcome, apply_hydration

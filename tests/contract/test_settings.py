@@ -307,7 +307,7 @@ def test_set_to_corpus_build_limits_saves_the_profile(clean, tmp_path, monkeypat
         request_deadline_seconds=86_400,
         graphql_batch=True,
         graphql_batch_size=20,
-        limiter_max_concurrent=10,
+        limiter_max_concurrent=20,
         discovery_concurrency=32,
     )
     with clean.connect() as connection:

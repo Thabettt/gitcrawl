@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -795,7 +796,11 @@ def _run_filter(
     virtual = dict(spec.virtual)
     warnings = _r44_warnings(virtual)
     query = spec_to_query(spec)
+    timings: dict[str, float] = {}
+    started = time.perf_counter()
     total_count = pipeline.count_total(deps, query)
+    timings["count"] = time.perf_counter() - started
+    started = time.perf_counter()
     stats = pipeline.run_search_discovery(
         deps,
         query,
@@ -804,6 +809,7 @@ def _run_filter(
         total_count=total_count,
         discovery_concurrency=cfg.discovery_concurrency,
     )
+    timings["discovery"] = time.perf_counter() - started
     if stats.incomplete_shards > 0:
         warnings.append(
             f"{stats.incomplete_shards} discovery shard(s) incomplete; results are partial"
@@ -831,7 +837,9 @@ def _run_filter(
             "results are incomplete"
         )
     hook = _audit_hook(deps)
+    started = time.perf_counter()
     ordered = _ordered_rows(deps.engine, list(stats.repo_ids))
+    timings["candidates"] = time.perf_counter() - started
     missing_local = max(0, unique_found - len(ordered))
     if missing_local > 0:
         warnings.append(
@@ -853,6 +861,7 @@ def _run_filter(
         )
     cancellation.check()
     progress.report("hydrating", 0, len(candidates), fetched=stats.fetched)
+    started = time.perf_counter()
     hydration = _hydrate(
         deps,
         candidates,
@@ -862,6 +871,9 @@ def _run_filter(
             "hydrating", done, total, fetched=stats.fetched
         ),
     )
+    timings["hydration"] = time.perf_counter() - started
+    timings["hydration_fetch"] = hydration.fetch_seconds
+    timings["hydration_apply"] = hydration.apply_seconds
     graphql_report: dict[str, object] = {"hydration": hydration.batch}
     if hydration.unresolved:
         sample = "; ".join(
@@ -879,6 +891,7 @@ def _run_filter(
     rows = _ordered_rows(deps.engine, [row["id"] for row in candidates])
     budget = {"remaining": cfg.max_enrich}
     skipped = {"geo": 0, "dockerfile": 0, "commits": 0, "language_bytes": 0}
+    started = time.perf_counter()
     handlers, unsupported = _enrich_handlers(
         deps,
         rows,
@@ -902,6 +915,7 @@ def _run_filter(
     surviving = set(survivors)
     rows = [row for row in rows if row["id"] in surviving]
     warnings.extend(segment_stats.warnings)
+    timings["enrich"] = time.perf_counter() - started
     if skipped["geo"] > 0:
         warnings.append(
             f"{skipped['geo']} repo(s) skipped because owner country could not be resolved; "
@@ -927,8 +941,10 @@ def _run_filter(
             "sort=help-wanted-issues has no local data; survivor order kept and results are "
             "incomplete"
         )
+    started = time.perf_counter()
     rows = apply_sort(rows, spec.sort, spec.order)
     items = [_payload_item(row, virtual) for row in rows]
+    timings["sort_payload"] = time.perf_counter() - started
     field_stats = asdict(segment_stats)
     field_stats["graphql"] = graphql_report
     return RunPayload(
@@ -941,6 +957,7 @@ def _run_filter(
         updated=stats.updated,
         unchanged=stats.unchanged,
         skipped=stats.skipped,
+        timings=timings,
     )
 
 

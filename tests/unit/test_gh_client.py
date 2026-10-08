@@ -754,6 +754,68 @@ def test_cancellation_aborts_before_a_retry_sleep():
     assert slept == []
 
 
+def test_cancellation_interrupts_a_long_limiter_denial_sleep():
+    from lib import cancellation
+
+    limiter = BucketLimiter(fakeredis.FakeRedis(), specs={"search": (0, 60.0)}, max_concurrent=100)
+    state = {"cancel": False}
+    slept: list[float] = []
+
+    def cancelling_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        state["cancel"] = True
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    )
+    token = cancellation.bind(lambda: state["cancel"])
+    try:
+        with pytest.raises(cancellation.RunCancelled):
+            request_with_retry(
+                client,
+                "GET",
+                "https://api.github.com/search/repositories?q=x",
+                limiter=limiter,
+                token_id="tok",
+                max_attempts=10,
+                sleep=cancelling_sleep,
+                now=lambda: 1000.0,
+            )
+    finally:
+        cancellation.reset(token)
+    assert slept == [1.0]
+
+
+def test_cancellation_interrupts_a_long_retry_after_sleep():
+    from lib import cancellation
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(403, headers={"retry-after": "300"})
+        )
+    )
+    state = {"cancel": False}
+    slept: list[float] = []
+
+    def cancelling_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        state["cancel"] = True
+
+    token = cancellation.bind(lambda: state["cancel"])
+    try:
+        with pytest.raises(cancellation.RunCancelled):
+            request_with_retry(
+                client,
+                "GET",
+                "https://api.github.com/x",
+                sleep=cancelling_sleep,
+                now=lambda: 1000.0,
+            )
+    finally:
+        cancellation.reset(token)
+    assert slept == [1.0]
+
+
 def test_short_message_prefers_json_message():
     response = httpx.Response(
         422, json={"message": "Only the first 1000 search results are available"}

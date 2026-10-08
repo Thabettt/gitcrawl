@@ -1,8 +1,13 @@
 import dataclasses
+from datetime import UTC, datetime
 
 import pytest
 
 from limiter.classifier import Action, Decision, classify, classify_transport
+
+
+def epoch(*parts: int) -> float:
+    return datetime(*parts, tzinfo=UTC).timestamp()
 
 
 def no_jitter():
@@ -89,6 +94,27 @@ def test_non_numeric_retry_after_falls_back_to_reset():
     decision = classify(403, headers, now=1000.0)
     assert decision.action is Action.WAIT_RESET
     assert decision.sleep_seconds == 300.0
+
+
+def test_http_date_retry_after_is_honored_as_seconds_from_now():
+    headers = {"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"}
+    decision = classify(403, headers, now=epoch(2015, 10, 21, 7, 27, 40))
+    assert decision.action is Action.RETRY_AFTER
+    assert decision.sleep_seconds == 20.0
+
+
+def test_expired_http_date_retry_after_falls_through_to_backoff():
+    headers = {"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"}
+    decision = classify(403, headers, now=epoch(2015, 10, 21, 7, 28, 30), jitter=no_jitter)
+    assert decision.action is Action.BACKOFF
+    assert decision.sleep_seconds == 60.0
+
+
+def test_http_date_without_timezone_is_treated_as_utc():
+    headers = {"retry-after": "Sun Nov  6 08:49:37 1994"}
+    decision = classify(429, headers, now=epoch(1994, 11, 6, 8, 49, 7))
+    assert decision.action is Action.RETRY_AFTER
+    assert decision.sleep_seconds == 30.0
 
 
 def test_forbidden_with_exhausted_quota_waits_for_reset():

@@ -15,7 +15,7 @@ from lib.deadlines import Deadline
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
 from lib.graphql_batch import MAX_BATCH_SIZE, GraphQLAuthError, fetch_batch
 from limiter.buckets import BucketLimiter
-from store.lifecycle import apply_hydration
+from store.lifecycle import apply_hydration, apply_hydration_batch
 from store.models import Repo
 
 _NAME_BATCH = 5000
@@ -33,6 +33,8 @@ class RefreshStats:
     batch: dict = field(default_factory=dict)
     commit_counts: dict[str, int] = field(default_factory=dict)
     language_bytes: dict[str, dict[str, int]] = field(default_factory=dict)
+    fetch_seconds: float = 0.0
+    apply_seconds: float = 0.0
 
 
 def _stored_etags(
@@ -111,6 +113,7 @@ def refresh_repos_batched(
     allow_requests: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
     concurrency: int = 1,
+    clock: Callable[[], float] = time.perf_counter,
 ) -> RefreshStats:
     stats = RefreshStats()
     candidates = [(str(row["id"]), str(row["full_name"])) for row in rows]
@@ -170,6 +173,7 @@ def refresh_repos_batched(
             stats.commit_counts[key] = count
         return None
 
+    fetch_started = clock()
     outcome = fetch_batch(
         RepoDetailsAdapter(dict(candidates), batch_size=batch_size),
         [key for key, _ in candidates],
@@ -186,6 +190,9 @@ def refresh_repos_batched(
         on_progress=on_progress,
         concurrency=concurrency,
     )
+    stats.fetch_seconds = clock() - fetch_started
+    apply_started = clock()
+    items: list[tuple[str, HydratedRepo]] = []
     for key, details in outcome.values.items():
         hydrated = HydratedRepo(
             id=details.repo_id,
@@ -195,7 +202,9 @@ def refresh_repos_batched(
             etag=None,
             not_modified=False,
         )
-        result = apply_hydration(engine, full_name_by_key[key], hydrated)
+        items.append((full_name_by_key[key], hydrated))
+    results = apply_hydration_batch(engine, items)
+    for (key, details), result in zip(outcome.values.items(), results, strict=True):
         stats.refreshed += 1
         if result.renamed_from is not None:
             stats.renamed += 1
@@ -203,6 +212,7 @@ def refresh_repos_batched(
             stats.commit_counts[key] = details.commit_count
         if details.language_bytes:
             stats.language_bytes[key] = details.language_bytes
+    stats.apply_seconds = clock() - apply_started
     stats.unresolved = {full_name_by_key[key]: reason for key, reason in outcome.unresolved.items()}
     stats.batch = outcome.stats.as_dict()
     return stats

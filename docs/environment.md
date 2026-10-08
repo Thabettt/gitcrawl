@@ -211,7 +211,7 @@ shows it read-only):
 These are the values the **Set to corpus-build limits** button applies; the ranges shown on the page are safety limits, and the preset sits well inside them. The derivation (and the multi-token scale-up) lives in `design/run-limits.md`.
 
 - `GITCRAWL_GRAPHQL_BATCH_SIZE` env overrides are clamped to 1..20 at settings load (a value above the API cap clamps to 20 instead of failing every run).
-- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 20)` as the GraphQL batch concurrency. The corpus preset's 10 ran ~2,800 repos/min live, against ~300–400 sequential.
+- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 20)` as the GraphQL batch concurrency. The corpus preset is 20, raised from the profiled 10 (which ran ~2,800 repos/min live against ~300–400 sequential); the per-run point cost is unchanged, so watch for secondary-limit 403s — the classifier backoff already handles them.
 - `GITCRAWL_DISCOVERY_CONCURRENCY` is the discovery pool size: each run plans shards with batched GraphQL count probes, then fetches pages with one GraphQL search connection per worker. Default and corpus value 32 — the measured operating point (`design/corpus-building-efficient-engineering.md` §9.4).
 
 A corpus run occupies the single executor for its whole duration; within it, discovery fetches

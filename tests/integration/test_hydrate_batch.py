@@ -119,6 +119,43 @@ def test_batched_hydration_saves_every_repo_in_one_request(clean_db):
     assert count == 25
 
 
+def test_batched_hydration_counts_renames(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        data: dict[str, object] = {}
+        for alias, _owner, _name in ALIAS_RE.findall(body["query"]):
+            node = graphql_node(1)
+            node["name"] = "renamed"
+            node["nameWithOwner"] = "octo/renamed"
+            data[alias] = node
+        return httpx.Response(200, json={"data": data})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    stats = refresh_repos_batched(engine, client, rows_for(1))
+    assert stats.refreshed == 1
+    assert stats.renamed == 1
+    with engine.connect() as connection:
+        history = (
+            connection.execute(text("SELECT full_name FROM full_name_history WHERE repo_id = 1"))
+            .scalars()
+            .all()
+        )
+    assert history == ["octo/repo1"]
+
+
+def test_batched_hydration_reports_fetch_and_apply_seconds(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 1)
+    ticks = iter([0.0, 3.0, 5.0, 9.0])
+    client = httpx.Client(transport=httpx.MockTransport(graphql_handler([])))
+    stats = refresh_repos_batched(engine, client, rows_for(1), clock=lambda: next(ticks))
+    assert stats.fetch_seconds == 3.0
+    assert stats.apply_seconds == 4.0
+
+
 def test_one_bad_repo_falls_back_to_rest_without_touching_its_neighbours(clean_db):
     engine = clean_db()
     seed_repos(engine, 3)

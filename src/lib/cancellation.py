@@ -14,6 +14,10 @@ def bind(cancel: Callable[[], bool] | None) -> Token:
     return _current.set(cancel)
 
 
+def bound() -> Callable[[], bool] | None:
+    return _current.get()
+
+
 def reset(token: Token) -> None:
     _current.reset(token)
 

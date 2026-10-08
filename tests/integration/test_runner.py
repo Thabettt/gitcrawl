@@ -1421,6 +1421,33 @@ def test_run_filter_reports_batch_counts_in_field_stats(clean: Engine):
     assert hydration["deadline_hit"] is False
 
 
+def test_run_filter_records_stage_timings(clean: Engine):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    payload = run_filter(make_deps(clean, client), spec_for(q="language:python"))
+    stages = {
+        "count",
+        "discovery",
+        "candidates",
+        "hydration",
+        "hydration_fetch",
+        "hydration_apply",
+        "enrich",
+        "sort_payload",
+    }
+    assert stages <= set(payload.timings)
+    assert all(isinstance(value, float) and value >= 0.0 for value in payload.timings.values())
+
+
 def test_runner_config_from_maps_settings(clean: Engine):
     from serve.runner import runner_config_from
     from store.settings import update_run_settings
@@ -1441,6 +1468,28 @@ def test_runner_config_from_maps_settings(clean: Engine):
     assert config.max_hydrate == 1
     assert config.graphql_batch is False
     assert config.discovery_concurrency == 48
+
+
+def test_corpus_profile_hydrates_at_twenty_with_matching_limiter_cap(clean: Engine):
+    from serve.runner import build_deps, runner_config_from
+    from serve.settings_spec import parse_settings_form
+    from store.settings import update_run_settings
+
+    settings = update_run_settings(clean, parse_settings_form({"preset": "corpus"}))
+    config = runner_config_from(settings)
+    deps = build_deps(
+        clean,
+        token="t",
+        redis_client=fakeredis.FakeRedis(),
+        max_concurrent=settings.limiter_max_concurrent,
+    )
+    assert settings.limiter_max_concurrent == 20
+    assert config.concurrency == 20
+    assert deps.limiter is not None
+    assert config.concurrency <= deps.limiter.max_concurrent
+
+    raised = update_run_settings(clean, {"limiter_max_concurrent": 40})
+    assert runner_config_from(raised).concurrency == 20
 
 
 def test_build_deps_honors_max_concurrent(clean: Engine):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
@@ -9,6 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
+from lib.batching import chunked
 from store.models import FullNameHistory, Repo
 from store.upserts import upsert_repos
 
@@ -47,6 +48,84 @@ def _record_history(engine: Engine, repo_id: int, full_name: str) -> None:
     )
     with engine.begin() as connection:
         connection.execute(statement)
+
+
+def _record_history_batch(engine: Engine, rows: list[dict], *, batch_size: int = 500) -> None:
+    for batch in chunked(rows, batch_size):
+        statement = (
+            pg_insert(FullNameHistory)
+            .values(batch)
+            .on_conflict_do_nothing(index_elements=["repo_id", "full_name"])
+        )
+        with engine.begin() as connection:
+            connection.execute(statement)
+
+
+def apply_hydration_batch(
+    engine: Engine,
+    items: Sequence[tuple[str, HydratedRepo]],
+    *,
+    batch_size: int = 500,
+) -> list[LifecycleOutcome]:
+    resolved: list[tuple[str, HydratedRepo, dict]] = []
+    for requested_full_name, hydrated in items:
+        payload = hydrated.payload
+        if payload is None:
+            raise ValueError("hydrated payload is required for a 200 response")
+        resolved.append((requested_full_name, hydrated, payload))
+
+    chosen: dict[int, tuple[HydratedRepo, dict]] = {}
+    for _requested, hydrated, payload in resolved:
+        chosen[cast(int, payload["id"])] = (hydrated, payload)
+
+    names: dict[str, int] = {}
+    for repo_id, (_hydrated, payload) in chosen.items():
+        key = str(payload["full_name"]).casefold()
+        if names.setdefault(key, repo_id) != repo_id:
+            return [
+                apply_hydration(engine, requested, hydrated)
+                for requested, hydrated, _payload in resolved
+            ]
+
+    plain: list[dict] = []
+    with_etags: list[dict] = []
+    etags: dict[int, str | None] = {}
+    for repo_id, (hydrated, payload) in chosen.items():
+        if hydrated.etag is not None:
+            with_etags.append(payload)
+            etags[repo_id] = hydrated.etag
+        else:
+            plain.append(payload)
+    if plain:
+        upsert_repos(engine, plain, batch_size=batch_size)
+    if with_etags:
+        upsert_repos(engine, with_etags, batch_size=batch_size, etags=etags)
+
+    history: dict[tuple[int, str], None] = {}
+    outcomes: list[LifecycleOutcome] = []
+    for requested_full_name, _hydrated, payload in resolved:
+        repo_id = cast(int, payload["id"])
+        renamed_from = None
+        history_added = False
+        if payload["full_name"] != requested_full_name:
+            renamed_from = requested_full_name
+            history_added = True
+            history[(repo_id, requested_full_name)] = None
+        outcomes.append(
+            LifecycleOutcome(
+                repo_id=repo_id,
+                renamed_from=renamed_from,
+                history_added=history_added,
+                tombstoned=False,
+            )
+        )
+    if history:
+        _record_history_batch(
+            engine,
+            [{"repo_id": repo_id, "full_name": name} for repo_id, name in history],
+            batch_size=batch_size,
+        )
+    return outcomes
 
 
 def apply_hydration(

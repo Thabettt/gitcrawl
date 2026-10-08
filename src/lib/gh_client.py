@@ -56,6 +56,22 @@ _TRIAGE_STATUSES = frozenset({403, 429, 422, 500, 502, 503, 504})
 _TIMEOUT_STATUSES = frozenset({502, 504})
 _RETRYABLE_ACTIONS = frozenset({Action.RETRY_AFTER, Action.WAIT_RESET, Action.BACKOFF})
 _BODY_FALLBACK_CHARS = 300
+_CANCEL_SLEEP_CHUNK = 1.0
+
+
+def _sleep_with_cancellation(seconds: float, sleep: Callable[[float], None]) -> None:
+    """Sleep in short slices while a run is cancellable so Stop stays responsive."""
+    if cancellation.bound() is None:
+        sleep(seconds)
+        return
+    remaining = max(0.0, seconds)
+    while True:
+        cancellation.check()
+        if remaining <= 0:
+            return
+        step = min(remaining, _CANCEL_SLEEP_CHUNK)
+        sleep(step)
+        remaining -= step
 
 
 def resource_for_url(url: str) -> str:
@@ -185,8 +201,7 @@ def request_with_retry(
                     raise ThrottledError(acquired.retry_after or 0.0)
                 if limiter.deadline is not None:
                     limiter.deadline.bound_wait(acquired.retry_after or 0.0)
-                cancellation.check()
-                sleep(acquired.retry_after or 0.0)
+                _sleep_with_cancellation(acquired.retry_after or 0.0, sleep)
                 continue
             denials = 0
         try:
@@ -210,8 +225,7 @@ def request_with_retry(
             wait = decision.sleep_seconds or 0.0
             if limiter is not None and limiter.deadline is not None:
                 limiter.deadline.bound_wait(wait)
-            cancellation.check()
-            sleep(wait)
+            _sleep_with_cancellation(wait, sleep)
             continue
         latency_ms = (now() - started) * 1000.0
         if on_response is not None:
@@ -242,7 +256,6 @@ def request_with_retry(
             wait = decision.sleep_seconds or 0.0
             if limiter is not None and limiter.deadline is not None:
                 limiter.deadline.bound_wait(wait)
-            cancellation.check()
-            sleep(wait)
+            _sleep_with_cancellation(wait, sleep)
             continue
         return response

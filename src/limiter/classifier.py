@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC
+from email.utils import parsedate_to_datetime
 from enum import StrEnum
 
 
@@ -40,6 +42,23 @@ def _parse_number(value: object) -> float | None:
         return None
 
 
+def _parse_retry_after(value: object, now: float) -> float | None:
+    seconds = _parse_number(value)
+    if seconds is not None:
+        return seconds
+    if value is None:
+        return None
+    try:
+        parsed = parsedate_to_datetime(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return max(0.0, parsed.timestamp() - now)
+
+
 def _backoff_seconds(attempt: int, jitter: Callable[[], float]) -> float:
     return min(480.0, 60.0 * 2**attempt) + jitter()
 
@@ -64,7 +83,7 @@ def classify(
         reason = "success" if status != 304 else "not_modified"
         return Decision(Action.FREE, None, resource, reason)
     if status in (403, 429):
-        retry_after = _parse_number(_header(headers, "retry-after"))
+        retry_after = _parse_retry_after(_header(headers, "retry-after"), now)
         if retry_after is not None and retry_after > 0:
             return Decision(Action.RETRY_AFTER, retry_after, resource, "retry-after")
         remaining = _header(headers, "x-ratelimit-remaining")

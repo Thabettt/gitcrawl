@@ -159,6 +159,7 @@ def test_execute_run_done_snapshots_rows_and_writes_bundle(db: Engine, tmp_path)
     payload = RunPayload(
         total_count=57,
         fetched=3,
+        timings={"count": 1.5},
         items=[
             _item(),
             RunPayloadItem(repo_id=2, full_name="octo/world", raw=raw),
@@ -259,8 +260,11 @@ def test_execute_run_done_snapshots_rows_and_writes_bundle(db: Engine, tmp_path)
         "incomplete",
         "items",
         "field_stats",
+        "timings",
     }
     assert bundle["field_stats"] == {}
+    assert bundle["timings"]["count"] == 1.5
+    assert bundle["timings"]["snapshot"] >= 0.0
     assert bundle["filter"] == FILTER
     assert bundle["filter_hash"] == FILTER_HASH
     assert bundle["run_id"] == run_id

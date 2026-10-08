@@ -48,6 +48,7 @@ class RunPayload:
     updated: int | None = None
     unchanged: int | None = None
     skipped: int | None = None
+    timings: dict = field(default_factory=dict)
 
 
 Runner = Callable[[int, dict], RunPayload]
@@ -194,6 +195,7 @@ def _write_bundle(run: dict, payload: RunPayload, runs_root: str) -> str:
         "incomplete": payload.incomplete,
         "items": [_bundle_item(item) for item in payload.items],
         "field_stats": payload.field_stats,
+        "timings": payload.timings,
     }
     with (directory / "bundle.json").open("w", encoding="utf-8") as handle:
         json.dump(bundle, handle, ensure_ascii=False, indent=2)
@@ -289,7 +291,9 @@ def execute_run(
         payload = (runner or _default_runner)(run_id, run["filter_spec"])
         cancellation.check()
         reporter.update("writing", 0, len(payload.items), {}, force=True)
+        snapshot_started = time.perf_counter()
         _snapshot_items(engine, run_id, payload.items)
+        payload.timings["snapshot"] = time.perf_counter() - snapshot_started
         bundle_dir = _write_bundle(run, payload, runs_root)
         with engine.begin() as connection:
             connection.execute(
