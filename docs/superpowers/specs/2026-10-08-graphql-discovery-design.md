@@ -64,23 +64,19 @@ query {
   s: search(first: 100, after: $cursor, query: "…", type: REPOSITORY) {
     repositoryCount
     pageInfo { hasNextPage endCursor }
-    nodes { ... on Repository { databaseId id nameWithOwner name description homepageUrl
-      primaryLanguage { name } licenseInfo { spdxId }
-      repositoryTopics(first: 100) { nodes { topic { name } } }
-      visibility isFork parent { nameWithOwner } isArchived isDisabled isTemplate mirrorUrl
-      diskUsage stargazerCount forkCount watchers { totalCount }
-      issues(states: [OPEN]) { totalCount } defaultBranchRef { name }
-      hasIssuesEnabled hasWikiEnabled hasProjectsEnabled hasDiscussionsEnabled
-      hasPullRequestsEnabled owner { login __typename ... on User { databaseId }
-        ... on Organization { databaseId } } createdAt pushedAt updatedAt } }
+    nodes { ... on Repository { databaseId id nameWithOwner name owner { login __typename
+      ... on User { databaseId } ... on Organization { databaseId } } stargazerCount
+      forkCount isArchived primaryLanguage { name } licenseInfo { spdxId }
+      pushedAt createdAt } }
   }
   rateLimit { cost remaining }
 }
 ```
 
-- Payload parity goal: every field `normalize_repo` reads is requested except `has_pages`, `custom_properties`, and `source_full_name` (fork-network source), which the GraphQL schema does not expose; they stay `None`/`{}` exactly as the hydration adapter already leaves them (documented parity gap).
+- Lean page set (measured 2026-10-08): the page query requests exactly the 12 fields above — identity (`databaseId`, `id`, `nameWithOwner`, `name`, `owner`), counters (`stargazerCount`, `forkCount`), archive status, `primaryLanguage`, `licenseInfo`, `pushedAt`, `createdAt`. The original 35-field query (nested `repositoryTopics`/`watchers`/`issues` connections) consistently hit GitHub's ~10 s query timeout at `first: 100` (502 at 10.6–10.9 s) and timeout-stormed under 32-way concurrency (133/192 shards incomplete); the lean set measures 3.9–6.0 s serial and 4.1–4.7 s under 6-way parallel load at `first: 100` with 0 failures.
+- Parity gap: `description`, `homepageUrl`, `repositoryTopics`, `watchers`, `issues`, `diskUsage`, `defaultBranchRef`, `visibility`, `isFork`, `parent`, `isDisabled`, `isTemplate`, `mirrorUrl`, the `has*` flags, and `updatedAt` are no longer requested by discovery, so un-hydrated rows carry `None`/`0`/`[]` until hydration; corpus runs hydrate all candidates and interactive runs hydrate up to `max_hydrate`, so the gap closes for every candidate either path touches. `has_pages`, `custom_properties`, and `source_full_name` (fork-network source) remain unexposed by the GraphQL schema and stay `None`/`{}` exactly as the hydration adapter already leaves them (the pre-existing documented gap).
 - Count probe replaces only the search body with `first: 1` + `repositoryCount`; the point floor keeps each 20-probe batch at 1 point.
-- Measured cost: single-connection 100-node page ~3–4 s; the mapper and query builder are unit-tested against captured payloads.
+- Measured cost: single-connection lean 100-node page 3.9–6.0 s serial and 4.1–4.7 s under 6-way parallel load; the mapper and query builder are unit-tested against captured payloads, and `node_to_item` still parses every legacy field if one reappears in a payload.
 
 ## 4. Errors, retries, backoff
 
@@ -128,7 +124,7 @@ After the engine ships: one real corpus-profile run of the run-#9 filter with pe
 
 | Risk | Mitigation |
 |---|---|
-| Rich page query (nested topics/watchers/issues connections) may hit GraphQL resource limits or the 10 s timeout at `first: 100` | Live probe during implementation; if it partials, drop to `first: 50` (still one connection) or move the heaviest nested fields out of the page query and document the parity gap |
+| **Resolved 2026-10-08**: the rich 35-field page query (nested topics/watchers/issues connections) hit GraphQL resource limits / the ~10 s timeout at `first: 100` (502 at 10.6–10.9 s; 133/192 shards incomplete under 32-way load) | Page query cut to the measured lean 12-field set (§3): 3.9–6.0 s serial and 4.1–4.7 s under 6-way parallel load at `first: 100`, 0 failures; adaptive halving (`100 → 50 → 25`) remains as the safety net |
 | Undisclosed secondary limits under sustained multi-minute bursts | 32 of 100 concurrent; per-page backoff; run deadline; a single watchpoint to lower `discovery_concurrency` without code changes |
 | Points meter exhaustion mid-run (5,000/hr shared with hydration) | ~10% of budget per 39k run measured; limiter reconciles from headers and pauses |
 | Search drift/nondeterministic pagination (D6) | Unchanged: `id` dedupe, bundle as arbiter, warnings |

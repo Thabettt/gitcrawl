@@ -18,6 +18,7 @@ from discover.since_scan import iter_since_pages, save_checkpoint
 from lib import audit, cancellation, progress
 from lib.deadlines import DeadlineExceededError
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
+from lib.graphql_batch import MalformedResponse
 from limiter.buckets import BucketLimiter
 from scheduler.shard_planner import plan_shards
 from scheduler.state_machine import ShardState, ShardStore
@@ -290,7 +291,13 @@ class _Worker:
                         incomplete = True
                     if page.repository_count > fetched and not page.has_next:
                         incomplete = True
-        except (RequestFailed, ThrottledError, PartialResultsError, httpx.HTTPError):
+        except (
+            RequestFailed,
+            ThrottledError,
+            PartialResultsError,
+            MalformedResponse,
+            httpx.HTTPError,
+        ):
             with self._lock:
                 self._stats.incomplete_shards += 1
             self._store.set_state(

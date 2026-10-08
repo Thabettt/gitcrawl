@@ -88,6 +88,50 @@ def test_node_to_item_maps_rest_shape():
     assert item["has_pages"] is None and item["custom_properties"] == {}
 
 
+def test_page_query_requests_only_the_lean_node_fields():
+    captured = []
+    payloads = [page_payload([node()])]
+    list(iter_pages(graphql_client(payloads, captured), "q", max_pages=1, now=lambda: 1000.0))
+    query = json.loads(captured[0].content)["query"]
+    for kept in (
+        "databaseId",
+        "nameWithOwner",
+        "stargazerCount",
+        "forkCount",
+        "isArchived",
+        "primaryLanguage { name }",
+        "licenseInfo { spdxId }",
+        "pushedAt",
+        "createdAt",
+        "owner {",
+    ):
+        assert kept in query
+    assert "\n      id\n" in query
+    assert "\n      name\n" in query
+    for dropped in (
+        "repositoryTopics",
+        "watchers",
+        "issues",
+        "diskUsage",
+        "defaultBranchRef",
+        "description",
+        "homepageUrl",
+        "visibility",
+        "isFork",
+        "parent",
+        "isDisabled",
+        "isTemplate",
+        "mirrorUrl",
+        "hasIssuesEnabled",
+        "hasWikiEnabled",
+        "hasProjectsEnabled",
+        "hasDiscussionsEnabled",
+        "hasPullRequestsEnabled",
+        "updatedAt",
+    ):
+        assert dropped not in query
+
+
 def test_iter_pages_follows_cursor_and_caps_pages():
     captured = []
     payloads = [

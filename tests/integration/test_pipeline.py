@@ -287,6 +287,27 @@ def test_transient_page_errors_exhausted_mark_the_shard_incomplete(clean: Engine
     assert shard_state(clean, 1) == ("incomplete", True)
 
 
+def test_malformed_page_marks_only_that_shard_incomplete(clean: Engine):
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 500)
+        if "created:2008-01-01" in search_query_of(request):
+            return httpx.Response(200, content=b"<html>edge returned a non-json 200</html>")
+        return page_payload([11000])
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(deps, "topic:ai", total_count=1500, jitter=lambda: 0.0)
+
+    assert stats.shards == 2
+    assert stats.fetched == 1
+    assert stats.inserted == 1
+    assert stats.incomplete_shards == 1
+    assert stats.repo_ids == (11000,)
+    assert shard_state(clean, 1) == ("incomplete", True)
+    assert shard_state(clean, 2) == ("done", False)
+    assert scalar(clean, "SELECT count(*) FROM repos") == 1
+
+
 def test_expired_deadline_leaves_shards_pending(clean: Engine):
     def handler(request: httpx.Request):
         if is_count(request):

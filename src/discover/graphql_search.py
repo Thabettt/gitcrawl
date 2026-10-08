@@ -27,38 +27,19 @@ _NODE_FIELDS = """      databaseId
       id
       nameWithOwner
       name
-      description
-      homepageUrl
-      primaryLanguage { name }
-      licenseInfo { spdxId }
-      repositoryTopics(first: 100) { nodes { topic { name } } }
-      visibility
-      isFork
-      parent { nameWithOwner }
-      isArchived
-      isDisabled
-      isTemplate
-      mirrorUrl
-      diskUsage
-      stargazerCount
-      forkCount
-      watchers { totalCount }
-      issues(states: [OPEN]) { totalCount }
-      defaultBranchRef { name }
-      hasIssuesEnabled
-      hasWikiEnabled
-      hasProjectsEnabled
-      hasDiscussionsEnabled
-      hasPullRequestsEnabled
       owner {
         login
         __typename
         ... on User { databaseId }
         ... on Organization { databaseId }
       }
-      createdAt
+      stargazerCount
+      forkCount
+      isArchived
+      primaryLanguage { name }
+      licenseInfo { spdxId }
       pushedAt
-      updatedAt"""
+      createdAt"""
 
 
 @dataclass(frozen=True)
