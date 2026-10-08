@@ -223,7 +223,7 @@ resumable.
 
 ## Migrations
 
-Current head is **`0012`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, and `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64). None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
+Current head is **`0013`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64), and `0013` raises the `graphql_batch_size` check to 1–50 (default 20). None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
 
 ### Migration locking
 

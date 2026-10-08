@@ -201,7 +201,7 @@ Everything runs from the repo source with `PYTHONPATH=src` (implicit namespace p
 | `src/hydrate/` | REST repo hydration (ETag, redirects, commit counts), GraphQL repo adapter, batched refresh driver |
 | `src/enrich/` | Geo resolver + gazetteer, trees-first file presence, GraphQL file/owner adapters, cost planner, segment executor, repo cloner |
 | `src/serve/` | FastAPI app and middleware, run runner + background executor, filter-spec parsing/hashing, virtual params, console pages/templates/static, exports, clone registry, library, corpora, diff, quality, metrics, settings |
-| `migrations/` | Alembic revisions `0001`–`0012` (11 tables; `0010`–`0011` add the runs progress columns, `0012` adds `app_settings.discovery_concurrency`) |
+| `migrations/` | Alembic revisions `0001`–`0013` (11 tables; `0010`–`0011` add the runs progress columns, `0012` adds `app_settings.discovery_concurrency`, `0013` raises the batch-size cap) |
 | `tests/` | `unit/`, `integration/`, `contract/`, `golden/`, `js/` suites |
 | `design/`, `findings/`, `docs/` | Research, frozen specs, plans, environment and legal runbooks (not runtime code) |
 
@@ -218,7 +218,7 @@ Pacing is a first-class subsystem here, not a retry loop bolted on:
 
 ## Data model and run artifacts
 
-Eleven PostgreSQL tables, across twelve Alembic revisions:
+Eleven PostgreSQL tables, across thirteen Alembic revisions:
 
 | Table | Purpose |
 |---|---|
@@ -560,7 +560,7 @@ Two pieces of test furniture deserve a sentence each. The `golden/` suite snapsh
 - **Multi-segment enrichment parallelism**: the executor supports segments, but the runner currently always uses one.
 - **Mid-run checkpointing**: none — resume re-fetches from the start (upserts make that safe, only slower).
 
-Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests/quarantine_manifest.txt) and enforced by tests, so unwired code cannot silently rot. Migrations `0010`–`0011` carry the run progress columns and `0012` adds `app_settings.discovery_concurrency`; the detection feature's tables remain unbuilt and will claim a later revision.
+Intentional dead surfaces are tracked in [`tests/quarantine_manifest.txt`](tests/quarantine_manifest.txt) and enforced by tests, so unwired code cannot silently rot. Migrations `0010`–`0011` carry the run progress columns, `0012` adds `app_settings.discovery_concurrency`, and `0013` raises the batch-size cap to 50; the detection feature's tables remain unbuilt and will claim a later revision.
 
 **Known operational constraints**: migrations `0005`–`0007` take write-blocking locks; a run occupies the single executor for its whole duration; the default caps are small; the console has no auth (see above).
 
