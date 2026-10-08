@@ -15,10 +15,11 @@ from lib.deadlines import Deadline
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
 from lib.graphql_batch import MAX_BATCH_SIZE, GraphQLAuthError, fetch_batch
 from limiter.buckets import BucketLimiter
-from store.lifecycle import apply_hydration, apply_hydration_batch
+from store.lifecycle import LifecycleOutcome, apply_hydration, apply_hydration_batch
 from store.models import Repo
 
 _NAME_BATCH = 5000
+_APPLY_BATCH = 500
 
 
 @dataclass
@@ -114,7 +115,11 @@ def refresh_repos_batched(
     on_progress: Callable[[int, int], None] | None = None,
     concurrency: int = 1,
     clock: Callable[[], float] = time.perf_counter,
+    apply_batch_size: int = _APPLY_BATCH,
+    on_apply_progress: Callable[[int, int], None] | None = None,
 ) -> RefreshStats:
+    if apply_batch_size < 1:
+        raise ValueError("apply_batch_size must be >= 1")
     stats = RefreshStats()
     candidates = [(str(row["id"]), str(row["full_name"])) for row in rows]
     if not candidates:
@@ -203,7 +208,16 @@ def refresh_repos_batched(
             not_modified=False,
         )
         items.append((full_name_by_key[key], hydrated))
-    results = apply_hydration_batch(engine, items)
+    total = len(items)
+    results: list[LifecycleOutcome] = []
+    if on_apply_progress is not None:
+        on_apply_progress(0, total)
+    done = 0
+    for chunk in chunked(items, apply_batch_size):
+        results.extend(apply_hydration_batch(engine, chunk, batch_size=apply_batch_size))
+        done += len(chunk)
+        if on_apply_progress is not None:
+            on_apply_progress(done, total)
     for (key, details), result in zip(outcome.values.items(), results, strict=True):
         stats.refreshed += 1
         if result.renamed_from is not None:

@@ -80,6 +80,7 @@ PROGRESS_PHASES = {
     "starting": "Starting",
     "discovering": "Finding repos",
     "hydrating": "Fetching details",
+    "saving": "Saving details",
     "enriching": "Applying filters",
     "writing": "Saving results",
 }

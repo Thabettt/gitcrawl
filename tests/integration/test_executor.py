@@ -310,6 +310,22 @@ def test_execute_run_done_snapshots_rows_and_writes_bundle(db: Engine, tmp_path)
     ]
 
 
+def test_snapshot_items_reports_progress_per_batch(db: Engine):
+    from serve.executor import _snapshot_items
+
+    run_id = create_run(db, FILTER, api_version="v1")
+    items = [_item(repo_id=repo_id, full_name=f"octo/r{repo_id}") for repo_id in range(1, 4)]
+    reports: list[tuple[int, int]] = []
+    _snapshot_items(
+        db,
+        run_id,
+        items,
+        batch_size=2,
+        on_progress=lambda done, total: reports.append((done, total)),
+    )
+    assert reports == [(2, 3), (3, 3)]
+
+
 def test_execute_run_persists_field_stats_in_the_bundle(db: Engine, tmp_path):
     run_id = create_run(db, FILTER, api_version="v1")
     field_stats = {

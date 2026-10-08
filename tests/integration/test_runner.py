@@ -1448,6 +1448,36 @@ def test_run_filter_records_stage_timings(clean: Engine):
     assert all(isinstance(value, float) and value >= 0.0 for value in payload.timings.values())
 
 
+def test_run_filter_reports_the_saving_phase(clean: Engine):
+    from lib import progress as progress_module
+
+    reports: list[tuple[str, int, int | None]] = []
+    token = progress_module.bind(
+        lambda phase, done, total, counters: reports.append((phase, done, total))
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        raise AssertionError(f"unexpected path {path}")
+
+    try:
+        client, _requests = scripted(handler)
+        run_filter(make_deps(clean, client), spec_for(q="language:python"))
+    finally:
+        progress_module.reset(token)
+
+    phases = [phase for phase, _done, _total in reports]
+    assert "saving" in phases
+    assert phases.index("saving") < phases.index("enriching")
+    assert ("saving", 1, 1) in reports
+
+
 def test_runner_config_from_maps_settings(clean: Engine):
     from serve.runner import runner_config_from
     from store.settings import update_run_settings

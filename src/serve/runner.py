@@ -223,6 +223,7 @@ def _hydrate(
     cfg: RunnerConfig,
     hook: Callable[[httpx.Response, float], None],
     on_progress: Callable[[int, int], None] | None = None,
+    on_apply_progress: Callable[[int, int], None] | None = None,
 ) -> RefreshStats:
     candidates = rows[: cfg.max_hydrate]
     if not candidates:
@@ -238,6 +239,7 @@ def _hydrate(
         batch_size=cfg.graphql_batch_size,
         allow_requests=cfg.graphql_batch,
         on_progress=on_progress,
+        on_apply_progress=on_apply_progress,
         concurrency=cfg.concurrency,
     )
 
@@ -869,6 +871,9 @@ def _run_filter(
         hook,
         on_progress=lambda done, total: progress.report(
             "hydrating", done, total, fetched=stats.fetched
+        ),
+        on_apply_progress=lambda done, total: progress.report(
+            "saving", done, total, fetched=stats.fetched
         ),
     )
     timings["hydration"] = time.perf_counter() - started

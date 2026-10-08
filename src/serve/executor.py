@@ -145,12 +145,24 @@ def run_status(engine: Engine, run_id: int) -> dict:
 _SNAPSHOT_BATCH = 1000
 
 
-def _snapshot_items(engine: Engine, run_id: int, items: list[RunPayloadItem]) -> None:
+def _snapshot_items(
+    engine: Engine,
+    run_id: int,
+    items: list[RunPayloadItem],
+    *,
+    batch_size: int = _SNAPSHOT_BATCH,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> None:
     with engine.begin() as connection:
         connection.execute(delete(RunItem).where(RunItem.run_id == run_id))
-        for batch in chunked(items, _SNAPSHOT_BATCH):
+        done = 0
+        total = len(items)
+        for batch in chunked(items, batch_size):
             rows = [{"run_id": run_id, **_snapshot_item(item)} for item in batch]
             connection.execute(insert(RunItem), rows)
+            done += len(batch)
+            if on_progress is not None:
+                on_progress(done, total)
 
 
 def _csv_cell(value: object) -> str:
@@ -292,7 +304,14 @@ def execute_run(
         cancellation.check()
         reporter.update("writing", 0, len(payload.items), {}, force=True)
         snapshot_started = time.perf_counter()
-        _snapshot_items(engine, run_id, payload.items)
+        _snapshot_items(
+            engine,
+            run_id,
+            payload.items,
+            on_progress=lambda done, total: reporter.update(
+                "writing", done, total, {}, force=False
+            ),
+        )
         payload.timings["snapshot"] = time.perf_counter() - snapshot_started
         bundle_dir = _write_bundle(run, payload, runs_root)
         with engine.begin() as connection:

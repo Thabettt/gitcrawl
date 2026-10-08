@@ -146,6 +146,30 @@ def test_batched_hydration_counts_renames(clean_db):
     assert history == ["octo/repo1"]
 
 
+def test_batched_hydration_reports_apply_progress(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 25)
+    seen: list[str] = []
+    reports: list[tuple[int, int]] = []
+    client = httpx.Client(transport=httpx.MockTransport(graphql_handler(seen)))
+    stats = refresh_repos_batched(
+        engine,
+        client,
+        rows_for(25),
+        apply_batch_size=10,
+        on_apply_progress=lambda done, total: reports.append((done, total)),
+    )
+    assert stats.refreshed == 25
+    assert reports == [(0, 25), (10, 25), (20, 25), (25, 25)]
+
+
+def test_apply_batch_size_must_be_positive(clean_db):
+    engine = clean_db()
+    client = httpx.Client(transport=httpx.MockTransport(graphql_handler([])))
+    with pytest.raises(ValueError):
+        refresh_repos_batched(engine, client, [], apply_batch_size=0)
+
+
 def test_batched_hydration_reports_fetch_and_apply_seconds(clean_db):
     engine = clean_db()
     seed_repos(engine, 1)
