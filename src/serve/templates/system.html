@@ -35,7 +35,7 @@
   <div class="panel-head">
     <h2>Performance</h2>
     {% if not metrics_error -%}
-    <p class="muted">Rates and response times cover the last 1,000 requests; queue and failed-search counts are live.</p>
+    <p class="muted">Rates and response times cover the last 1,000 requests; failed-search counts are live.</p>
     {%- endif %}
   </div>
   {%- if metrics_error %}
@@ -60,11 +60,6 @@
         </tr>
         {% endif %}
       {% endfor %}
-        <tr>
-          <td>Queue waiting</td>
-          <td>{{ 'n/a' if metrics.queue.pel is none else metrics.queue.pel }}</td>
-          <td><span class="badge {{ 'na' if metrics.queue.pel is none else 'ok' }}">{{ 'no data' if metrics.queue.pel is none else 'fine' }}</span></td>
-        </tr>
         <tr>
           <td>Failed searches (all time)</td>
           <td>{{ metrics.runs.failed }}</td>

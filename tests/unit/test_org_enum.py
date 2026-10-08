@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from discover.org_enum import EnumPage, iter_org_repos, iter_user_repos
-from discover.search_shards import RequestFailed
+from lib.gh_client import RequestFailed
 
 NEXT_URL = "https://api.github.com/orgs/odd%20org/repos?type=sources&per_page=37&odd=keep%2Bme"
 

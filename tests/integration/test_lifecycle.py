@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from discover.graphql_search import iter_pages
-from discover.search_shards import RequestFailed
+from lib.gh_client import RequestFailed
 from store.upserts import upsert_repos
 
 

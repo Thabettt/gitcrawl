@@ -13,8 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from discover.search_shards import RequestFailed
-from lib.gh_client import API_VERSION, PartialResultsError, ThrottledError
+from lib.gh_client import API_VERSION, PartialResultsError, RequestFailed, ThrottledError
 from serve.app import create_app
 from serve.executor import RunPayload, RunPayloadItem, create_run, execute_run
 from serve.filter_spec import parse_filter_spec, spec_hash, spec_to_dict

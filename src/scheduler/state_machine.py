@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from redis.exceptions import ResponseError
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
@@ -33,10 +32,6 @@ _SOURCES: dict[ShardState, frozenset[ShardState]] = {
     for target in ShardState
 }
 
-_GROUP = "workers"
-_SHARD_FIELD = "shard_id"
-_ATTEMPTS_FIELD = "attempts"
-
 
 @dataclass(frozen=True)
 class ShardRow:
@@ -49,40 +44,6 @@ class ShardRow:
     total_count: int | None
     fetched: int | None
     incomplete: bool
-
-
-@dataclass(frozen=True)
-class QueuedShard:
-    stream_id: str
-    shard_id: int
-    attempts: int
-
-
-@dataclass(frozen=True)
-class RetryOutcome:
-    stream_id: str
-    dead_lettered: bool
-
-
-def _as_text(value) -> str:
-    if isinstance(value, bytes):
-        return value.decode()
-    return str(value)
-
-
-def _get_field(fields, name: str) -> str | None:
-    value = fields.get(name)
-    if value is None:
-        value = fields.get(name.encode())
-    return _as_text(value) if value is not None else None
-
-
-def _pending_count(info) -> int:
-    if not info:
-        return 0
-    if isinstance(info, dict):
-        return int(info.get("pending") or 0)
-    return int(info[0] or 0)
 
 
 class ShardStore:
@@ -176,179 +137,3 @@ class ShardStore:
         for state, total in rows:
             counts[str(state)] = int(total)
         return counts
-
-
-class ShardQueue:
-    def __init__(
-        self,
-        redis,
-        *,
-        lanes: int = 4,
-        max_attempts: int = 3,
-        prefix: str = "gitcrawl:shards",
-    ) -> None:
-        self._redis = redis
-        self._lanes = lanes
-        self._max_attempts = max_attempts
-        self._prefix = prefix
-        self._groups_ready: set[int] = set()
-
-    def lane_for(self, shard_id: int) -> int:
-        return shard_id % self._lanes
-
-    def _lane_key(self, lane: int) -> str:
-        return f"{self._prefix}:lane:{lane}"
-
-    @property
-    def _dlq_key(self) -> str:
-        return f"{self._prefix}:dlq"
-
-    def _ensure_group(self, lane: int) -> None:
-        if lane in self._groups_ready:
-            return
-        try:
-            self._redis.xgroup_create(self._lane_key(lane), _GROUP, id="0", mkstream=True)
-        except ResponseError as error:
-            if "BUSYGROUP" not in str(error):
-                raise
-        self._groups_ready.add(lane)
-
-    def _read(self, lane: int, consumer: str, start: str, count: int, block_ms: int):
-        options = {"count": count}
-        if block_ms > 0:
-            options["block"] = block_ms
-        raw = self._redis.xreadgroup(_GROUP, consumer, {self._lane_key(lane): start}, **options)
-        if not raw:
-            return []
-        entries = []
-        for _stream, batch in raw:
-            entries.extend(batch)
-        return entries
-
-    @staticmethod
-    def _queued(stream_id, fields) -> QueuedShard:
-        return QueuedShard(
-            stream_id=_as_text(stream_id),
-            shard_id=int(_get_field(fields, _SHARD_FIELD) or 0),
-            attempts=int(_get_field(fields, _ATTEMPTS_FIELD) or 0),
-        )
-
-    def enqueue(self, shard_id: int) -> str:
-        lane = self.lane_for(shard_id)
-        self._ensure_group(lane)
-        stream_id = self._redis.xadd(
-            self._lane_key(lane), {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: "0"}
-        )
-        return _as_text(stream_id)
-
-    @property
-    def max_attempts(self) -> int:
-        return self._max_attempts
-
-    def requeue(self, shard_id: int, attempts: int) -> str:
-        """Publish a fresh delivery without touching any existing stream entry."""
-        lane = self.lane_for(shard_id)
-        self._ensure_group(lane)
-        stream_id = self._redis.xadd(
-            self._lane_key(lane), {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)}
-        )
-        return _as_text(stream_id)
-
-    def dead_letter(self, shard_id: int, attempts: int) -> str:
-        """Publish a give-up record to the DLQ."""
-        dlq_id = self._redis.xadd(
-            self._dlq_key,
-            {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)},
-        )
-        return _as_text(dlq_id)
-
-    def claim(self, consumer: str, *, count: int = 1, block_ms: int = 0) -> list[QueuedShard]:
-        claimed: list[QueuedShard] = []
-        for lane in range(self._lanes):
-            if len(claimed) >= count:
-                break
-            self._ensure_group(lane)
-            for start in ("0", ">"):
-                remaining = count - len(claimed)
-                if remaining <= 0:
-                    break
-                for stream_id, fields in self._read(lane, consumer, start, remaining, block_ms):
-                    claimed.append(self._queued(stream_id, fields))
-                    if len(claimed) >= count:
-                        break
-        return claimed
-
-    def ack(self, stream_id: str, shard_id: int) -> None:
-        key = self._lane_key(self.lane_for(shard_id))
-        self._redis.xack(key, _GROUP, stream_id)
-        self._redis.xdel(key, stream_id)
-
-    def retry_or_dlq(self, stream_id: str, shard_id: int, *, attempts: int) -> RetryOutcome:
-        key = self._lane_key(self.lane_for(shard_id))
-        fields = {_SHARD_FIELD: str(shard_id), _ATTEMPTS_FIELD: str(attempts)}
-        # Publish the replacement before acknowledging the delivery: a crash between
-        # the two leaves a duplicate (harmless, shard processing is idempotent) while
-        # the reverse order would lose the retry entirely.
-        if attempts < self._max_attempts:
-            new_id = self._redis.xadd(key, fields)
-            self._redis.xack(key, _GROUP, stream_id)
-            self._redis.xdel(key, stream_id)
-            return RetryOutcome(stream_id=_as_text(new_id), dead_lettered=False)
-        dlq_id = self._redis.xadd(self._dlq_key, fields)
-        self._redis.xack(key, _GROUP, stream_id)
-        self._redis.xdel(key, stream_id)
-        return RetryOutcome(stream_id=_as_text(dlq_id), dead_lettered=True)
-
-    def reclaim_stale(
-        self, consumer: str, *, min_idle_ms: int = 60000, count: int = 10
-    ) -> list[QueuedShard]:
-        claimed: list[QueuedShard] = []
-        for lane in range(self._lanes):
-            if len(claimed) >= count:
-                break
-            self._ensure_group(lane)
-            _cursor, entries, _deleted = self._redis.xautoclaim(
-                self._lane_key(lane),
-                _GROUP,
-                consumer,
-                min_idle_ms,
-                "0-0",
-                count=count - len(claimed),
-            )
-            for stream_id, fields in entries:
-                queued = self._queued(stream_id, fields)
-                claimed.append(
-                    QueuedShard(
-                        stream_id=queued.stream_id,
-                        shard_id=queued.shard_id,
-                        attempts=queued.attempts + 1,
-                    )
-                )
-        return claimed
-
-    def pel_size(self, lane: int | None = None) -> int:
-        lanes = range(self._lanes) if lane is None else (lane,)
-        total = 0
-        for index in lanes:
-            self._ensure_group(index)
-            info = self._redis.xpending(self._lane_key(index), _GROUP)
-            total += _pending_count(info)
-        return total
-
-    def total_pel(self) -> int:
-        """Sum pending entries across every shard stream under this prefix.
-
-        Metrics read this with the base prefix so per-run lanes are all counted.
-        Unlike ``pel_size`` this never creates groups on missing streams.
-        """
-        total = 0
-        for key in self._redis.scan_iter(match=f"{self._prefix}*"):
-            name = _as_text(key)
-            try:
-                if _as_text(self._redis.type(name)) != "stream":
-                    continue
-                info = self._redis.xpending(name, _GROUP)
-            except ResponseError:
-                continue
-            total += _pending_count(info)
-        return total

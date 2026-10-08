@@ -6,10 +6,6 @@
       <p>{{ 'n/a' if value is none else value }}</p>
     </article>
     {% endfor %}
-    <article class="card {{ 'na' if payload.queue.pel is none else 'ok' }}">
-      <h3>Queue PEL</h3>
-      <p>{{ 'n/a' if payload.queue.pel is none else payload.queue.pel }}</p>
-    </article>
   </div>
   <p class="limiter">Paused buckets: {{ payload.limiter.paused|length }}
     {% if payload.limiter.degraded %}(degraded: no Redis){% endif %}</p>

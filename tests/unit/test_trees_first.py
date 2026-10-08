@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import httpx
 import pytest
 
-from discover.search_shards import RequestFailed
+from lib.gh_client import RequestFailed
 
 TREE_RESPONSE = {
     "sha": "tree-sha",

@@ -83,7 +83,7 @@ def test_api_metrics_json_shape(clean, tmp_path, monkeypatch):
     response = client.get("/api/metrics")
     assert response.status_code == 200
     payload = response.json()
-    assert set(payload) == {"slo", "runs", "limiter", "queue"}
+    assert set(payload) == {"slo", "runs", "limiter"}
 
 
 def test_metrics_page_renders_cards(clean, tmp_path, monkeypatch):
@@ -98,7 +98,6 @@ def test_metrics_page_renders_cards(clean, tmp_path, monkeypatch):
         "p95 latency",
         "Shard coverage",
         "Geo unmatched",
-        "Queue PEL",
     ):
         assert label in response.text
     assert 'hx-get="/partials/metrics"' in response.text

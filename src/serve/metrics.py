@@ -69,17 +69,6 @@ def _paused(redis_client) -> list[dict]:
     return sorted(paused, key=lambda item: -item["seconds"])
 
 
-def _queue_pel(redis_client) -> int | None:
-    if redis_client is None:
-        return None
-    try:
-        from scheduler.state_machine import ShardQueue
-
-        return int(ShardQueue(redis_client).total_pel())
-    except Exception:
-        return None
-
-
 def _runs_by_status(engine: Engine) -> dict[str, int]:
     counts = {"queued": 0, "running": 0, "done": 0, "failed": 0, "partial": 0}
     with engine.connect() as connection:
@@ -92,10 +81,8 @@ def _runs_by_status(engine: Engine) -> dict[str, int]:
 
 def metrics_payload(engine: Engine, *, redis_client=None, window: int = 1000) -> dict:
     slo = asdict(slo_snapshot(engine, window=window))
-    pel = _queue_pel(redis_client)
     return {
         "slo": slo,
         "runs": _runs_by_status(engine),
         "limiter": {"paused": _paused(redis_client), "degraded": redis_client is None},
-        "queue": {"pel": pel, "degraded": redis_client is None or pel is None},
     }

@@ -9,9 +9,8 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from discover.search_shards import RequestFailed
 from discover.since_scan import SincePage, iter_since_pages, save_checkpoint
-from lib.gh_client import API_BASE
+from lib.gh_client import API_BASE, RequestFailed
 
 NEXT_URL = "https://api.github.com/repositories?since=98765&per_page=100&odd=keep%2Bme"
 
