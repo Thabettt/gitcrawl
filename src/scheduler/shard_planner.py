@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import contextvars
 import re
 from collections import deque
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+
+from lib import cancellation
 
 _CREATED_TOKEN = re.compile(r"(?<!\S)created:(\S+)", re.IGNORECASE)
 
@@ -109,6 +113,32 @@ def _leaf(base: str, start: date, end: date, count: int, *, oversized: bool = Fa
     )
 
 
+def _probe_windows(
+    probe_counts: Callable[[Sequence[str]], Sequence[int]],
+    base: str,
+    level: Sequence[tuple[date, date]],
+    *,
+    batch_size: int,
+    probe_concurrency: int,
+) -> list[int]:
+    chunks = [
+        [range_query(base, start, end) for start, end in level[offset : offset + batch_size]]
+        for offset in range(0, len(level), batch_size)
+    ]
+    if probe_concurrency == 1 or len(chunks) == 1:
+        return [count for chunk in chunks for count in probe_counts(chunk)]
+    with ThreadPoolExecutor(max_workers=min(probe_concurrency, len(chunks))) as pool:
+        futures = []
+        for chunk in chunks:
+            context = contextvars.copy_context()
+            futures.append(pool.submit(context.run, probe_counts, chunk))
+        try:
+            return [count for future in futures for count in future.result()]
+        except BaseException:
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+
+
 def plan_shards(
     query: str,
     probe_counts: Callable[[Sequence[str]], Sequence[int]],
@@ -119,10 +149,13 @@ def plan_shards(
     root_count: int | None = None,
     max_shards: int = 10_000,
     batch_size: int = 20,
+    probe_concurrency: int = 1,
     now: datetime | None = None,
 ) -> tuple[list[ShardSpec], bool]:
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
+    if probe_concurrency < 1:
+        raise ValueError("probe_concurrency must be >= 1")
     current = now if now is not None else datetime.now(UTC)
     ceiling = current.date()
     if ceiling < min_date:
@@ -141,7 +174,10 @@ def plan_shards(
     leaves: list[ShardSpec] = []
     plan_capped = False
     while pending and not plan_capped:
-        level = [pending.popleft() for _ in range(min(batch_size, len(pending)))]
+        cancellation.check()
+        level = [
+            pending.popleft() for _ in range(min(batch_size * probe_concurrency, len(pending)))
+        ]
         if (
             use_root_for_single
             and len(level) == 1
@@ -150,7 +186,13 @@ def plan_shards(
         ):
             counts = [root]
         else:
-            counts = list(probe_counts([range_query(base, start, end) for (start, end) in level]))
+            counts = _probe_windows(
+                probe_counts,
+                base,
+                level,
+                batch_size=batch_size,
+                probe_concurrency=probe_concurrency,
+            )
         for (start, end), count in zip(level, counts, strict=True):
             if count == 0:
                 continue

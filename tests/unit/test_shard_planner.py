@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -314,3 +315,57 @@ def test_plan_capped_false_on_exact_fill():
         MIN_DATE + timedelta(days=1),
         MIN_DATE + timedelta(days=2),
     ]
+
+
+def _disjoint_windows_query(count: int) -> str:
+    days = [MIN_DATE + timedelta(days=2 * index) for index in range(count)]
+    return "q " + " ".join(f"created:{day.isoformat()}" for day in days)
+
+
+def _distinct_count(query: str) -> int:
+    match = RANGE_RE.search(query)
+    assert match is not None
+    start = date.fromisoformat(match.group(1))
+    end = date.fromisoformat(match.group(2))
+    return 100 + (start.toordinal() % 400) + ((end - start).days % 11)
+
+
+def test_probe_concurrency_dispatches_round_batches_concurrently():
+    barrier = threading.Barrier(2, timeout=2)
+
+    def probe(queries):
+        if len(queries) == 20:
+            barrier.wait()
+        return [500 for _ in queries]
+
+    specs, capped = plan_shards(
+        _disjoint_windows_query(41),
+        probe,
+        min_date=MIN_DATE,
+        root_count=5000,
+        probe_concurrency=2,
+        now=datetime(2020, 6, 1, tzinfo=UTC),
+    )
+    assert capped is False
+    assert len(specs) == 41
+
+
+def test_probe_concurrency_preserves_window_order():
+    serial, _ = probe_from(_distinct_count)
+    concurrent, concurrent_calls = probe_from(_distinct_count)
+    query = _disjoint_windows_query(41)
+    kwargs = {"min_date": MIN_DATE, "root_count": 5000, "now": datetime(2020, 6, 1, tzinfo=UTC)}
+
+    serial_specs, _ = plan_shards(query, serial, **kwargs)
+    concurrent_specs, capped = plan_shards(query, concurrent, probe_concurrency=2, **kwargs)
+
+    assert capped is False
+    assert concurrent_specs == serial_specs
+    assert max(len(batch) for batch in concurrent_calls) <= 20
+
+
+def test_probe_concurrency_must_be_positive():
+    probe, _ = probe_from(uniform_count(per_day=500))
+
+    with pytest.raises(ValueError):
+        plan_shards("q", probe, probe_concurrency=0, now=NOW)

@@ -28,6 +28,7 @@ from store.upserts import UpsertStats, dedupe_items, upsert_repos
 logger = logging.getLogger("gitcrawl.discover")
 
 _INT_PARAMS = ("page", "per_page", "since")
+_MAX_PROBE_CONCURRENCY = 8
 
 
 @dataclass(frozen=True)
@@ -385,6 +386,7 @@ def run_search_discovery(
                 max_fetchable=target,
                 root_count=total_count,
                 max_shards=max_shards,
+                probe_concurrency=min(discovery_concurrency, _MAX_PROBE_CONCURRENCY),
             )
         except DeadlineExceededError:
             stats.deadline_hit = True
