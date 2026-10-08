@@ -17,7 +17,7 @@ from lib import cancellation
 from lib.batching import chunked
 from lib.deadlines import Deadline
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
-from lib.graphql_batch import MAX_BATCH_SIZE, GraphQLAuthError, fetch_batch
+from lib.graphql_batch import DEFAULT_BATCH_SIZE, GraphQLAuthError, fetch_batch
 from limiter.buckets import BucketLimiter
 from store.lifecycle import LifecycleOutcome, apply_hydration, apply_hydration_batch
 from store.models import Repo
@@ -116,7 +116,7 @@ def refresh_repos_batched(
     jitter: Callable[[], float] | None = None,
     on_response: Callable[[httpx.Response, float], None] | None = None,
     deadline: Deadline | None = None,
-    batch_size: int = MAX_BATCH_SIZE,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     allow_requests: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
     concurrency: int = 1,

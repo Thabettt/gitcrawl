@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-from lib.graphql_batch import MAX_BATCH_SIZE, ParsedBatch
+from lib.graphql_batch import DEFAULT_BATCH_SIZE, ParsedBatch
 
 
 class FilePresenceAdapter:
     name = "file_presence"
 
     def __init__(
-        self, path: str, full_names: Mapping[str, str], *, batch_size: int = MAX_BATCH_SIZE
+        self, path: str, full_names: Mapping[str, str], *, batch_size: int = DEFAULT_BATCH_SIZE
     ) -> None:
         self._path = path
         self._full_names = dict(full_names)

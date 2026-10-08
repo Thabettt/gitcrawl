@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-from lib.graphql_batch import MAX_BATCH_SIZE, ParsedBatch
+from lib.graphql_batch import DEFAULT_BATCH_SIZE, ParsedBatch
 
 
 class OwnerLocationAdapter:
     name = "owner_location"
 
-    def __init__(self, owners: Mapping[str, str], *, batch_size: int = MAX_BATCH_SIZE) -> None:
+    def __init__(self, owners: Mapping[str, str], *, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self._owners = dict(owners)
         self.batch_size = batch_size
 

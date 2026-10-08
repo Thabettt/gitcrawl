@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from lib.graphql_batch import MAX_BATCH_SIZE, ParsedBatch
+from lib.graphql_batch import DEFAULT_BATCH_SIZE, ParsedBatch
 
 _FIELDS = """    databaseId
     id
@@ -217,7 +217,7 @@ def _payload(repo_id: int, node: dict) -> dict:
 class RepoDetailsAdapter:
     name = "repo_details"
 
-    def __init__(self, full_names: Mapping[str, str], *, batch_size: int = MAX_BATCH_SIZE) -> None:
+    def __init__(self, full_names: Mapping[str, str], *, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self._full_names = dict(full_names)
         self.batch_size = batch_size
 
