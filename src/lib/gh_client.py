@@ -48,8 +48,20 @@ def build_headers(token: str | None = None) -> dict[str, str]:
     return headers
 
 
+CLIENT_POOL_LIMITS = httpx.Limits(
+    max_connections=64,
+    max_keepalive_connections=64,
+    keepalive_expiry=60.0,
+)
+
+
 def create_client(token: str | None = None, *, timeout: float = 30.0) -> httpx.Client:
-    return httpx.Client(headers=build_headers(token), timeout=timeout)
+    return httpx.Client(
+        headers=build_headers(token),
+        timeout=timeout,
+        limits=CLIENT_POOL_LIMITS,
+        trust_env=False,
+    )
 
 
 _TRIAGE_STATUSES = frozenset({403, 429, 422, 500, 502, 503, 504})

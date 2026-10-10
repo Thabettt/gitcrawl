@@ -157,6 +157,28 @@ def test_create_client_honors_custom_timeout(monkeypatch):
     assert captured["timeout"] == 5.0
 
 
+def test_create_client_pins_the_pool_and_ignores_environment_proxies(monkeypatch):
+    captured = {}
+    real_client = httpx.Client
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        kwargs["transport"] = httpx.MockTransport(lambda request: httpx.Response(200))
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", factory)
+    client = create_client("ghp_example-token")
+    client.close()
+
+    limits = captured["limits"]
+    assert isinstance(limits, httpx.Limits)
+    assert limits.max_connections == 64
+    assert limits.max_keepalive_connections == 64
+    assert limits.keepalive_expiry == 60.0
+    assert captured["trust_env"] is False
+    assert "http2" not in captured
+
+
 @pytest.mark.parametrize(
     ("url", "resource"),
     [
