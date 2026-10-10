@@ -269,7 +269,105 @@ Highest leverage first. Items 1–3 are safe to do now; items 4–6 should accom
 
 ---
 
-## 11. Glossary of new terms
+## 11. Production log: the runs, the walls, and what we learned (2026-10-10)
+
+Everything above was written before the work shipped. This section is the honest sequel, written after we ran it for real — including the runs that hit walls and the attempts that failed, because those are where the lessons live. If you read only one section of this document, read this one.
+
+### 11.1 What actually shipped
+
+Three implementation plans went through task-by-task review and merged to `main` the same day:
+
+| Theme | What landed | Evidence |
+|---|---|---|
+| Transport & pipeline | One shared HTTP client with an explicit pool (64 connections, 60 s keep-alive) and no silent env-proxy surprises; every batch body parsed once (the audit hook's cache is reused); discovery upserts buffered per worker (10 pages / 1,000 items); audit inserts moved to a bounded writer thread | `docs/findings/2026-10-09-transport-pipeline-efficiency.md`; full suite green, 94.79% coverage |
+| Quota & limiter | Migration 0014 (audit rows carry `rl_used`/`run_id`/`phase`; batch default 29); per-call point telemetry (`rateLimit { cost used remaining }` → `BatchStats` → `field_stats["points"]`); hydration ceiling 32; limiter window re-anchored to GitHub's real reset; 403/429 messages preserved; 200-body rate-limit bodies pause the bucket | full suite 1,514 passed, 94.86% coverage |
+| Adaptive controller | `src/limiter/adaptive.py` (AIMD window 8–48, batch guard 10–29, quota pacer with a 400-point reserve, whole-pool pause), wired into `fetch_batch` behind `adaptive=`; env kill switch `GITCRAWL_ADAPTIVE`; later a settings toggle (migration 0015, default **off**) | soak note `docs/findings/2026-10-09-adaptive-soak.md`; full suite 1,555 passed |
+
+Plain consequence: the engine can now *measure* its own points, back off when told, and be switched at runtime — but the defaults deliberately stayed conservative until the road tests below.
+
+### 11.2 The soak: the wall story that wasn't a wall
+
+The controller's first live test ran the full 39k corpus with adaptive ON. GitHub never pushed back — the controller pushed back on itself:
+
+| Reading | Value |
+|---|---|
+| Wall clock | 20.9 min (baseline: ~10) |
+| Drops | 2 — both 10-second timeouts (504) |
+| Window W | 20 → 10 → 8 (never recovered; the dwell is 300 s) |
+| Batch B | 29 → 26 (partial regrowth) |
+| Pauses | 2 (60–120 s each, pool-wide) |
+| Deferred / unresolved | 0 / 0 |
+| Points spent | 2,898 of 5,000; the 400-point reserve never touched |
+| 403s | 0 |
+
+Plain consequence: the safety behavior is real — the run stayed clean and never drained the meter — but the policy is too sticky for speed: one timeout halves the whole window, and at the proven-safe ceiling of 20 the controller can only ever *reduce* concurrency. Decision recorded then and unchanged: **keep the flag off** at C=20. The controller is a seatbelt for driving above 20, not a faster engine.
+
+### 11.3 Run 24: the 403 storm (the first real wall)
+
+The next run used the static "first step" configuration the plans had agreed on — batch 29, concurrency 32, controller off. The audit rows tell the story:
+
+| Phase | Requests | Notes |
+|---|---|---|
+| Discovery (32 workers) | 434× 200, 1× 504 | **clean** — 96 s for the whole corpus |
+| Hydration (32 workers, batch 29) | 465× 200, **159× 403**, 2× 504 | the 403s started **8 seconds** after hydration began |
+
+Every 403 was a fast rejection (0.3–1.1 s) carrying `retry-after: 60` and **no** rate-limit headers — GitHub's secondary/compute limit, not the points meter (only ~370 of 5,000 points were used). Throughput per minute told the story: 344 → 198 → **25** → 104 → 124 → 33. The run was cancelled at 26%.
+
+The mechanism matters: a 403 only slept the worker that received it (60 s, its `retry-after`); the other 31 kept knocking and collected their own 403s. That is precisely the octokit-#629 anti-pattern this project set out to avoid — and we had only closed it for *200-body* rate-limit markers, not for 403s. The pool-wide pause existed only inside the controller, which was off.
+
+Plain consequence: **concurrency 32 was the mistake, not batch 29** — discovery at 32 was clean, hydration at 32 was not. The hidden compute limit tripped on the 32-wide wave of heavy five-connection queries.
+
+### 11.4 The settings optimization (between the two walls)
+
+| Setting | Before | After | Why |
+|---|---|---|---|
+| `limiter_max_concurrent` | 32 | **20** | The only value with a proven-clean full run (run 19) |
+| `graphql_batch_size` | 29 | **25** | 504 timeouts appeared at 29; 25 keeps the 1-point cost with more headroom |
+| `discovery_concurrency` | 32 | 32 | Discovery was clean at 32 in both runs |
+
+Expected result: ~8.5–9 min for 39k, zero 403s, ~2,050 points.
+
+### 11.5 Run 25: the wall that got absorbed (and the controller that didn't see it)
+
+The next run used the optimized settings — and this time the controller toggle was **on** (migration 0015's checkbox, enabled before the run).
+
+| Time | Event |
+|---|---|
+| 20:56 | Start; discovery 84 s, clean |
+| 20:57:34 | Hydration at full W=20; ~6,000 repos/min |
+| **20:59:20–42** | **19× 403** in 22 seconds — `retry-after: 60`, no headers |
+| 21:00 | 120 batches/min — 19 workers sleeping their 60 s |
+| 21:01–21:03 | Recovered to 292 / 287 / 226 per min; zero further 403s |
+| 21:03:51 | Cancelled at ~19,500 / 39,432 (50%, on track for ~21:07) |
+
+Two findings, one uncomfortable:
+
+1. **Why the wall appeared at the "safe" settings.** Two compounding reasons: the token was still *warm* — run 24 had generated 159 secondary 403s only 40 minutes earlier, and GitHub's secondary sensitivity escalates with repeated triggers and decays slowly; and the profile was slightly hotter than run 19's (batch 25 = +25% compute per query, and faster responses meant ~290–330 requests/min vs run 19's ~235). The burst passed in about a minute with zero failed batches.
+2. **The controller was on and did nothing — and could not.** Its "drop" signal fires only on *batch-level* failures (403/429/timeouts that exhaust all retries). These 403s were absorbed inside `request_with_retry`: each worker slept its `retry-after`, retried, and succeeded. No drop, no window reduction, no pool pause — the Redis pause timestamp never changed. The controller is blind, by construction, to this class of transient secondary wave.
+
+Plain consequence: enabling the toggle neither helped nor hurt this run; the failure mode it was built to catch (batch-level drops) never fired. The wall was absorbed by the per-request retry-after sleep — which is luck of timing, not design: had the retries also failed, run 24's storm would have repeated.
+
+### 11.6 The scoreboard
+
+| Profile | Run | Outcome |
+|---|---|---|
+| B=20, C=20, static | run 19 (before this work) | 39,128 repos in ~602 s; **zero 403s**; 2,916 points |
+| B=29, W≤20, adaptive ON | soak | 20.9 min; 2 timeout drops; 0 403s; safe but slow |
+| B=29, C=32, static | run 24 | **159× 403** storm; cancelled at 26% |
+| B=25, C=20, adaptive ON | run 25 | 19× 403 absorbed in ~1 min; ~50% done at cancel; controller inert |
+
+The current recommended operating point for a single token: **batch 20–25, concurrency 20** (16 if a storm is recent), discovery 32, adaptive off, and **a cooldown of 30–60+ minutes after any secondary-limit storm** before the next run. The only profile with a zero-403, full-corpus history is batch 20 / concurrency 20.
+
+### 11.7 Open gaps and next moves
+
+1. **Pool-wide pause on 403/429.** The real missing piece: when a secondary-limit response arrives, pause the shared bucket for `retry-after` so every worker stops knocking, instead of each sleeping independently. This also makes the event visible to the controller.
+2. **Cooldown discipline.** Repeated secondary storms escalate; GitHub's own words: *"Continuing to make requests while you are rate limited may result in the banning of your integration."* Space out runs after a storm.
+3. **Adaptive's role, clarified.** It is a seatbelt for concurrency > 20, not a speed feature; its drop signal does not see retry-absorbed 403s. Default stays off; the toggle (migration 0015) exists for experiments at higher ceilings.
+4. **Small knowns** (deferred from reviews): the controller's default clock is `time.monotonic` (production passes `time.time`); a `retry-after: 0` falls through to 60–120 s; the deferral reason always reads "point reserve"; the pause wait doesn't check the run deadline.
+
+---
+
+## 12. Glossary of new terms
 
 - **AIMD (Additive Increase, Multiplicative Decrease)**: increase the allowance slowly, cut it hard when something breaks. The TCP playbook, applied to concurrency.
 - **Adaptive controller**: a loop that reads a signal and adjusts a knob, instead of a fixed setting.
@@ -284,7 +382,7 @@ Highest leverage first. Items 1–3 are safe to do now; items 4–6 should accom
 
 ---
 
-## 12. Sources
+## 13. Sources
 
 **GitHub documentation (verified live 2026-10-09):**
 

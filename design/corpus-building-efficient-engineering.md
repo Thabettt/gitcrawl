@@ -6,6 +6,8 @@
 
 **Status note (2026-10-08)**: a later spike (recorded in §9.4) measured that GitHub's GraphQL search connection draws on the GraphQL **points** meter, not the REST search meter — so both the sharding probes and the result pages can ride it. The same ~39,000-repo shard-and-fetch that took about 20 minutes through REST search on 2026-10-07 completed in **67.9 seconds** on one token. The engine shipped the same day (`docs/superpowers/specs/2026-10-08-graphql-discovery-design.md`): the §3–§4 REST-search numbers are now historical — the shipped discovery path rides the points meter exactly as §9.4 describes.
 
+**Status note (2026-10-10)**: the runtime/adaptive work landed (explicit HTTP pool, parse-once batch bodies, buffered discovery upserts, audit writer thread, batch default 29, hydration ceiling 32, per-call point telemetry, limiter window anchored to GitHub's real reset, and an adaptive controller behind a settings toggle that defaults off). Live runs then hit GitHub's secondary limits: concurrency 32 produced a 159×403 storm (run 24), and a follow-up run at batch 25 / concurrency 20 absorbed a 19×403 burst before being stopped (run 25). The proven-clean full-corpus point remains **batch 20 / concurrency 20**. The progressive log, including the failed attempts, lives in `runtime-audit-and-adaptive-control.md` §11.
+
 ---
 
 ## 1. The goal, in one paragraph
