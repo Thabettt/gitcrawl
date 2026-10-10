@@ -216,8 +216,9 @@ def test_request_with_retry_deny_loop_raises_throttled_error_without_http():
             sleep=sleeps.append,
             now=lambda: 1000.0,
         )
-    assert excinfo.value.retry_after == 20.0
-    assert sleeps == [20.0, 20.0]
+    # the window anchors at first use, so a limit-0 deny waits the full 60s window
+    assert excinfo.value.retry_after == 60.0
+    assert sleeps == [60.0, 60.0]
     assert requests == []
 
 
@@ -645,7 +646,8 @@ def test_limiter_deny_loop_raises_at_configured_cap():
             now=lambda: 1000.0,
         )
     assert len(sleeps) == 1
-    assert excinfo.value.retry_after == 20.0
+    # window anchored at first use: the deny retry is the full 60s window
+    assert excinfo.value.retry_after == 60.0
 
 
 def test_limiter_deadline_stops_before_an_overlong_sleep():
@@ -677,7 +679,8 @@ def test_limiter_deadline_stops_before_an_overlong_sleep():
         )
 
     assert sleeps == []
-    assert excinfo.value.retry_after == 20.0
+    # first-use anchor makes the deny retry the full 60s window, still overlong for the 5s deadline
+    assert excinfo.value.retry_after == 60.0
 
 
 def test_limiter_without_a_deadline_sleeps_exactly_as_before():
@@ -700,7 +703,8 @@ def test_limiter_without_a_deadline_sleeps_exactly_as_before():
             now=lambda: 1000.0,
         )
 
-    assert sleeps == [20.0]
+    # first-use anchor: sleeps the full 60s window before the configured cap raises
+    assert sleeps == [60.0]
 
 
 def test_resource_for_graphql():
