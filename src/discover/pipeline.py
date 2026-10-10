@@ -302,7 +302,7 @@ class _Worker:
                 cancellation.check()
                 if self._deadline_expired():
                     self._stop_for_deadline()
-                    flush_pending()
+                    flush_pending_best_effort()
                     self._store.set_state(shard_id, ShardState.PENDING)
                     return
                 pending.extend(page.items)
