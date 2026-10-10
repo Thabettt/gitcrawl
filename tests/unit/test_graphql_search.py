@@ -205,7 +205,7 @@ def test_page_size_stays_halved_for_later_pages():
     assert "s: search(first: 50," in queries[2] and 'after: "c1"' in queries[2]
 
 
-@pytest.mark.parametrize("status", [502, 504])
+@pytest.mark.parametrize("status", [499, 502, 504])
 def test_page_timeouts_at_the_floor_raise_request_failed(status):
     captured = []
     payloads = [httpx.Response(status), httpx.Response(status), httpx.Response(status)]

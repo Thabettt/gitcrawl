@@ -20,7 +20,7 @@ from limiter.buckets import BucketLimiter
 MAX_ALIASES = 20
 PAGE_SIZE = 100
 MIN_PAGE_SIZE = 25
-_TIMEOUT_STATUSES = frozenset({502, 504})
+_TIMEOUT_STATUSES = frozenset({499, 502, 504})
 AuditHook = Callable[[httpx.Response, float, Mapping[str, object]], None]
 
 _NODE_FIELDS = """      databaseId

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from collections.abc import Mapping
 
 import httpx
@@ -346,7 +348,7 @@ def test_on_resolved_reports_only_values_resolved_by_the_batch():
     assert resolved == [(["1"], {"1": "value-1"})]
 
 
-@pytest.mark.parametrize("status", [502, 504])
+@pytest.mark.parametrize("status", [499, 502, 504])
 def test_http_timeout_status_splits_batches_before_falling_back(status):
     requests: list[list[str]] = []
 
@@ -374,6 +376,54 @@ def test_http_timeout_status_splits_batches_before_falling_back(status):
     assert outcome.stats.requeues >= 1
     assert requests[0] == ["1", "2", "3", "4"]
     assert {tuple(batch) for batch in requests[1:]} == {("1", "2"), ("3", "4")}
+
+
+def test_fallbacks_run_in_the_background_without_stalling_dispatch():
+    order: list[tuple[str, object]] = []
+    guard = threading.Lock()
+
+    def record(event: tuple[str, object]) -> None:
+        with guard:
+            order.append(event)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys = keys_in(request)
+        record(("request", tuple(keys)))
+        if keys == ["1", "2", "3", "4"]:
+            return httpx.Response(400, json={"message": "bad request"})
+        data = {f"n{index}": f"value-{key}" for index, key in enumerate(keys)}
+        return httpx.Response(200, json={"data": data})
+
+    def fallback(key: str) -> str:
+        record(("fallback-start", key))
+        time.sleep(0.2)
+        record(("fallback-done", key))
+        return f"rest-{key}"
+
+    adapter = KeyAdapter()
+    adapter.batch_size = 4
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        ["1", "2", "3", "4", "5", "6", "7", "8"],
+        client=client,
+        concurrency=1,
+        fallback=fallback,
+        sleep=lambda _seconds: None,
+    )
+    assert outcome.values == {
+        "1": "rest-1",
+        "2": "rest-2",
+        "3": "rest-3",
+        "4": "rest-4",
+        "5": "value-5",
+        "6": "value-6",
+        "7": "value-7",
+        "8": "value-8",
+    }
+    dispatch_index = order.index(("request", ("5", "6", "7", "8")))
+    first_fallback_done = order.index(("fallback-done", "1"))
+    assert dispatch_index < first_fallback_done
 
 
 def test_http_500_still_falls_back_without_splitting():

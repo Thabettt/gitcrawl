@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -374,12 +375,14 @@ def _apply_geo(
     rows_by_login = {login: owner_id for owner_id, login in lookups}
     owner_types = {login: owners[owner_id]["type"] for owner_id, login in lookups}
     used = {"n": 0}
+    used_lock = threading.Lock()
     answered: set[int] = set()
 
     def fallback(login: str) -> object | None:
         ok, location = _fetch_owner_location(deps, login, hook)
         if not ok or location is None:
-            used["n"] += 1
+            with used_lock:
+                used["n"] += 1
         if not ok:
             return None
         answered.add(rows_by_login[login])

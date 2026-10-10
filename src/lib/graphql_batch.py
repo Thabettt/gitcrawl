@@ -19,7 +19,8 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_BATCH_SIZE = 50
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_MAX_ATTEMPTS = 3
-_TIMEOUT_STATUSES = frozenset({502, 504})
+_TIMEOUT_STATUSES = frozenset({499, 502, 504})
+_MAX_FALLBACK_WORKERS = 16
 _TRANSIENT_MARKERS = (
     "timeout",
     "timed out",
@@ -210,134 +211,176 @@ def fetch_batch(
     attempts = dict.fromkeys(unique, 1)
     queue: deque[list[str]] = deque(_chunks(unique, size))
 
-    def fall_back(key: str, reason: str) -> None:
-        if fallback is None:
-            unresolved[key] = reason
-            return
+    fallback_pool = (
+        ThreadPoolExecutor(max_workers=min(concurrency, _MAX_FALLBACK_WORKERS))
+        if fallback is not None
+        else None
+    )
+    fallback_futures: dict[Future[tuple[str, str, object]], str] = {}
+
+    def run_fallback(key: str, reason: str) -> tuple[str, str, object]:
+        assert fallback is not None
         try:
             result = fallback(key)
-        except GraphQLAuthError:
-            raise
-        except cancellation.RunCancelled:
+        except (GraphQLAuthError, cancellation.RunCancelled):
             raise
         except Exception as exc:  # a fallback failure becomes a typed unresolved repo
-            unresolved[key] = f"{reason}; fallback failed: {type(exc).__name__}: {exc}"
-            return
+            return key, "error", f"{reason}; fallback failed: {type(exc).__name__}: {exc}"
         if result is None:
+            return key, "handled", None
+        return key, "value", result
+
+    def fold_fallback(future: Future[tuple[str, str, object]]) -> None:
+        key, kind, payload = future.result()
+        if kind == "error":
+            unresolved[key] = str(payload)
+        elif kind == "handled":
             stats.handled += 1
             handled_keys.add(key)
         else:
-            values[key] = result
+            values[key] = payload
             stats.fallbacks += 1
 
-    if not allow_requests:
-        for key in unique:
-            fall_back(key, "graphql batching disabled")
+    def drain_fallbacks(*, block: bool) -> None:
+        if not fallback_futures:
+            return
+        if block:
+            wait(list(fallback_futures))
+        folded = [item for item in fallback_futures if item.done()]
+        for future in folded:
+            del fallback_futures[future]
+            fold_fallback(future)
+        if folded and on_progress is not None:
+            on_progress(
+                len(values) + len(unresolved) + len(handled_keys),
+                len(unique),
+            )
+
+    def fall_back(key: str, reason: str) -> None:
+        if fallback_pool is None:
+            unresolved[key] = reason
+            return
+        fallback_futures[fallback_pool.submit(run_fallback, key, reason)] = key
+
+    try:
+        if not allow_requests:
+            for key in unique:
+                fall_back(key, "graphql batching disabled")
+            drain_fallbacks(block=True)
+            stats.values = len(values)
+            stats.unresolved = len(unresolved)
+            return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
+
+        def requeue(failed: list[str]) -> list[str]:
+            fresh: list[str] = []
+            exhausted: list[str] = []
+            for key in failed:
+                if attempts[key] >= max_attempts:
+                    exhausted.append(key)
+                else:
+                    attempts[key] += 1
+                    fresh.append(key)
+            if fresh:
+                stats.requeues += 1
+                if len(fresh) > 1:
+                    middle = len(fresh) // 2
+                    queue.appendleft(fresh[:middle])
+                    queue.appendleft(fresh[middle:])
+                else:
+                    queue.appendleft(fresh)
+            return exhausted
+
+        def submit_chunk(pool: ThreadPoolExecutor, pending: list[str]):
+            context = contextvars.copy_context()
+            return pool.submit(
+                context.run,
+                _post,
+                adapter,
+                pending,
+                client=client,
+                limiter=limiter,
+                token_id=token_id,
+                on_response=on_response,
+                sleep=sleep,
+                now=now,
+                jitter=jitter,
+            )
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            in_flight: dict[Future, list[str]] = {}
+            while queue or in_flight or fallback_futures:
+                cancellation.check()
+                while queue and len(in_flight) < concurrency:
+                    chunk = queue.popleft()
+                    pending = [
+                        key
+                        for key in chunk
+                        if key not in values and key not in unresolved and key not in handled_keys
+                    ]
+                    if not pending:
+                        continue
+                    if deadline is not None and deadline.remaining <= 0:
+                        stats.deadline_hit = True
+                        for key in pending:
+                            unresolved[key] = "run deadline exceeded"
+                        continue
+                    stats.requests += 1
+                    in_flight[submit_chunk(pool, pending)] = pending
+                if not in_flight:
+                    drain_fallbacks(block=True)
+                    continue
+                done, _pending_futures = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    pending = in_flight.pop(future)
+                    transient = False
+                    try:
+                        parsed, batch_errors = future.result()
+                    except GraphQLAuthError:
+                        raise
+                    except DeadlineExceededError:
+                        stats.deadline_hit = True
+                        for key in pending:
+                            unresolved[key] = "run deadline exceeded"
+                        continue
+                    except (
+                        PartialResultsError,
+                        RequestFailed,
+                        MalformedResponse,
+                        ThrottledError,
+                        httpx.HTTPError,
+                    ) as exc:
+                        parsed = ParsedBatch()
+                        batch_errors = (f"{type(exc).__name__}: {exc}",)
+                        transient = (
+                            isinstance(exc, RequestFailed) and exc.status in _TIMEOUT_STATUSES
+                        )
+                    resolved = {
+                        key: value for key, value in parsed.values.items() if key in pending
+                    }
+                    values.update(resolved)
+                    if on_resolved is not None and resolved:
+                        on_resolved(tuple(resolved), resolved)
+                    failed = [key for key in pending if key not in values]
+                    if batch_errors:
+                        reason = batch_errors[0]
+                        if transient or _is_transient(reason):
+                            for key in requeue(failed):
+                                fall_back(key, reason)
+                        else:
+                            for key in failed:
+                                fall_back(key, reason)
+                    else:
+                        for key in failed:
+                            fall_back(key, parsed.failures.get(key, "missing result"))
+                    if on_progress is not None:
+                        on_progress(
+                            len(values) + len(unresolved) + len(handled_keys),
+                            len(unique),
+                        )
+                drain_fallbacks(block=False)
         stats.values = len(values)
         stats.unresolved = len(unresolved)
         return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
-
-    def requeue(failed: list[str]) -> list[str]:
-        fresh: list[str] = []
-        exhausted: list[str] = []
-        for key in failed:
-            if attempts[key] >= max_attempts:
-                exhausted.append(key)
-            else:
-                attempts[key] += 1
-                fresh.append(key)
-        if fresh:
-            stats.requeues += 1
-            if len(fresh) > 1:
-                middle = len(fresh) // 2
-                queue.appendleft(fresh[:middle])
-                queue.appendleft(fresh[middle:])
-            else:
-                queue.appendleft(fresh)
-        return exhausted
-
-    def submit_chunk(pool: ThreadPoolExecutor, pending: list[str]):
-        context = contextvars.copy_context()
-        return pool.submit(
-            context.run,
-            _post,
-            adapter,
-            pending,
-            client=client,
-            limiter=limiter,
-            token_id=token_id,
-            on_response=on_response,
-            sleep=sleep,
-            now=now,
-            jitter=jitter,
-        )
-
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        in_flight: dict[Future, list[str]] = {}
-        while queue or in_flight:
-            cancellation.check()
-            while queue and len(in_flight) < concurrency:
-                chunk = queue.popleft()
-                pending = [
-                    key
-                    for key in chunk
-                    if key not in values and key not in unresolved and key not in handled_keys
-                ]
-                if not pending:
-                    continue
-                if deadline is not None and deadline.remaining <= 0:
-                    stats.deadline_hit = True
-                    for key in pending:
-                        unresolved[key] = "run deadline exceeded"
-                    continue
-                stats.requests += 1
-                in_flight[submit_chunk(pool, pending)] = pending
-            if not in_flight:
-                continue
-            done, _pending_futures = wait(in_flight, return_when=FIRST_COMPLETED)
-            for future in done:
-                pending = in_flight.pop(future)
-                transient = False
-                try:
-                    parsed, batch_errors = future.result()
-                except GraphQLAuthError:
-                    raise
-                except DeadlineExceededError:
-                    stats.deadline_hit = True
-                    for key in pending:
-                        unresolved[key] = "run deadline exceeded"
-                    continue
-                except (
-                    PartialResultsError,
-                    RequestFailed,
-                    MalformedResponse,
-                    ThrottledError,
-                    httpx.HTTPError,
-                ) as exc:
-                    parsed = ParsedBatch()
-                    batch_errors = (f"{type(exc).__name__}: {exc}",)
-                    transient = isinstance(exc, RequestFailed) and exc.status in _TIMEOUT_STATUSES
-                resolved = {key: value for key, value in parsed.values.items() if key in pending}
-                values.update(resolved)
-                if on_resolved is not None and resolved:
-                    on_resolved(tuple(resolved), resolved)
-                failed = [key for key in pending if key not in values]
-                if batch_errors:
-                    reason = batch_errors[0]
-                    if transient or _is_transient(reason):
-                        for key in requeue(failed):
-                            fall_back(key, reason)
-                    else:
-                        for key in failed:
-                            fall_back(key, reason)
-                else:
-                    for key in failed:
-                        fall_back(key, parsed.failures.get(key, "missing result"))
-                if on_progress is not None:
-                    on_progress(
-                        len(values) + len(unresolved) + len(handled_keys),
-                        len(unique),
-                    )
-    stats.values = len(values)
-    stats.unresolved = len(unresolved)
-    return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
+    finally:
+        if fallback_pool is not None:
+            fallback_pool.shutdown(wait=True, cancel_futures=True)

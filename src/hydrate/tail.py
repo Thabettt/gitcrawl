@@ -133,6 +133,7 @@ def refresh_repos_batched(
     etags = _stored_etags(engine, [full_name for _, full_name in candidates])
     full_name_by_key = dict(candidates)
     key_by_full_name = {full_name: key for key, full_name in candidates}
+    stats_lock = threading.Lock()
 
     def fallback(key: str) -> object | None:
         full_name = full_name_by_key[key]
@@ -150,24 +151,29 @@ def refresh_repos_batched(
             )
         except RepoNotFound:
             apply_hydration(engine, full_name, None, not_found=True)
-            stats.tombstoned += 1
+            with stats_lock:
+                stats.tombstoned += 1
             return None
         except RequestFailed as exc:
             if exc.status == 401:
                 raise GraphQLAuthError("github rejected the token (HTTP 401)") from exc
-            stats.failed += 1
+            with stats_lock:
+                stats.failed += 1
             raise RuntimeError(f"REST fallback failed with HTTP {exc.status}") from exc
         except ThrottledError as exc:
-            stats.failed += 1
+            with stats_lock:
+                stats.failed += 1
             raise RuntimeError(f"REST fallback throttled: {exc}") from exc
         if hydrated.not_modified:
-            stats.not_modified += 1
+            with stats_lock:
+                stats.not_modified += 1
             return None
         outcome = apply_hydration(engine, full_name, hydrated)
-        stats.refreshed += 1
-        stats.fallbacks += 1
-        if outcome.renamed_from is not None:
-            stats.renamed += 1
+        with stats_lock:
+            stats.refreshed += 1
+            stats.fallbacks += 1
+            if outcome.renamed_from is not None:
+                stats.renamed += 1
         try:
             count = fetch_commit_count(
                 client,
@@ -182,7 +188,8 @@ def refresh_repos_batched(
         except (PartialResultsError, ThrottledError, httpx.HTTPError):
             count = None
         if count is not None:
-            stats.commit_counts[key] = count
+            with stats_lock:
+                stats.commit_counts[key] = count
         return None
 
     fetch_started = clock()
