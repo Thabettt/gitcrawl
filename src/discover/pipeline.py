@@ -274,6 +274,7 @@ class _Worker:
         def flush_pending() -> None:
             nonlocal pending_pages
             if not pending:
+                pending_pages = 0
                 return
             upserted = upsert_repos(self._deps.engine, dedupe_items(pending))
             with self._lock:
