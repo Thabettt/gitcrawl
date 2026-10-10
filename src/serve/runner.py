@@ -48,6 +48,7 @@ _INT_PARAMS = ("page", "per_page", "since")
 _R44_VIRTUALS = ("min_loc", "max_loc")
 _DOCKERFILE_PATH = "Dockerfile"
 _ID_BATCH = 5000
+HYDRATION_CONCURRENCY_CEILING = 32
 
 logger = logging.getLogger("gitcrawl.serve")
 
@@ -64,7 +65,7 @@ class RunnerConfig:
     max_enrich: int = 100
     request_deadline_seconds: float | None = None
     graphql_batch: bool = True
-    graphql_batch_size: int = 20
+    graphql_batch_size: int = 29
     concurrency: int = 1
     discovery_concurrency: int = 32
 
@@ -78,7 +79,7 @@ def runner_config_from(settings: RunSettings) -> RunnerConfig:
         request_deadline_seconds=float(settings.request_deadline_seconds),
         graphql_batch=settings.graphql_batch,
         graphql_batch_size=settings.graphql_batch_size,
-        concurrency=min(settings.limiter_max_concurrent, 20),
+        concurrency=min(settings.limiter_max_concurrent, HYDRATION_CONCURRENCY_CEILING),
         discovery_concurrency=settings.discovery_concurrency,
     )
 

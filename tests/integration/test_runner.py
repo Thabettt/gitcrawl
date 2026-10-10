@@ -1546,7 +1546,7 @@ def test_runner_config_from_maps_settings(clean: Engine):
     assert config.discovery_concurrency == 48
 
 
-def test_corpus_profile_hydrates_at_twenty_with_matching_limiter_cap(clean: Engine):
+def test_corpus_profile_hydrates_at_the_ceiling_with_matching_limiter_cap(clean: Engine):
     from serve.runner import build_deps, runner_config_from
     from serve.settings_spec import parse_settings_form
     from store.settings import update_run_settings
@@ -1559,13 +1559,19 @@ def test_corpus_profile_hydrates_at_twenty_with_matching_limiter_cap(clean: Engi
         redis_client=fakeredis.FakeRedis(),
         max_concurrent=settings.limiter_max_concurrent,
     )
-    assert settings.limiter_max_concurrent == 20
-    assert config.concurrency == 20
+    assert settings.limiter_max_concurrent == 32
+    assert config.concurrency == 32
     assert deps.limiter is not None
     assert config.concurrency <= deps.limiter.max_concurrent
 
-    raised = update_run_settings(clean, {"limiter_max_concurrent": 40})
-    assert runner_config_from(raised).concurrency == 20
+    raised = update_run_settings(clean, {"limiter_max_concurrent": 64})
+    assert runner_config_from(raised).concurrency == 32
+    lowered = update_run_settings(clean, {"limiter_max_concurrent": 12})
+    assert runner_config_from(lowered).concurrency == 12
+
+
+def test_runner_config_defaults_to_batch_29():
+    assert RunnerConfig().graphql_batch_size == 29
 
 
 def test_build_deps_honors_max_concurrent(clean: Engine):

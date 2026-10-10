@@ -79,7 +79,7 @@ def test_corpus_preset_returns_the_coherent_profile():
         "max_enrich": 100_000,
         "request_deadline_seconds": 86_400,
         "graphql_batch_size": 29,
-        "limiter_max_concurrent": 20,
+        "limiter_max_concurrent": 32,
         "discovery_concurrency": 32,
         "graphql_batch": True,
     }
