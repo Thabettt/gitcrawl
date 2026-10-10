@@ -210,3 +210,33 @@ def test_note_deferred_is_reported() -> None:
     controller = make_controller()
     controller.note_deferred(3)
     assert controller.snapshot()["deferred"] == 3
+
+
+def test_note_secondary_halves_the_window_down_to_the_floor() -> None:
+    controller = make_controller()
+    controller.note_secondary()
+    assert controller.window == 10
+    controller.note_secondary()
+    assert controller.window == 8
+    controller.note_secondary()
+    assert controller.window == 8
+
+
+def test_note_secondary_blocks_window_growth_during_the_cooldown() -> None:
+    clock = FakeClock()
+    controller = make_controller(clock, dwell_seconds=0.0)
+    controller.note_secondary()
+    clock.advance(30.0)
+    controller.record_batch(in_flight=10)
+    assert controller.window == 10
+    clock.advance(120.0)
+    controller.record_batch(in_flight=10)
+    assert controller.window == 11
+
+
+def test_snapshot_carries_the_secondary_hit_count() -> None:
+    controller = make_controller()
+    assert controller.snapshot()["secondary"] == 0
+    controller.note_secondary()
+    controller.note_secondary()
+    assert controller.snapshot()["secondary"] == 2

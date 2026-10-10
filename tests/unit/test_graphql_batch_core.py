@@ -594,3 +594,51 @@ def test_rate_limit_error_body_with_reset_header_pauses_until_reset(redis):
         sleep=lambda _seconds: None,
     )
     assert limiter.paused_until("graphql", "token-a") == 1100.0
+
+
+def test_secondary_budget_stops_dispatch_pauses_pool_and_defers_remainder(redis):
+    barrier = threading.Barrier(20, timeout=10)
+    lock = threading.Lock()
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        with lock:
+            captured.append(request)
+            index = len(captured)
+        if index <= 20:
+            barrier.wait()
+        return httpx.Response(
+            403,
+            json={"message": "You have exceeded a secondary rate limit"},
+            headers={"retry-after": "60"},
+        )
+
+    limiter = BucketLimiter(redis, specs={"graphql": (5000, 3600.0)}, max_concurrent=100)
+    adapter = KeyAdapter()
+    adapter.batch_size = 1
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        [str(index) for index in range(60)],
+        client=client,
+        limiter=limiter,
+        token_id="token-a",
+        concurrency=20,
+        now=lambda: 1000.0,
+        sleep=lambda _seconds: None,
+        jitter=lambda: 0.0,
+    )
+    assert len(captured) == 20  # first wave only; the pool pause stops the spiral
+    assert limiter.paused_until("graphql", "token-a") == 1480.0
+    deferred = {
+        key: reason
+        for key, reason in outcome.unresolved.items()
+        if reason == "secondary rate limit budget exhausted"
+    }
+    assert outcome.stats.deferred == 40
+    assert len(deferred) == 40
+    assert outcome.values == {}
+    throttled = [
+        key for key, reason in outcome.unresolved.items() if reason.startswith("ThrottledError")
+    ]
+    assert len(throttled) == 20

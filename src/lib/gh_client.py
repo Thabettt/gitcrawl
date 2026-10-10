@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 from lib import cancellation
+from limiter import secondary
 from limiter.buckets import BucketLimiter
 from limiter.classifier import Action, classify, classify_transport
 
@@ -69,6 +70,9 @@ _TIMEOUT_STATUSES = frozenset({502, 504})
 _RETRYABLE_ACTIONS = frozenset({Action.RETRY_AFTER, Action.WAIT_RESET, Action.BACKOFF})
 _BODY_FALLBACK_CHARS = 300
 _CANCEL_SLEEP_CHUNK = 1.0
+_SECONDARY_PAUSE_CAP = 480.0
+_SECONDARY_PAUSE_JITTER = 30.0
+_DENIAL_JITTER = 1.0
 
 
 def _sleep_with_cancellation(seconds: float, sleep: Callable[[float], None]) -> None:
@@ -211,9 +215,12 @@ def request_with_retry(
                 denials += 1
                 if denials >= max_attempts:
                     raise ThrottledError(acquired.retry_after or 0.0)
+                wait = (acquired.retry_after or 0.0) + (
+                    jitter() * _DENIAL_JITTER if jitter is not None else 0.0
+                )
                 if limiter.deadline is not None:
-                    limiter.deadline.bound_wait(acquired.retry_after or 0.0)
-                _sleep_with_cancellation(acquired.retry_after or 0.0, sleep)
+                    limiter.deadline.bound_wait(wait)
+                _sleep_with_cancellation(wait, sleep)
                 continue
             denials = 0
         try:
@@ -249,6 +256,8 @@ def request_with_retry(
         if _sso_partial_results(response.headers):
             raise PartialResultsError(response)
         if response.status_code not in _TRIAGE_STATUSES:
+            if response.status_code < 400:
+                secondary.success(now())
             return response
         error_code, message = _error_fields(response)
         extra = {} if jitter is None else {"jitter": jitter}
@@ -266,6 +275,13 @@ def request_with_retry(
             if attempt >= max_attempts:
                 return response
             wait = decision.sleep_seconds or 0.0
+            if response.status_code in (403, 429):
+                streak = secondary.hit(now())
+                wait = min(_SECONDARY_PAUSE_CAP, wait * 2 ** (streak - 1)) + (
+                    jitter() * _SECONDARY_PAUSE_JITTER if jitter is not None else 0.0
+                )
+                if limiter is not None:
+                    limiter.pause_at_least(resource, limiter_key, wait, now=now())
             if limiter is not None and limiter.deadline is not None:
                 limiter.deadline.bound_wait(wait)
             _sleep_with_cancellation(wait, sleep)

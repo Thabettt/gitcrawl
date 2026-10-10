@@ -67,6 +67,21 @@ end
 return 1
 """
 
+_PAUSE_AT_LEAST_SCRIPT = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local seconds = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local paused = tonumber(redis.call('HGET', key, 'paused_until') or '0')
+local target = now + seconds
+if target > paused then
+  paused = target
+end
+redis.call('HSET', key, 'paused_until', paused)
+redis.call('EXPIRE', key, ttl)
+return tostring(paused)
+"""
+
 _RECONCILE_SCRIPT = """
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -188,6 +203,17 @@ class BucketLimiter:
         pipe.hset(key, "paused_until", now + seconds)
         pipe.expire(key, self._ttl(window_seconds, seconds))
         pipe.execute()
+
+    def pause_at_least(self, resource: str, token_id: str, seconds: float, *, now: float) -> None:
+        window_seconds = self._specs.get(resource, (0, 60.0))[1]
+        self._redis.eval(
+            _PAUSE_AT_LEAST_SCRIPT,
+            1,
+            self._key(resource, token_id),
+            now,
+            seconds,
+            self._ttl(window_seconds, seconds),
+        )
 
     def paused_until(self, resource: str, token_id: str) -> float | None:
         raw = self._redis.hget(self._key(resource, token_id), "paused_until")

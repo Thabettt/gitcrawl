@@ -465,7 +465,8 @@ def test_persistent_retry_after_stops_at_max_attempts():
     )
     assert response.status_code == 403
     assert len(sends) == 3
-    assert sleeps == [5.0, 5.0]
+    # repeated 403s escalate the wait for the shared pool: retry-after doubles per hit
+    assert sleeps == [5.0, 10.0]
 
 
 def test_persistent_wait_reset_stops_at_max_attempts():

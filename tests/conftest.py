@@ -9,9 +9,16 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 
+from limiter import secondary
 from store.models import Owner, Repo
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def reset_process_globals(monkeypatch: pytest.MonkeyPatch) -> None:
+    secondary.reset()
+    monkeypatch.delenv("GITCRAWL_ADAPTIVE", raising=False)
 
 
 class UnsafeTestDatabase(RuntimeError):

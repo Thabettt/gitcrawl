@@ -95,6 +95,7 @@ class AdaptiveController:
         self._drops = 0
         self._pauses = 0
         self._deferred = 0
+        self._secondary_hits = 0
         self._cooldown_until = 0.0
         self._pause_until = 0.0
         self._last_growth = self._now()
@@ -252,6 +253,12 @@ class AdaptiveController:
         with self._lock:
             self._deferred += int(count)
 
+    def note_secondary(self) -> None:
+        with self._lock:
+            self._window = max(self._config.min_window, self._window // 2)
+            self._cooldown_until = self._now() + self._config.cooldown_seconds
+            self._secondary_hits += 1
+
     def snapshot(self) -> dict[str, object]:
         with self._lock:
             now = self._now()
@@ -261,6 +268,7 @@ class AdaptiveController:
                 "drops": self._drops,
                 "pauses": self._pauses,
                 "deferred": self._deferred,
+                "secondary": self._secondary_hits,
                 "p95_latency_ms": self._p95_locked(),
                 "pacer_remaining": self._remaining,
                 "pacer_rate": round(self._rate, 4),

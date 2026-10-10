@@ -19,6 +19,7 @@ from lib.gh_client import (
     request_with_retry,
     short_message,
 )
+from limiter import secondary
 from limiter.adaptive import AdaptiveController
 from limiter.buckets import BucketLimiter
 from limiter.classifier import rate_limit_wait
@@ -27,6 +28,7 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_BATCH_SIZE = 50
 DEFAULT_BATCH_SIZE = 29
 DEFAULT_MAX_ATTEMPTS = 3
+_MAX_SECONDARY_HITS_PER_RUN = 15
 _TIMEOUT_STATUSES = frozenset({499, 502, 504})
 _MAX_FALLBACK_WORKERS = 16
 _DEFAULT_RATE_LIMIT_PAUSE = 60.0
@@ -197,6 +199,8 @@ def _adaptive_hook(
 ) -> Callable[[httpx.Response, float], None]:
     def hook(response: httpx.Response, latency_ms: float) -> None:
         adaptive.observe_response(response.headers, latency_ms)
+        if response.status_code in (403, 429):
+            adaptive.note_secondary()
         if on_response is not None:
             on_response(response, latency_ms)
 
@@ -215,10 +219,7 @@ def _adaptive_sleep(seconds: float, sleep: Callable[[float], None]) -> None:
 def _pause_bucket(
     limiter: BucketLimiter, token_id: str | None, seconds: float, now_value: float
 ) -> None:
-    key_id = token_id or ""
-    existing = limiter.paused_until("graphql", key_id)
-    if existing is None or existing < now_value + seconds:
-        limiter.pause("graphql", key_id, seconds, now=now_value)
+    limiter.pause_at_least("graphql", token_id or "", seconds, now=now_value)
 
 
 def _is_rate_limit(message: str) -> bool:
@@ -245,9 +246,7 @@ def _pause_if_rate_limited(
     else:
         seconds = _DEFAULT_RATE_LIMIT_PAUSE + (jitter() if jitter is not None else 0.0)
     if seconds > 0:
-        existing = limiter.paused_until("graphql", token_id)
-        if existing is None or existing < now() + seconds:
-            limiter.pause("graphql", token_id, seconds, now=now())
+        limiter.pause_at_least("graphql", token_id, seconds, now=now())
 
 
 def _post(
@@ -455,6 +454,8 @@ def fetch_batch(
 
         with ThreadPoolExecutor(max_workers=pool_workers) as pool:
             in_flight: dict[Future, tuple[list[str], float]] = {}
+            secondary_baseline = secondary.total()
+            secondary_budget_stopped = False
             while queue or in_flight or fallback_futures:
                 cancellation.check()
                 throttle = 0.0
@@ -475,6 +476,24 @@ def fetch_batch(
                         stats.deferred += marked
                         adaptive.note_deferred(marked)
                     throttle = max(adaptive.pause_remaining(), adaptive.pacer_delay())
+                if (
+                    not secondary_budget_stopped
+                    and secondary.total() - secondary_baseline >= _MAX_SECONDARY_HITS_PER_RUN
+                ):
+                    secondary_budget_stopped = True
+                    marked = 0
+                    while queue:
+                        for key in queue.popleft():
+                            if (
+                                key not in values
+                                and key not in unresolved
+                                and key not in handled_keys
+                            ):
+                                unresolved[key] = "secondary rate limit budget exhausted"
+                                marked += 1
+                    stats.deferred += marked
+                    if adaptive is not None:
+                        adaptive.note_deferred(marked)
                 gate = adaptive.window if adaptive is not None else concurrency
                 while queue and len(in_flight) < gate and throttle <= 0.0:
                     chunk = queue.popleft()

@@ -81,9 +81,10 @@ def test_first_drop_halves_the_window_and_pauses_the_pool() -> None:
         sleep=clock.advance,
         now=clock,
     )
-    assert controller.window == 10
+    assert controller.window == 8
     assert controller.snapshot()["drops"] == 1
     assert controller.snapshot()["pauses"] == 1
+    assert controller.snapshot()["secondary"] == 5
     assert outcome.values == {"1": "rest-1", "2": "rest-2", "3": "rest-3", "4": "rest-4"}
     assert outcome.unresolved == {}
 

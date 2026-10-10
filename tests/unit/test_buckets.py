@@ -94,6 +94,32 @@ def test_paused_until_is_none_when_never_paused(limiter):
     assert limiter.paused_until("search", "token-a") is None
 
 
+def test_pause_at_least_extends_a_shorter_pause(limiter):
+    limiter.pause("graphql", "token-a", 10.0, now=100.0)
+    limiter.pause_at_least("graphql", "token-a", 60.0, now=100.0)
+    assert limiter.paused_until("graphql", "token-a") == 160.0
+
+
+def test_pause_at_least_never_shortens_a_longer_pause(limiter):
+    limiter.pause("graphql", "token-a", 60.0, now=100.0)
+    limiter.pause_at_least("graphql", "token-a", 10.0, now=100.0)
+    assert limiter.paused_until("graphql", "token-a") == 160.0
+
+
+def test_pause_at_least_extends_from_now_not_from_the_existing_pause(limiter):
+    limiter.pause("graphql", "token-a", 30.0, now=100.0)
+    limiter.pause_at_least("graphql", "token-a", 50.0, now=120.0)
+    assert limiter.paused_until("graphql", "token-a") == 170.0
+
+
+def test_pause_at_least_blocks_acquire_and_sets_ttl(redis, limiter):
+    limiter.pause_at_least("graphql", "token-a", 60.0, now=100.0)
+    denied = limiter.acquire("graphql", "token-a", now=100.0)
+    assert denied.allowed is False
+    assert denied.retry_after == 60.0
+    assert redis.ttl("gitcrawl:rl:graphql:token-a") > 0
+
+
 def test_paused_denial_does_not_consume_window(redis):
     limiter = BucketLimiter(redis)
     limiter.pause("search", "token-a", 10.0, now=0.0)

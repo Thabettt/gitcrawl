@@ -365,6 +365,26 @@ The current recommended operating point for a single token: **batch 20–25, con
 3. **Adaptive's role, clarified.** It is a seatbelt for concurrency > 20, not a speed feature; its drop signal does not see retry-absorbed 403s. Default stays off; the toggle (migration 0015) exists for experiments at higher ceilings.
 4. **Small knowns** (deferred from reviews): the controller's default clock is `time.monotonic` (production passes `time.time`); a `retry-after: 0` falls through to 60–120 s; the deferral reason always reads "point reserve"; the pause wait doesn't check the run deadline.
 
+### 11.8 The scraping flag, captured (run 28, 2026-10-11)
+
+Run 28 is the run where the wall finally introduced itself in writing. The 403 body, verbatim:
+
+> You have exceeded a secondary rate limit. Please wait a few minutes before you try again. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service...
+
+Same shape as the earlier walls — `retry-after: 60`, no rate-limit headers at all — but the wording is the tell: this is GitHub's anti-scraping flag, not the points meter. What makes it sting is how little it took. A three-request hydration probe — three ordinary batched repo queries — tripped it immediately, because the token arrived *warm*: tonight's five runs had already collected **159 / 19 / 48 / 41 / 48** secondary hits (run 24's storm, run 25's absorbed burst, and three more runs after them). Sensitivity escalates with repeated triggers and decays slowly, exactly as §11.5 guessed.
+
+The downspiral was ours, not GitHub's. A 403 slept only its own worker for exactly `retry-after`; the other workers kept fetching until their own 403s landed; then the sleepers all woke at the same second and re-knocked together — a synchronized wave, a ~50 s full stall, and another round of hits for the token. And because those 403s were absorbed by the retry (the worker came back later and succeeded), the adaptive controller never saw a batch-level drop, so it stayed at full width while the token's penalty account grew. Discovery stayed clean through all of it: its search queries are light and ride the points meter; hydration's five-connection documents are what the scraping heuristic watches. Same concurrency, different query weight — that is why the wall kept appearing at hydration start.
+
+Five mitigations shipped for exactly this:
+
+1. **Pool-wide pause on every 403/429.** The retrying worker extends the shared bucket atomically (`pause_at_least`) for the wait it computed, so every worker sharing the bucket stops knocking — the octokit-#629 anti-pattern, now closed for secondary rejections, not just for 200-body rate-limit markers.
+2. **Multiplicative escalation.** The first hit waits exactly `retry-after` (60 s here); repeats double the pool pause — 60 → 120 → 240 → 480 — capped at 480 s.
+3. **Jitter.** +0–30 s on the pool pause and +0–1 s on limiter-denial sleeps, so the pool wakes spread out instead of synchronized.
+4. **A run budget.** After 15 secondary hits in one run, the engine stops dispatching; the remaining queued repos are deferred with the reason "secondary rate limit budget exhausted", and the run ends partial and resumable instead of grinding the token down.
+5. **The controller gets fed.** Each 403/429 seen while the adaptive controller is on calls `note_secondary()`: the window halves (8-floor), a cooldown starts, and the count lands in the snapshot as `"secondary"` — the blind spot from §11.5 is closed.
+
+The rest guidance is explicit in `docs/environment.md`: after a scraping-flavored flag, rest that token for 24 hours or more. The next full run waits for that.
+
 ---
 
 ## 12. Glossary of new terms

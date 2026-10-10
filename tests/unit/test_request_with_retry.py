@@ -4,7 +4,8 @@ import fakeredis
 import httpx
 import pytest
 
-from lib.gh_client import API_BASE, request_with_retry
+from lib.gh_client import API_BASE, ThrottledError, request_with_retry
+from limiter import secondary
 from limiter.buckets import BucketLimiter
 
 SEARCH_URL = f"{API_BASE}/search/repositories"
@@ -190,3 +191,141 @@ def test_on_response_is_called_for_every_response_with_latency():
         ),
     )
     assert recorded == [(503, 250.0), (200, 250.0)]
+
+
+class FakeClock:
+    def __init__(self, start: float = 1000.0) -> None:
+        self.value = start
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def test_repeated_forbidden_escalates_and_pauses_the_whole_pool():
+    clock = FakeClock()
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"search": (30, 60.0)}, max_concurrent=100)
+    sleeps = []
+    responses = [
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        search_page(),
+    ]
+    client = client_from(responses)
+    response = request_with_retry(
+        client,
+        "GET",
+        SEARCH_URL,
+        limiter=limiter,
+        token_id="tok",
+        sleep=lambda seconds: (sleeps.append(seconds), clock.advance(seconds)),
+        now=clock,
+        jitter=lambda: 0.0,
+    )
+    assert response.status_code == 200
+    assert sleeps == [60.0, 120.0, 240.0, 480.0]
+    assert limiter.paused_until("search", "tok") == 1900.0
+    assert secondary.total() == 4
+
+
+def test_secondary_wait_carries_jitter_and_applies_to_the_pool_pause():
+    clock = FakeClock()
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"search": (30, 60.0)}, max_concurrent=100)
+    sleeps = []
+    responses = [
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        search_page(),
+    ]
+    client = client_from(responses)
+    response = request_with_retry(
+        client,
+        "GET",
+        SEARCH_URL,
+        limiter=limiter,
+        token_id="tok",
+        sleep=lambda seconds: (sleeps.append(seconds), clock.advance(seconds)),
+        now=clock,
+        jitter=lambda: 0.5,
+    )
+    assert response.status_code == 200
+    assert sleeps == [75.0]
+    assert limiter.paused_until("search", "tok") == 1075.0
+
+
+def test_success_resets_the_secondary_streak():
+    clock = FakeClock()
+    sleeps = []
+    responses = [
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        search_page(),
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        search_page(),
+    ]
+    client = client_from(responses)
+    request_with_retry(
+        client,
+        "GET",
+        SEARCH_URL,
+        sleep=lambda seconds: (sleeps.append(seconds), clock.advance(seconds)),
+        now=clock,
+        jitter=lambda: 0.0,
+    )
+    request_with_retry(
+        client,
+        "GET",
+        SEARCH_URL,
+        sleep=lambda seconds: (sleeps.append(seconds), clock.advance(seconds)),
+        now=clock,
+        jitter=lambda: 0.0,
+    )
+    assert sleeps == [60.0, 120.0, 60.0]
+    assert secondary.total() == 3
+
+
+def test_forbidden_and_rate_limited_share_the_secondary_streak():
+    clock = FakeClock()
+    sleeps = []
+    responses = [
+        httpx.Response(403, headers={"retry-after": "60"}, json={"message": "secondary"}),
+        httpx.Response(429, headers={"retry-after": "30"}, json={"message": "slow down"}),
+        search_page(),
+    ]
+    client = client_from(responses)
+    response = request_with_retry(
+        client,
+        "GET",
+        SEARCH_URL,
+        sleep=lambda seconds: (sleeps.append(seconds), clock.advance(seconds)),
+        now=clock,
+        jitter=lambda: 0.0,
+    )
+    assert response.status_code == 200
+    assert sleeps == [60.0, 60.0]
+
+
+def test_limiter_denial_sleep_is_jittered_off_the_retry_after():
+    redis = fakeredis.FakeRedis()
+    limiter = BucketLimiter(redis, specs={"search": (30, 60.0)}, max_concurrent=100)
+    limiter.pause("search", "tok", 30.0, now=1000.0)
+    sleeps = []
+    client = client_from([search_page()])
+    with pytest.raises(ThrottledError):
+        request_with_retry(
+            client,
+            "GET",
+            SEARCH_URL,
+            limiter=limiter,
+            token_id="tok",
+            max_attempts=2,
+            sleep=sleeps.append,
+            now=lambda: 1000.0,
+            jitter=lambda: 0.5,
+        )
+    assert sleeps == [30.5]
