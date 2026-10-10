@@ -46,6 +46,37 @@ class MalformedResponse(ValueError):
 class ParsedBatch[T]:
     values: Mapping[str, T] = field(default_factory=dict)
     failures: Mapping[str, str] = field(default_factory=dict)
+    rate_limit: RateLimitInfo | None = None
+
+
+@dataclass(frozen=True)
+class RateLimitInfo:
+    cost: int | None = None
+    used: int | None = None
+    remaining: int | None = None
+
+
+def _as_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def rate_limit_from_payload(payload: object) -> RateLimitInfo | None:
+    """Read `data.rateLimit { cost used remaining }` from a GraphQL response body."""
+    if not isinstance(payload, Mapping):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    node = data.get("rateLimit")
+    if not isinstance(node, Mapping):
+        return None
+    return RateLimitInfo(
+        cost=_as_int(node.get("cost")),
+        used=_as_int(node.get("used")),
+        remaining=_as_int(node.get("remaining")),
+    )
 
 
 class GraphQLAdapter[T](Protocol):
@@ -69,6 +100,9 @@ class BatchStats:
     unresolved: int = 0
     requeues: int = 0
     deadline_hit: bool = False
+    points_cost: int = 0
+    points_used: int | None = None
+    points_remaining: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -80,7 +114,25 @@ class BatchStats:
             "unresolved": self.unresolved,
             "requeues": self.requeues,
             "deadline_hit": self.deadline_hit,
+            "points_cost": self.points_cost,
+            "points_used": self.points_used,
+            "points_remaining": self.points_remaining,
         }
+
+
+def _fold_rate_limit(stats: BatchStats, info: RateLimitInfo) -> None:
+    if info.cost is not None:
+        stats.points_cost += info.cost
+    if info.used is not None:
+        stats.points_used = (
+            info.used if stats.points_used is None else max(stats.points_used, info.used)
+        )
+    if info.remaining is not None:
+        stats.points_remaining = (
+            info.remaining
+            if stats.points_remaining is None
+            else min(stats.points_remaining, info.remaining)
+        )
 
 
 @dataclass(frozen=True)
@@ -174,7 +226,10 @@ def _post(
                 failures[key] = message
         else:
             batch_errors.append(message)
-    return ParsedBatch(values=values, failures=failures), tuple(batch_errors)
+    return (
+        ParsedBatch(values=values, failures=failures, rate_limit=parsed.rate_limit),
+        tuple(batch_errors),
+    )
 
 
 def fetch_batch(
@@ -337,6 +392,8 @@ def fetch_batch(
                     transient = False
                     try:
                         parsed, batch_errors = future.result()
+                        if parsed.rate_limit is not None:
+                            _fold_rate_limit(stats, parsed.rate_limit)
                     except GraphQLAuthError:
                         raise
                     except DeadlineExceededError:

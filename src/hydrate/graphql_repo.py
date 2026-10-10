@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from lib.graphql_batch import DEFAULT_BATCH_SIZE, ParsedBatch
+from lib.graphql_batch import DEFAULT_BATCH_SIZE, ParsedBatch, rate_limit_from_payload
 
 _FIELDS = """    databaseId
     id
@@ -236,6 +236,7 @@ class RepoDetailsAdapter:
             )
             lines.append(_FIELDS)
             lines.append("  }")
+        lines.append("  rateLimit { cost used remaining }")
         lines.append("}")
         return "\n".join(lines)
 
@@ -243,8 +244,9 @@ class RepoDetailsAdapter:
         data = payload.get("data")
         values: dict[str, RepoDetails] = {}
         failures: dict[str, str] = {}
+        rate_limit = rate_limit_from_payload(payload)
         if not isinstance(data, dict):
-            return ParsedBatch(values=values, failures=failures)
+            return ParsedBatch(values=values, failures=failures, rate_limit=rate_limit)
         for alias, key in aliases.items():
             node = data.get(alias)
             if not isinstance(node, dict):
@@ -264,4 +266,4 @@ class RepoDetailsAdapter:
                 )
             except ValueError as exc:
                 failures[key] = str(exc)
-        return ParsedBatch(values=values, failures=failures)
+        return ParsedBatch(values=values, failures=failures, rate_limit=rate_limit)

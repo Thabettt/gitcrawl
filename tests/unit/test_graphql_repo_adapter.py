@@ -142,3 +142,18 @@ def test_build_query_uses_valid_owner_inline_fragments():
     assert "... on User { databaseId }" in query
     assert "... on Organization { databaseId }" in query
     assert "owner { databaseId" not in query
+
+
+def test_build_query_requests_rate_limit_telemetry():
+    adapter = RepoDetailsAdapter({"911": "octo/alpha"})
+    query = adapter.build_query({"n0": "911"})
+    assert "rateLimit { cost used remaining }" in query
+
+
+def test_parse_reads_the_rate_limit_block():
+    from lib.graphql_batch import RateLimitInfo
+
+    adapter = RepoDetailsAdapter({"911": "octo/alpha"})
+    payload = {"data": {"n0": NODE, "rateLimit": {"cost": 1, "used": 412, "remaining": 4588}}}
+    parsed = adapter.parse(payload, {"n0": "911"})
+    assert parsed.rate_limit == RateLimitInfo(cost=1, used=412, remaining=4588)

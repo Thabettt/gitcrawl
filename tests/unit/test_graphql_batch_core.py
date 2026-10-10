@@ -10,7 +10,12 @@ import httpx
 import pytest
 
 from lib.deadlines import Deadline
-from lib.graphql_batch import GraphQLAuthError, ParsedBatch, fetch_batch
+from lib.graphql_batch import (
+    GraphQLAuthError,
+    ParsedBatch,
+    fetch_batch,
+    rate_limit_from_payload,
+)
 
 ALIAS_RE = re.compile(r"(n\d+): field")
 
@@ -31,7 +36,7 @@ class DictAdapter:
                 if key is None or not isinstance(node, str):
                     continue
                 values[key] = node
-        return ParsedBatch(values=values)
+        return ParsedBatch(values=values, rate_limit=rate_limit_from_payload(payload))
 
 
 def client_from(responses, recorder=None):
@@ -62,6 +67,38 @@ def test_fetch_batch_single_request_maps_all_values():
     assert len(captured) == 1
     query = json.loads(captured[0].content)["query"]
     assert ALIAS_RE.findall(query) == ["n0", "n1", "n2"]
+
+
+def test_rate_limit_telemetry_folds_into_batch_stats():
+    responses = [
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "n0": "value-1",
+                    "rateLimit": {"cost": 1, "used": 400, "remaining": 4600},
+                }
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "n0": "value-2",
+                    "rateLimit": {"cost": 2, "used": 402, "remaining": 4598},
+                }
+            },
+        ),
+    ]
+    adapter = DictAdapter()
+    adapter.batch_size = 1
+    client = client_from(responses)
+    outcome = fetch_batch(adapter, ["1", "2"], client=client, concurrency=1)
+    assert outcome.values == {"1": "value-1", "2": "value-2"}
+    assert outcome.stats.points_cost == 3
+    assert outcome.stats.points_used == 402
+    assert outcome.stats.points_remaining == 4598
+    assert outcome.stats.as_dict()["points_cost"] == 3
 
 
 def test_fetch_batch_keeps_good_results_when_one_alias_errors():
