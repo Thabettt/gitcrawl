@@ -29,6 +29,8 @@ logger = logging.getLogger("gitcrawl.discover")
 
 _INT_PARAMS = ("page", "per_page", "since")
 _MAX_PROBE_CONCURRENCY = 8
+_UPSERT_EVERY_PAGES = 10
+_UPSERT_EVERY_ITEMS = 1000
 
 
 @dataclass(frozen=True)
@@ -220,6 +222,8 @@ class _Worker:
         sleep: Callable[[float], None],
         now: Callable[[], float],
         jitter: Callable[[], float] | None,
+        upsert_every_pages: int = _UPSERT_EVERY_PAGES,
+        upsert_every_items: int = _UPSERT_EVERY_ITEMS,
     ) -> None:
         self._deps = deps
         self._stats = stats
@@ -232,6 +236,8 @@ class _Worker:
         self._sleep = sleep
         self._now = now
         self._jitter = jitter
+        self._upsert_every_pages = upsert_every_pages
+        self._upsert_every_items = upsert_every_items
         self._store = ShardStore(deps.engine)
 
     def _deadline_expired(self) -> bool:
@@ -262,6 +268,25 @@ class _Worker:
         fetched = 0
         last_total = row.total_count
         incomplete = False
+        pending: list[dict] = []
+        pending_pages = 0
+
+        def flush_pending() -> None:
+            nonlocal pending_pages
+            if not pending:
+                return
+            upserted = upsert_repos(self._deps.engine, dedupe_items(pending))
+            with self._lock:
+                _fold(self._stats, upserted)
+            pending.clear()
+            pending_pages = 0
+
+        def flush_pending_best_effort() -> None:
+            try:
+                flush_pending()
+            except Exception:
+                logger.exception("could not flush buffered discovery pages")
+
         try:
             for page in iter_pages(
                 self._deps.client,
@@ -277,15 +302,16 @@ class _Worker:
                 cancellation.check()
                 if self._deadline_expired():
                     self._stop_for_deadline()
+                    flush_pending()
                     self._store.set_state(shard_id, ShardState.PENDING)
                     return
-                upserted = upsert_repos(self._deps.engine, dedupe_items(page.items))
+                pending.extend(page.items)
+                pending_pages += 1
                 with self._lock:
                     self._stats.pages += 1
                     self._stats.fetched += len(page.items)
                     fetched += len(page.items)
                     last_total = page.repository_count
-                    _fold(self._stats, upserted)
                     _collect_ids(self._seen, self._collected, page.items)
                     if page.exhausted:
                         self._stats.page_capped_shards += 1
@@ -294,6 +320,12 @@ class _Worker:
                         incomplete = True
                     if page.repository_count > fetched and not page.has_next:
                         incomplete = True
+                if (
+                    pending_pages >= self._upsert_every_pages
+                    or len(pending) >= self._upsert_every_items
+                ):
+                    flush_pending()
+            flush_pending()
         except (
             RequestFailed,
             ThrottledError,
@@ -301,6 +333,7 @@ class _Worker:
             MalformedResponse,
             httpx.HTTPError,
         ):
+            flush_pending_best_effort()
             with self._lock:
                 self._stats.incomplete_shards += 1
             self._store.set_state(
@@ -312,13 +345,16 @@ class _Worker:
             )
             return
         except cancellation.RunCancelled:
+            flush_pending_best_effort()
             self._store.set_state(shard_id, ShardState.PENDING)
             raise
         except DeadlineExceededError:
+            flush_pending_best_effort()
             self._stop_for_deadline()
             self._store.set_state(shard_id, ShardState.PENDING)
             return
         except BaseException:
+            flush_pending_best_effort()
             try:
                 self._store.set_state(
                     shard_id,
@@ -351,6 +387,8 @@ def run_search_discovery(
     max_shards: int = 100,
     total_count: int | None = None,
     discovery_concurrency: int = 32,
+    upsert_every_pages: int = _UPSERT_EVERY_PAGES,
+    upsert_every_items: int = _UPSERT_EVERY_ITEMS,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.time,
     jitter: Callable[[], float] | None = None,
@@ -415,6 +453,8 @@ def run_search_discovery(
             sleep=sleep,
             now=now,
             jitter=jitter,
+            upsert_every_pages=upsert_every_pages,
+            upsert_every_items=upsert_every_items,
         )
         completed = 0
         with ThreadPoolExecutor(max_workers=discovery_concurrency) as pool:

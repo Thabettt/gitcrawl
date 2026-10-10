@@ -228,6 +228,134 @@ def test_page_upserts_do_not_serialize_on_the_worker_lock(clean: Engine, monkeyp
     assert state["peak"] >= 2
 
 
+def test_multi_page_shard_upserts_are_batched_by_page_threshold(clean: Engine, monkeypatch):
+    calls: list[int] = []
+    real_upsert = pipeline.upsert_repos
+
+    def counting_upsert(engine, items, **kwargs):
+        materialized = list(items)
+        calls.append(len(materialized))
+        return real_upsert(engine, materialized, **kwargs)
+
+    monkeypatch.setattr(pipeline, "upsert_repos", counting_upsert)
+
+    pages = iter(
+        [
+            page_payload(range(1000, 1100), total=250, has_next=True, cursor="c1"),
+            page_payload(range(1100, 1200), total=250, has_next=True, cursor="c2"),
+            page_payload(range(1200, 1250), total=250),
+        ]
+    )
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 250)
+        return next(pages)
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(deps, "topic:ai", upsert_every_pages=2, jitter=lambda: 0.0)
+
+    assert calls == [200, 50]
+    assert stats.pages == 3
+    assert stats.fetched == 250
+    assert stats.inserted == 250
+    assert stats.incomplete_shards == 0
+    assert shard_state(clean, 1) == ("done", False)
+
+
+def test_page_fetch_does_not_wait_for_the_upsert(clean: Engine, monkeypatch):
+    events: list[str] = []
+    real_upsert = pipeline.upsert_repos
+
+    def slow_upsert(engine, items, **kwargs):
+        events.append("upsert-start")
+        time.sleep(0.2)
+        result = real_upsert(engine, items, **kwargs)
+        events.append("upsert-end")
+        return result
+
+    monkeypatch.setattr(pipeline, "upsert_repos", slow_upsert)
+
+    pages = iter(
+        [
+            page_payload(range(2000, 2100), total=250, has_next=True, cursor="c1"),
+            page_payload(range(2100, 2200), total=250, has_next=True, cursor="c2"),
+            page_payload(range(2200, 2250), total=250),
+        ]
+    )
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 250)
+        events.append("page")
+        return next(pages)
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    run_search_discovery(deps, "topic:ai", upsert_every_pages=3, jitter=lambda: 0.0)
+
+    assert events == ["page", "page", "page", "upsert-start", "upsert-end"]
+
+
+def test_item_threshold_flushes_before_the_page_threshold(clean: Engine, monkeypatch):
+    calls: list[int] = []
+    real_upsert = pipeline.upsert_repos
+
+    def counting_upsert(engine, items, **kwargs):
+        materialized = list(items)
+        calls.append(len(materialized))
+        return real_upsert(engine, materialized, **kwargs)
+
+    monkeypatch.setattr(pipeline, "upsert_repos", counting_upsert)
+
+    pages = iter(
+        [
+            page_payload(range(3000, 3100), total=150, has_next=True, cursor="c1"),
+            page_payload(range(3100, 3150), total=150),
+        ]
+    )
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 150)
+        return next(pages)
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(
+        deps,
+        "topic:ai",
+        upsert_every_pages=50,
+        upsert_every_items=150,
+        jitter=lambda: 0.0,
+    )
+
+    assert calls == [150]
+    assert stats.fetched == 150
+    assert stats.inserted == 150
+
+
+def test_repeated_repo_within_one_flush_window_is_deduped(clean: Engine):
+    pages = iter(
+        [
+            page_payload([repo_node(4000)], total=2, has_next=True, cursor="c1"),
+            page_payload([repo_node(4000)], total=2),
+        ]
+    )
+
+    def handler(request: httpx.Request):
+        if is_count(request):
+            return count_payload(request, 2)
+        return next(pages)
+
+    deps = make_deps(clean, scripted_client(handler, []))
+    stats = run_search_discovery(deps, "topic:ai", jitter=lambda: 0.0)
+
+    assert stats.pages == 2
+    assert stats.fetched == 2
+    assert stats.inserted == 1
+    assert stats.repo_ids == (4000,)
+    assert scalar(clean, "SELECT count(*) FROM repos") == 1
+
+
 def test_planner_targets_created_windows_from_the_page_budget(clean: Engine):
     requests: list = []
 
