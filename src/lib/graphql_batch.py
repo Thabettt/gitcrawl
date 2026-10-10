@@ -19,6 +19,7 @@ from lib.gh_client import (
     request_with_retry,
     short_message,
 )
+from limiter.adaptive import AdaptiveController
 from limiter.buckets import BucketLimiter
 from limiter.classifier import rate_limit_wait
 
@@ -30,6 +31,7 @@ _TIMEOUT_STATUSES = frozenset({499, 502, 504})
 _MAX_FALLBACK_WORKERS = 16
 _DEFAULT_RATE_LIMIT_PAUSE = 60.0
 _RATE_LIMIT_MARKERS = ("rate limit", "secondary rate", "abuse")
+_ADAPTIVE_SLEEP_SLICE = 0.5
 _TRANSIENT_MARKERS = (
     "timeout",
     "timed out",
@@ -109,6 +111,8 @@ class BatchStats:
     unresolved: int = 0
     requeues: int = 0
     deadline_hit: bool = False
+    deferred: int = 0
+    adaptive: dict[str, object] = field(default_factory=dict)
     points_cost: int = 0
     points_used: int | None = None
     points_remaining: int | None = None
@@ -126,6 +130,8 @@ class BatchStats:
             "points_cost": self.points_cost,
             "points_used": self.points_used,
             "points_remaining": self.points_remaining,
+            "deferred": self.deferred,
+            "adaptive": self.adaptive,
         }
 
 
@@ -183,6 +189,36 @@ def _is_transient(message: str) -> bool:
 def is_transient_error(message: str) -> bool:
     """Public form of the batch engine's transient-error classifier."""
     return _is_transient(message)
+
+
+def _adaptive_hook(
+    adaptive: AdaptiveController,
+    on_response: Callable[[httpx.Response, float], None] | None,
+) -> Callable[[httpx.Response, float], None]:
+    def hook(response: httpx.Response, latency_ms: float) -> None:
+        adaptive.observe_response(response.headers, latency_ms)
+        if on_response is not None:
+            on_response(response, latency_ms)
+
+    return hook
+
+
+def _adaptive_sleep(seconds: float, sleep: Callable[[float], None]) -> None:
+    remaining = max(0.0, seconds)
+    while remaining > 0.0:
+        cancellation.check()
+        step = min(remaining, _ADAPTIVE_SLEEP_SLICE)
+        sleep(step)
+        remaining -= step
+
+
+def _pause_bucket(
+    limiter: BucketLimiter, token_id: str | None, seconds: float, now_value: float
+) -> None:
+    key_id = token_id or ""
+    existing = limiter.paused_until("graphql", key_id)
+    if existing is None or existing < now_value + seconds:
+        limiter.pause("graphql", key_id, seconds, now=now_value)
 
 
 def _is_rate_limit(message: str) -> bool:
@@ -291,6 +327,7 @@ def fetch_batch(
     on_progress: Callable[[int, int], None] | None = None,
     on_resolved: Callable[[Sequence[str], Mapping[str, object]], None] | None = None,
     concurrency: int = 1,
+    adaptive: AdaptiveController | None = None,
 ) -> BatchOutcome:
     if max_attempts < 1:
         raise ValueError("max_attempts must be >= 1")
@@ -299,18 +336,26 @@ def fetch_batch(
     size = adapter.batch_size
     if not 1 <= size <= MAX_BATCH_SIZE:
         raise ValueError(f"adapter batch_size must be 1..{MAX_BATCH_SIZE}")
+    pool_workers = adaptive.ceiling if adaptive is not None else concurrency
     unique = list(dict.fromkeys(keys))
     stats = BatchStats(keys=len(unique))
+    if adaptive is not None:
+        stats.adaptive = adaptive.snapshot()
     values: dict[str, object] = {}
     unresolved: dict[str, str] = {}
     handled_keys: set[str] = set()
     if not unique:
+        if adaptive is not None:
+            stats.adaptive = adaptive.snapshot()
         return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
     attempts = dict.fromkeys(unique, 1)
-    queue: deque[list[str]] = deque(_chunks(unique, size))
+    if adaptive is None:
+        queue: deque[list[str]] = deque(_chunks(unique, size))
+    else:
+        queue = deque([unique])  # one contiguous run; sliced live at dispatch
 
     fallback_pool = (
-        ThreadPoolExecutor(max_workers=min(concurrency, _MAX_FALLBACK_WORKERS))
+        ThreadPoolExecutor(max_workers=min(pool_workers, _MAX_FALLBACK_WORKERS))
         if fallback is not None
         else None
     )
@@ -367,7 +412,11 @@ def fetch_batch(
             drain_fallbacks(block=True)
             stats.values = len(values)
             stats.unresolved = len(unresolved)
+            if adaptive is not None:
+                stats.adaptive = adaptive.snapshot()
             return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
+
+        hook = on_response if adaptive is None else _adaptive_hook(adaptive, on_response)
 
         def requeue(failed: list[str]) -> list[str]:
             fresh: list[str] = []
@@ -398,18 +447,41 @@ def fetch_batch(
                 client=client,
                 limiter=limiter,
                 token_id=token_id,
-                on_response=on_response,
+                on_response=hook,
                 sleep=sleep,
                 now=now,
                 jitter=jitter,
             )
 
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            in_flight: dict[Future, list[str]] = {}
+        with ThreadPoolExecutor(max_workers=pool_workers) as pool:
+            in_flight: dict[Future, tuple[list[str], float]] = {}
             while queue or in_flight or fallback_futures:
                 cancellation.check()
-                while queue and len(in_flight) < concurrency:
+                throttle = 0.0
+                if adaptive is not None:
+                    if adaptive.should_stop():
+                        marked = 0
+                        while queue:
+                            for key in queue.popleft():
+                                if (
+                                    key not in values
+                                    and key not in unresolved
+                                    and key not in handled_keys
+                                ):
+                                    unresolved[key] = (
+                                        "deferred: github graphql point reserve reached"
+                                    )
+                                    marked += 1
+                        stats.deferred += marked
+                        adaptive.note_deferred(marked)
+                    throttle = max(adaptive.pause_remaining(), adaptive.pacer_delay())
+                gate = adaptive.window if adaptive is not None else concurrency
+                while queue and len(in_flight) < gate and throttle <= 0.0:
                     chunk = queue.popleft()
+                    budget = min(adaptive.batch_size, size) if adaptive is not None else size
+                    if len(chunk) > budget:
+                        queue.appendleft(chunk[budget:])
+                        chunk = chunk[:budget]
                     pending = [
                         key
                         for key in chunk
@@ -423,14 +495,28 @@ def fetch_batch(
                             unresolved[key] = "run deadline exceeded"
                         continue
                     stats.requests += 1
-                    in_flight[submit_chunk(pool, pending)] = pending
+                    if adaptive is not None:
+                        adaptive.on_dispatch()
+                    in_flight[submit_chunk(pool, pending)] = (pending, now())
+                    if adaptive is not None:
+                        throttle = max(adaptive.pause_remaining(), adaptive.pacer_delay())
                 if not in_flight:
+                    if throttle > 0.0:
+                        drain_fallbacks(block=False)
+                        _adaptive_sleep(min(throttle, _ADAPTIVE_SLEEP_SLICE), sleep)
+                        continue
                     drain_fallbacks(block=True)
                     continue
-                done, _pending_futures = wait(in_flight, return_when=FIRST_COMPLETED)
+                done, _pending_futures = wait(
+                    in_flight,
+                    return_when=FIRST_COMPLETED,
+                    timeout=None if throttle <= 0.0 else min(throttle, _ADAPTIVE_SLEEP_SLICE),
+                )
                 for future in done:
-                    pending = in_flight.pop(future)
+                    pending, _submitted = in_flight.pop(future)
                     transient = False
+                    status: int | None = None
+                    throttled = False
                     try:
                         parsed, batch_errors = future.result()
                         if parsed.rate_limit is not None:
@@ -451,6 +537,9 @@ def fetch_batch(
                     ) as exc:
                         parsed = ParsedBatch()
                         batch_errors = (f"{type(exc).__name__}: {exc}",)
+                        if isinstance(exc, RequestFailed):
+                            status = exc.status
+                        throttled = isinstance(exc, ThrottledError)
                         transient = (
                             isinstance(exc, RequestFailed) and exc.status in _TIMEOUT_STATUSES
                         )
@@ -461,8 +550,8 @@ def fetch_batch(
                     if on_resolved is not None and resolved:
                         on_resolved(tuple(resolved), resolved)
                     failed = [key for key in pending if key not in values]
+                    reason = batch_errors[0] if batch_errors else ""
                     if batch_errors:
-                        reason = batch_errors[0]
                         if transient or _is_transient(reason):
                             for key in requeue(failed):
                                 fall_back(key, reason)
@@ -472,6 +561,19 @@ def fetch_batch(
                     else:
                         for key in failed:
                             fall_back(key, parsed.failures.get(key, "missing result"))
+                    if adaptive is not None:
+                        pause = adaptive.record_batch(
+                            drop=(
+                                throttled
+                                or status in (403, 429)
+                                or status in _TIMEOUT_STATUSES
+                                or _is_rate_limit(reason)
+                            ),
+                            guard=transient or _is_transient(reason),
+                            in_flight=len(in_flight),
+                        )
+                        if pause > 0.0 and limiter is not None:
+                            _pause_bucket(limiter, token_id, pause, now())
                     if on_progress is not None:
                         on_progress(
                             len(values) + len(unresolved) + len(handled_keys),
@@ -480,6 +582,8 @@ def fetch_batch(
                 drain_fallbacks(block=False)
         stats.values = len(values)
         stats.unresolved = len(unresolved)
+        if adaptive is not None:
+            stats.adaptive = adaptive.snapshot()
         return BatchOutcome(values=values, unresolved=unresolved, stats=stats)
     finally:
         if fallback_pool is not None:
