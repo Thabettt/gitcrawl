@@ -249,3 +249,42 @@ def test_record_from_response_total_count_none_keeps_body_value():
         {}, response, token_fp="fp", latency_ms=1, now=NOW, total_count=None
     )
     assert record.total_count == 7
+
+
+def test_record_from_response_carries_run_phase_and_used_header():
+    headers = {"x-ratelimit-used": "412", "x-ratelimit-resource": "graphql"}
+    record = record_from_response(
+        {},
+        _response(200, headers),
+        token_fp="fp",
+        latency_ms=1,
+        now=NOW,
+        run_id=7,
+        phase="hydration",
+    )
+    assert record.rl_used == 412
+    assert record.run_id == 7
+    assert record.phase == "hydration"
+
+
+def test_record_from_response_defaults_point_attribution_to_none():
+    record = record_from_response({}, _response(200), token_fp="fp", latency_ms=1, now=NOW)
+    assert record.rl_used is None
+    assert record.run_id is None
+    assert record.phase is None
+
+
+def test_points_ledger_sums_cost_per_phase_and_skips_bodies_without_telemetry():
+    from lib.audit import PointsLedger
+
+    ledger = PointsLedger()
+    ledger.add("hydration", {"data": {"rateLimit": {"cost": 1, "used": 10, "remaining": 90}}})
+    ledger.add("hydration", {"data": {"rateLimit": {"cost": 2, "used": 12, "remaining": 88}}})
+    ledger.add(
+        "discovery", {"data": {"s": {}, "rateLimit": {"cost": 1, "used": 13, "remaining": 87}}}
+    )
+    ledger.add("enrich", {"data": {}})
+    assert ledger.as_dict() == {
+        "discovery": {"points": 1, "responses": 1},
+        "hydration": {"points": 3, "responses": 2},
+    }

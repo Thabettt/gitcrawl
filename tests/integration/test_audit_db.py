@@ -33,6 +33,9 @@ def _record(
     incomplete_results: bool | None = False,
     latency_ms: int = 100,
     link_next: bool = False,
+    rl_used: int | None = None,
+    run_id: int | None = None,
+    phase: str | None = None,
 ) -> AuditRecord:
     params = {"q": f"topic:ai-{index}", "page": 1}
     return AuditRecord(
@@ -51,6 +54,9 @@ def _record(
         incomplete_results=incomplete_results,
         token_fp="fp-test",
         latency_ms=latency_ms,
+        rl_used=rl_used,
+        run_id=run_id,
+        phase=phase,
     )
 
 
@@ -101,6 +107,18 @@ def test_record_audit_inserts_and_reads_back(clean: Engine):
     assert row["incomplete_results"] == record.incomplete_results
     assert row["token_fp"] == record.token_fp
     assert row["latency_ms"] == record.latency_ms
+
+
+def test_record_audit_persists_point_telemetry(clean: Engine):
+    record = _record(0, rl_used=4123, run_id=13, phase="hydration")
+    record_audit(clean, record)
+    with clean.connect() as connection:
+        row = (
+            connection.execute(text("SELECT rl_used, run_id, phase FROM audit_log"))
+            .mappings()
+            .one()
+        )
+    assert dict(row) == {"rl_used": 4123, "run_id": 13, "phase": "hydration"}
 
 
 def _audit_count(engine: Engine) -> int:

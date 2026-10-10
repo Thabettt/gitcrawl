@@ -5,7 +5,7 @@ import json
 import queue
 import threading
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
 import httpx
@@ -32,6 +32,9 @@ class AuditRecord:
     incomplete_results: bool | None
     token_fp: str
     latency_ms: int
+    rl_used: int | None = None
+    run_id: int | None = None
+    phase: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,8 @@ def record_from_response(
     now: datetime | None = None,
     body: object | None = None,
     total_count: int | None = None,
+    run_id: int | None = None,
+    phase: str | None = None,
 ) -> AuditRecord:
     headers = response.headers
     if body is None:
@@ -126,6 +131,9 @@ def record_from_response(
         incomplete_results=incomplete_results,
         token_fp=token_fp,
         latency_ms=int(latency_ms),
+        rl_used=_as_int(_header(headers, "x-ratelimit-used")),
+        run_id=run_id,
+        phase=phase,
     )
 
 
@@ -271,3 +279,29 @@ def slo_snapshot(engine: Engine, *, window: int = 1000) -> SloSnapshot:
         shard_coverage=_ratio(shards["finished"], shards["total"]),
         geo_unmatched_rate=_ratio(geo["unmatched"], geo["with_location"]),
     )
+
+
+@dataclass
+class PointsLedger:
+    """Thread-safe per-phase GraphQL point totals observed in response bodies."""
+
+    _points: dict[str, int] = field(default_factory=dict)
+    _responses: dict[str, int] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add(self, phase: str, body: object | None) -> None:
+        from lib.graphql_batch import rate_limit_from_payload
+
+        info = rate_limit_from_payload(body)
+        if info is None or info.cost is None:
+            return
+        with self._lock:
+            self._points[phase] = self._points.get(phase, 0) + info.cost
+            self._responses[phase] = self._responses.get(phase, 0) + 1
+
+    def as_dict(self) -> dict[str, dict[str, int]]:
+        with self._lock:
+            return {
+                phase: {"points": points, "responses": self._responses[phase]}
+                for phase, points in sorted(self._points.items())
+            }
