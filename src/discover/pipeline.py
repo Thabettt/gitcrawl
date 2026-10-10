@@ -115,6 +115,10 @@ def _graphql_total_count(body: object) -> int | None:
 
 def _graphql_audit_hook(
     deps: Deps,
+    *,
+    run_id: int | None = None,
+    phase: str = "discovery",
+    ledger: audit.PointsLedger | None = None,
 ) -> Callable[[httpx.Response, float, Mapping[str, object]], None]:
     def hook(response: httpx.Response, latency_ms: float, params: Mapping[str, object]) -> None:
         body = _graphql_body(response)
@@ -125,7 +129,11 @@ def _graphql_audit_hook(
             latency_ms=latency_ms,
             body=body,
             total_count=_graphql_total_count(body),
+            run_id=run_id,
+            phase=phase,
         )
+        if ledger is not None:
+            ledger.add(phase, body)
         if deps.audit_buffer is not None:
             deps.audit_buffer.add(record)
         else:
@@ -193,8 +201,15 @@ def count_total(
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.time,
     jitter: Callable[[], float] | None = None,
+    run_id: int | None = None,
+    phase: str = "count",
+    ledger: audit.PointsLedger | None = None,
 ) -> int:
-    hook = _graphql_audit_hook(deps) if on_response is None else on_response
+    hook = (
+        _graphql_audit_hook(deps, run_id=run_id, phase=phase, ledger=ledger)
+        if on_response is None
+        else on_response
+    )
     return count_queries(
         deps.client,
         [query],
@@ -393,9 +408,11 @@ def run_search_discovery(
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.time,
     jitter: Callable[[], float] | None = None,
+    run_id: int | None = None,
+    ledger: audit.PointsLedger | None = None,
 ) -> DiscoveryStats:
     stats = DiscoveryStats()
-    hook = _graphql_audit_hook(deps)
+    hook = _graphql_audit_hook(deps, run_id=run_id, phase="discovery", ledger=ledger)
     store = ShardStore(deps.engine)
 
     def probe_counts(queries: Sequence[str]) -> list[int]:

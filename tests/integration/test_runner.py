@@ -122,6 +122,8 @@ def graphql_batch_response(
     items_by_full_name: dict[str, dict],
     *,
     commit_counts: dict[int, int] | None = None,
+    rate_limit: dict[str, int] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> httpx.Response:
     body = json.loads(request.content)
     counts = commit_counts or {}
@@ -136,10 +138,12 @@ def graphql_batch_response(
             item_id = item.get("id")
             count = counts.get(item_id) if isinstance(item_id, int) else None
             data[alias] = rest_item_to_graphql_node(item, commit_count=count)
+    if rate_limit is not None:
+        data["rateLimit"] = rate_limit
     payload: dict[str, object] = {"data": data}
     if errors:
         payload["errors"] = errors
-    return httpx.Response(200, json=payload)
+    return httpx.Response(200, json=payload, headers=headers)
 
 
 def graphql_file_response(
@@ -1237,6 +1241,7 @@ def test_run_filter_uses_cost_plan_order_and_reports_field_stats(clean: Engine, 
     assert [item.repo_id for item in payload.items] == [1]
     field_stats = dict(payload.field_stats)
     field_stats.pop("graphql")
+    field_stats.pop("points")
     assert field_stats == {
         "per_field_sources": {"owner_country": 1, "has_dockerfile": 1},
         "calls_spent": {"owner_country": 2, "has_dockerfile": 1},
@@ -1272,6 +1277,7 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
 
     field_stats = dict(payload.field_stats)
     field_stats.pop("graphql")
+    field_stats.pop("points")
     assert field_stats == {
         "per_field_sources": {"min_stars": 1, "team_topic": 1},
         "calls_spent": {"min_stars": 0, "team_topic": 0},
@@ -1285,6 +1291,46 @@ def test_run_filter_field_stats_flow_into_the_bundle(clean: Engine, tmp_path):
     status = run_status(clean, run_id)
     bundle = json.loads((Path(status["bundle_dir"]) / "bundle.json").read_text(encoding="utf-8"))
     assert bundle["field_stats"] == payload.field_stats
+
+
+def test_run_filter_persists_per_phase_points_and_audit_attribution(clean: Engine):
+    item = repo_item(1)
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 1)
+            return page_response([item])
+        if path == "/graphql":
+            return graphql_batch_response(
+                request,
+                {item["full_name"]: item},
+                rate_limit={"cost": 1, "used": 412, "remaining": 4588},
+                headers={"x-ratelimit-used": "412"},
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _ = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python"),
+        config=RunnerConfig(max_shards=1, max_enrich=0),
+        run_id=42,
+    )
+    points = payload.field_stats["points"]
+    assert points["count"]["points"] == 1
+    assert points["discovery"]["points"] == 1
+    assert points["hydration"]["points"] == 1
+    with clean.connect() as connection:
+        phases = set(connection.execute(text("SELECT DISTINCT phase FROM audit_log")).scalars())
+        run_ids = set(connection.execute(text("SELECT DISTINCT run_id FROM audit_log")).scalars())
+        used = connection.execute(
+            text("SELECT rl_used FROM audit_log WHERE phase = 'hydration'")
+        ).scalar()
+    assert {"count", "discovery", "hydration"} <= phases
+    assert run_ids == {42}
+    assert used == 412
 
 
 def test_run_filter_reports_discovery_upsert_counters(clean: Engine, monkeypatch):

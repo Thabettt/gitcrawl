@@ -149,7 +149,13 @@ def _iso(value: object) -> str | None:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
+def _audit_hook(
+    deps: Deps,
+    *,
+    run_id: int | None = None,
+    phase: str | None = None,
+    ledger: audit.PointsLedger | None = None,
+) -> Callable[[httpx.Response, float], None]:
     def hook(response: httpx.Response, latency_ms: float) -> None:
         request = response.request
         params: dict[str, object] = {}
@@ -164,7 +170,11 @@ def _audit_hook(deps: Deps) -> Callable[[httpx.Response, float], None]:
             response,
             token_fp=deps.token_fp,
             latency_ms=latency_ms,
+            run_id=run_id,
+            phase=phase,
         )
+        if ledger is not None and phase is not None:
+            ledger.add(phase, audit.cached_json(response))
         if deps.audit_buffer is not None:
             deps.audit_buffer.add(record)
         else:
@@ -773,6 +783,7 @@ def run_filter(
     spec: FilterSpec,
     *,
     config: RunnerConfig | None = None,
+    run_id: int | None = None,
 ) -> RunPayload:
     cfg = config or RunnerConfig()
     if deps.limiter is not None:
@@ -783,7 +794,7 @@ def run_filter(
         )
         deps.limiter.bind_deadline(Deadline(seconds))
     try:
-        return _run_filter(deps, spec, config=config)
+        return _run_filter(deps, spec, config=config, run_id=run_id)
     finally:
         if deps.limiter is not None:
             deps.limiter.bind_deadline(None)
@@ -796,14 +807,16 @@ def _run_filter(
     spec: FilterSpec,
     *,
     config: RunnerConfig | None = None,
+    run_id: int | None = None,
 ) -> RunPayload:
     cfg = config or RunnerConfig()
+    ledger = audit.PointsLedger()
     virtual = dict(spec.virtual)
     warnings = _r44_warnings(virtual)
     query = spec_to_query(spec)
     timings: dict[str, float] = {}
     started = time.perf_counter()
-    total_count = pipeline.count_total(deps, query)
+    total_count = pipeline.count_total(deps, query, run_id=run_id, ledger=ledger)
     timings["count"] = time.perf_counter() - started
     started = time.perf_counter()
     stats = pipeline.run_search_discovery(
@@ -813,6 +826,8 @@ def _run_filter(
         max_pages=spec.max_pages,
         total_count=total_count,
         discovery_concurrency=cfg.discovery_concurrency,
+        run_id=run_id,
+        ledger=ledger,
     )
     timings["discovery"] = time.perf_counter() - started
     if stats.incomplete_shards > 0:
@@ -841,7 +856,7 @@ def _run_filter(
             f"collected {unique_found} unique repos of ~{total_count} matching; "
             "results are incomplete"
         )
-    hook = _audit_hook(deps)
+    hydration_hook = _audit_hook(deps, run_id=run_id, phase="hydration", ledger=ledger)
     started = time.perf_counter()
     ordered = _ordered_rows(deps.engine, list(stats.repo_ids))
     timings["candidates"] = time.perf_counter() - started
@@ -871,7 +886,7 @@ def _run_filter(
         deps,
         candidates,
         cfg,
-        hook,
+        hydration_hook,
         on_progress=lambda done, total: progress.report(
             "hydrating", done, total, fetched=stats.fetched
         ),
@@ -900,12 +915,13 @@ def _run_filter(
     budget = {"remaining": cfg.max_enrich}
     skipped = {"geo": 0, "dockerfile": 0, "commits": 0, "language_bytes": 0}
     started = time.perf_counter()
+    enrich_hook = _audit_hook(deps, run_id=run_id, phase="enrich", ledger=ledger)
     handlers, unsupported = _enrich_handlers(
         deps,
         rows,
         virtual,
         budget,
-        hook,
+        enrich_hook,
         skipped,
         graphql_report,
         hydration.commit_counts,
@@ -954,6 +970,7 @@ def _run_filter(
     items = [_payload_item(row, virtual) for row in rows]
     timings["sort_payload"] = time.perf_counter() - started
     field_stats = asdict(segment_stats)
+    field_stats["points"] = ledger.as_dict()
     field_stats["graphql"] = graphql_report
     return RunPayload(
         total_count=total_count,
@@ -973,6 +990,6 @@ def make_runner(deps: Deps, *, config: RunnerConfig | None = None) -> Runner:
     cfg = config or RunnerConfig()
 
     def runner(run_id: int, filter_spec: dict) -> RunPayload:
-        return run_filter(deps, parse_filter_spec(filter_spec), config=cfg)
+        return run_filter(deps, parse_filter_spec(filter_spec), config=cfg, run_id=run_id)
 
     return runner

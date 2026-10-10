@@ -398,6 +398,7 @@ def create_app(
                         deps,
                         parse_filter_spec(filter_spec),
                         config=runner_config_from(settings),
+                        run_id=run_id,
                     )
                 finally:
                     deps.client.close()
