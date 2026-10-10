@@ -37,7 +37,7 @@ def test_search_allows_thirty_per_window_and_denies_the_next(redis):
     assert all(result.allowed for result in results)
     denied = limiter.acquire("search", "token-a", now=10.0)
     assert denied.allowed is False
-    assert denied.retry_after == 50.0
+    assert denied.retry_after == 60.0
 
 
 def test_search_boundary_thirtieth_allowed_thirty_first_denied(redis):
@@ -48,12 +48,12 @@ def test_search_boundary_thirtieth_allowed_thirty_first_denied(redis):
     assert limiter.acquire("search", "token-a", now=0.0).allowed is False
 
 
-def test_window_rollover_resets_count(redis):
+def test_window_rollover_resets_at_first_use_plus_window(redis):
     limiter = window_limiter(redis)
     for _ in range(30):
         limiter.acquire("search", "token-a", now=10.0)
     assert limiter.acquire("search", "token-a", now=10.0).allowed is False
-    assert limiter.acquire("search", "token-a", now=60.0).allowed is True
+    assert limiter.acquire("search", "token-a", now=70.0).allowed is True
 
 
 def test_code_search_denies_after_ten_per_window(redis):
@@ -140,6 +140,36 @@ def test_update_from_headers_never_lowers_current_count(redis):
     )
     assert limiter.acquire("core", "token-a", now=0.0).allowed is True
     assert limiter.acquire("core", "token-a", now=0.0).allowed is False
+
+
+def test_reconcile_anchors_the_window_to_the_response_reset(redis):
+    limiter = BucketLimiter(redis, max_concurrent=100)
+    for _ in range(30):
+        assert limiter.acquire("search", "token-a", now=10.0).allowed
+    limiter.update_from_headers(
+        "search",
+        "token-a",
+        {"x-ratelimit-remaining": "7", "x-ratelimit-reset": "40"},
+        now=10.0,
+    )
+    denied = limiter.acquire("search", "token-a", now=11.0)
+    assert denied.allowed is False
+    assert denied.retry_after == 29.0
+    assert limiter.acquire("search", "token-a", now=40.0).allowed is True
+
+
+def test_reconcile_uses_the_header_limit_over_the_spec(redis):
+    limiter = BucketLimiter(redis, specs={"core": (5, 60.0)})
+    limiter.update_from_headers(
+        "core",
+        "token-a",
+        {"x-ratelimit-limit": "100", "x-ratelimit-remaining": "40", "x-ratelimit-reset": "60"},
+        now=0.0,
+    )
+    assert redis.hget("gitcrawl:rl:core:token-a", "count") == b"60"
+    denied = limiter.acquire("core", "token-a", now=0.0)
+    assert denied.allowed is False
+    assert denied.retry_after == 60.0
 
 
 def test_update_from_headers_ignores_malformed_values(redis, limiter):
@@ -264,7 +294,7 @@ def test_acquire_uses_hash_key_with_ttl(redis, limiter):
     assert redis.ttl(key) > 0
     assert redis.hget(key, "count") == b"1"
     assert redis.hget(key, "slots") == b"1"
-    assert redis.hget(key, "window") == b"0"
+    assert redis.hget(key, "window_end") == b"60"
 
 
 def test_graphql_bucket_spec():

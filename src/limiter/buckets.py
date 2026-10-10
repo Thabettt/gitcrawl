@@ -29,30 +29,31 @@ local paused = tonumber(redis.call('HGET', key, 'paused_until') or '0')
 if paused > now then
   return {0, tostring(paused - now)}
 end
-local window = math.floor(now / window_seconds)
-local stored_window = tonumber(redis.call('HGET', key, 'window') or '-1')
+local window_end = tonumber(redis.call('HGET', key, 'window_end') or '0')
 local count = tonumber(redis.call('HGET', key, 'count') or '0')
-if stored_window ~= window then
+if window_end <= now then
   count = 0
+  window_end = now + window_seconds
 end
 if count >= limit then
-  local retry_after = (window + 1) * window_seconds - now
+  local retry_after = window_end - now
   if retry_after < 0 then
     retry_after = 0
   end
-  redis.call('HSET', key, 'window', window, 'count', count, 'paused_until', paused)
+  redis.call('HSET', key, 'window_end', window_end, 'count', count, 'paused_until', paused)
   redis.call('EXPIRE', key, ttl)
   return {0, tostring(retry_after)}
 end
 local slots = tonumber(redis.call('HGET', key, 'slots') or '0')
 if slots >= max_concurrent then
-  redis.call('HSET', key, 'window', window, 'count', count, 'paused_until', paused)
+  redis.call('HSET', key, 'window_end', window_end, 'count', count, 'paused_until', paused)
   redis.call('EXPIRE', key, ttl)
   return {0, tostring(CONCURRENCY_RETRY_AFTER)}
 end
 count = count + 1
 slots = slots + 1
-redis.call('HSET', key, 'window', window, 'count', count, 'slots', slots, 'paused_until', paused)
+redis.call('HSET', key, 'window_end', window_end, 'count', count, 'slots', slots,
+  'paused_until', paused)
 redis.call('EXPIRE', key, ttl)
 return {1, '0'}
 """.replace("CONCURRENCY_RETRY_AFTER", str(_CONCURRENCY_RETRY_AFTER))
@@ -71,17 +72,21 @@ local key = KEYS[1]
 local now = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
 local target = tonumber(ARGV[3])
-local ttl = tonumber(ARGV[4])
-local window = math.floor(now / window_seconds)
-local stored_window = tonumber(redis.call('HGET', key, 'window') or '-1')
+local reset = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+local window_end = tonumber(redis.call('HGET', key, 'window_end') or '0')
 local count = tonumber(redis.call('HGET', key, 'count') or '0')
-if stored_window ~= window then
+if window_end <= now then
   count = 0
+  window_end = now + window_seconds
 end
 if target > count then
   count = target
 end
-redis.call('HSET', key, 'window', window, 'count', count)
+if reset > now then
+  window_end = reset
+end
+redis.call('HSET', key, 'window_end', window_end, 'count', count)
 redis.call('EXPIRE', key, ttl)
 return count
 """
@@ -209,7 +214,9 @@ class BucketLimiter:
         if spec is None:
             return
         limit, window_seconds = spec
-        target = max(0, limit - remaining)
+        header_limit = _parse_int(normalized.get("x-ratelimit-limit"))
+        effective_limit = header_limit if header_limit is not None and header_limit > 0 else limit
+        target = max(0, effective_limit - remaining)
         self._redis.eval(
             _RECONCILE_SCRIPT,
             1,
@@ -217,5 +224,6 @@ class BucketLimiter:
             now,
             window_seconds,
             target,
+            reset if reset is not None else -1.0,
             self._ttl(window_seconds),
         )
