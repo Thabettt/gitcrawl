@@ -16,8 +16,16 @@ from lib.graphql_batch import (
     fetch_batch,
     rate_limit_from_payload,
 )
+from limiter.buckets import BucketLimiter
 
 ALIAS_RE = re.compile(r"(n\d+): field")
+
+
+@pytest.fixture
+def redis():
+    import fakeredis
+
+    return fakeredis.FakeRedis()
 
 
 class DictAdapter:
@@ -523,3 +531,66 @@ def test_http_500_still_falls_back_without_splitting():
     assert outcome.values == {"1": "rest-1", "2": "rest-2", "3": "rest-3", "4": "rest-4"}
     assert outcome.stats.fallbacks == 4
     assert all(batch == ["1", "2", "3", "4"] for batch in requests)
+
+
+def test_final_forbidden_keeps_the_github_message():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"message": "You have exceeded a secondary rate limit. Please wait a few minutes"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        DictAdapter(), ["1"], client=client, max_attempts=1, sleep=lambda _seconds: None
+    )
+    assert "secondary rate limit" in outcome.unresolved["1"]
+
+
+def test_rate_limit_error_body_pauses_the_bucket_when_headers_are_silent(redis):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": None,
+                "errors": [{"message": "You have exceeded a secondary rate limit"}],
+            },
+        )
+
+    limiter = BucketLimiter(redis, max_concurrent=10)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        DictAdapter(),
+        ["1"],
+        client=client,
+        limiter=limiter,
+        token_id="token-a",
+        max_attempts=1,
+        now=lambda: 1000.0,
+        sleep=lambda _seconds: None,
+    )
+    assert "secondary rate limit" in outcome.unresolved["1"]
+    assert limiter.paused_until("graphql", "token-a") == 1060.0
+
+
+def test_rate_limit_error_body_with_reset_header_pauses_until_reset(redis):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": None, "errors": [{"message": "rate limit exceeded"}]},
+            headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1100"},
+        )
+
+    limiter = BucketLimiter(redis, max_concurrent=10)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    fetch_batch(
+        DictAdapter(),
+        ["1"],
+        client=client,
+        limiter=limiter,
+        token_id="token-a",
+        max_attempts=1,
+        now=lambda: 1000.0,
+        sleep=lambda _seconds: None,
+    )
+    assert limiter.paused_until("graphql", "token-a") == 1100.0

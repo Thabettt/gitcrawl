@@ -63,6 +63,18 @@ def _backoff_seconds(attempt: int, jitter: Callable[[], float]) -> float:
     return min(480.0, 60.0 * 2**attempt) + jitter()
 
 
+def rate_limit_wait(headers: Mapping[str, str], *, now: float) -> tuple[Action, float] | None:
+    """Seconds to wait for a rate-limit response, from headers alone."""
+    retry_after = _parse_retry_after(_header(headers, "retry-after"), now)
+    if retry_after is not None and retry_after > 0:
+        return Action.RETRY_AFTER, retry_after
+    remaining = _header(headers, "x-ratelimit-remaining")
+    reset = _parse_number(_header(headers, "x-ratelimit-reset"))
+    if remaining is not None and str(remaining).strip() == "0" and reset is not None:
+        return Action.WAIT_RESET, max(0.0, reset - now)
+    return None
+
+
 def classify(
     status: int,
     headers: Mapping[str, str],
@@ -83,13 +95,11 @@ def classify(
         reason = "success" if status != 304 else "not_modified"
         return Decision(Action.FREE, None, resource, reason)
     if status in (403, 429):
-        retry_after = _parse_retry_after(_header(headers, "retry-after"), now)
-        if retry_after is not None and retry_after > 0:
-            return Decision(Action.RETRY_AFTER, retry_after, resource, "retry-after")
-        remaining = _header(headers, "x-ratelimit-remaining")
-        reset = _parse_number(_header(headers, "x-ratelimit-reset"))
-        if remaining is not None and str(remaining).strip() == "0" and reset is not None:
-            return Decision(Action.WAIT_RESET, max(0.0, reset - now), resource, "rate limit reset")
+        wait = rate_limit_wait(headers, now=now)
+        if wait is not None:
+            action, seconds = wait
+            reason = "retry-after" if action is Action.RETRY_AFTER else "rate limit reset"
+            return Decision(action, seconds, resource, reason)
         if attempt >= 5:
             return Decision(Action.FAIL_LOUD, None, resource, "retries exhausted")
         return Decision(Action.BACKOFF, _backoff_seconds(attempt, jitter), resource, "backoff")

@@ -12,8 +12,15 @@ import httpx
 
 from lib import audit, cancellation
 from lib.deadlines import Deadline, DeadlineExceededError
-from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError, request_with_retry
+from lib.gh_client import (
+    PartialResultsError,
+    RequestFailed,
+    ThrottledError,
+    request_with_retry,
+    short_message,
+)
 from limiter.buckets import BucketLimiter
+from limiter.classifier import rate_limit_wait
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_BATCH_SIZE = 50
@@ -21,6 +28,8 @@ DEFAULT_BATCH_SIZE = 29
 DEFAULT_MAX_ATTEMPTS = 3
 _TIMEOUT_STATUSES = frozenset({499, 502, 504})
 _MAX_FALLBACK_WORKERS = 16
+_DEFAULT_RATE_LIMIT_PAUSE = 60.0
+_RATE_LIMIT_MARKERS = ("rate limit", "secondary rate", "abuse")
 _TRANSIENT_MARKERS = (
     "timeout",
     "timed out",
@@ -176,6 +185,35 @@ def is_transient_error(message: str) -> bool:
     return _is_transient(message)
 
 
+def _is_rate_limit(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _RATE_LIMIT_MARKERS)
+
+
+def _pause_if_rate_limited(
+    limiter: BucketLimiter | None,
+    token_id: str | None,
+    headers: Mapping[str, str],
+    batch_errors: Sequence[str],
+    *,
+    now: Callable[[], float],
+    jitter: Callable[[], float] | None,
+) -> None:
+    if limiter is None or token_id is None:
+        return
+    if not any(_is_rate_limit(message) for message in batch_errors):
+        return
+    wait = rate_limit_wait(headers, now=now())
+    if wait is not None:
+        seconds = wait[1]
+    else:
+        seconds = _DEFAULT_RATE_LIMIT_PAUSE + (jitter() if jitter is not None else 0.0)
+    if seconds > 0:
+        existing = limiter.paused_until("graphql", token_id)
+        if existing is None or existing < now() + seconds:
+            limiter.pause("graphql", token_id, seconds, now=now())
+
+
 def _post(
     adapter: GraphQLAdapter,
     keys: Sequence[str],
@@ -205,7 +243,7 @@ def _post(
     if response.status_code == 401:
         raise GraphQLAuthError("github rejected the token (HTTP 401)")
     if response.status_code != 200:
-        raise RequestFailed(int(response.status_code), "graphql request failed")
+        raise RequestFailed(int(response.status_code), short_message(response))
     payload = audit.cached_json(response)
     if payload is None:
         try:
@@ -226,6 +264,9 @@ def _post(
                 failures[key] = message
         else:
             batch_errors.append(message)
+    _pause_if_rate_limited(
+        limiter, token_id, response.headers, batch_errors, now=now, jitter=jitter
+    )
     return (
         ParsedBatch(values=values, failures=failures, rate_limit=parsed.rate_limit),
         tuple(batch_errors),

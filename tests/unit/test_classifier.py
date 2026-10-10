@@ -310,3 +310,24 @@ def test_classify_transport_schedule_is_short(attempt, sleep):
 def test_classify_transport_total_sleep_is_bounded():
     delays = [classify_transport(attempt, jitter=no_jitter).sleep_seconds for attempt in range(3)]
     assert sum(delays) <= 15.0
+
+
+def test_rate_limit_wait_returns_retry_after():
+    from limiter.classifier import rate_limit_wait
+
+    assert rate_limit_wait({"retry-after": "30"}, now=1000.0) == (Action.RETRY_AFTER, 30.0)
+
+
+def test_rate_limit_wait_returns_reset_when_exhausted():
+    from limiter.classifier import rate_limit_wait
+
+    assert rate_limit_wait(
+        {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1300"}, now=1000.0
+    ) == (Action.WAIT_RESET, 300.0)
+
+
+def test_rate_limit_wait_is_none_without_usable_signals():
+    from limiter.classifier import rate_limit_wait
+
+    assert rate_limit_wait({}, now=1000.0) is None
+    assert rate_limit_wait({"retry-after": "0"}, now=1000.0) is None
