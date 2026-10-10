@@ -36,6 +36,14 @@ from lib.gh_client import (
     token_fingerprint,
 )
 from lib.graphql_batch import fetch_batch
+from limiter.adaptive import (
+    MAX_BATCH,
+    MAX_WINDOW,
+    MIN_WINDOW,
+    AdaptiveConfig,
+    AdaptiveController,
+    adaptive_enabled,
+)
 from limiter.buckets import BucketLimiter
 from scheduler.tiering import order_repos
 from serve.executor import Runner, RunPayload, RunPayloadItem
@@ -240,6 +248,17 @@ def _hydrate(
     candidates = rows[: cfg.max_hydrate]
     if not candidates:
         return RefreshStats()
+    adaptive = None
+    if adaptive_enabled():
+        ceiling = min(MAX_WINDOW, cfg.concurrency)
+        if ceiling >= MIN_WINDOW:
+            # The controller must share `refresh_repos_batched`'s clock: this call leaves
+            # `now` at its default `time.time`, so the controller uses the same callable.
+            adaptive = AdaptiveController(
+                AdaptiveConfig(initial_window=min(20, ceiling), max_window=ceiling),
+                now=time.time,
+                initial_batch=min(cfg.graphql_batch_size, MAX_BATCH),
+            )
     return refresh_repos_batched(
         deps.engine,
         deps.client,
@@ -253,6 +272,7 @@ def _hydrate(
         on_progress=on_progress,
         on_apply_progress=on_apply_progress,
         concurrency=cfg.concurrency,
+        adaptive=adaptive,
     )
 
 
@@ -905,6 +925,12 @@ def _run_filter(
         )
         warnings.append(
             f"{len(hydration.unresolved)} repo(s) could not be hydrated ({sample}); "
+            "results are incomplete"
+        )
+    deferred = hydration.batch.get("deferred", 0)
+    if isinstance(deferred, int) and deferred > 0:
+        warnings.append(
+            f"{deferred} repo(s) deferred: the GraphQL point reserve was reached; "
             "results are incomplete"
         )
     if hydration.tombstoned > 0:

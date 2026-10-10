@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 import httpx
@@ -18,6 +19,7 @@ from lib.batching import chunked
 from lib.deadlines import Deadline
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError
 from lib.graphql_batch import DEFAULT_BATCH_SIZE, GraphQLAuthError, fetch_batch
+from limiter.adaptive import AdaptiveController
 from limiter.buckets import BucketLimiter
 from store.lifecycle import LifecycleOutcome, apply_hydration, apply_hydration_batch
 from store.models import Repo
@@ -123,6 +125,7 @@ def refresh_repos_batched(
     clock: Callable[[], float] = time.perf_counter,
     apply_batch_size: int = _APPLY_BATCH,
     on_apply_progress: Callable[[int, int], None] | None = None,
+    adaptive: AdaptiveController | None = None,
 ) -> RefreshStats:
     if apply_batch_size < 1:
         raise ValueError("apply_batch_size must be >= 1")
@@ -274,23 +277,30 @@ def refresh_repos_batched(
     )
     worker.start()
     try:
-        outcome = fetch_batch(
-            RepoDetailsAdapter(dict(candidates), batch_size=batch_size),
-            [key for key, _ in candidates],
-            client=client,
-            limiter=limiter,
-            token_id=token_id,
-            fallback=fallback,
-            deadline=deadline,
-            on_response=on_response,
-            sleep=sleep,
-            now=now,
-            jitter=jitter,
-            allow_requests=allow_requests,
-            on_progress=on_progress,
-            on_resolved=on_resolved,
-            concurrency=concurrency,
+        ceiling = (
+            limiter.bound_concurrency(adaptive.ceiling)
+            if adaptive is not None and limiter is not None
+            else nullcontext()
         )
+        with ceiling:
+            outcome = fetch_batch(
+                RepoDetailsAdapter(dict(candidates), batch_size=batch_size),
+                [key for key, _ in candidates],
+                client=client,
+                limiter=limiter,
+                token_id=token_id,
+                fallback=fallback,
+                deadline=deadline,
+                on_response=on_response,
+                sleep=sleep,
+                now=now,
+                jitter=jitter,
+                allow_requests=allow_requests,
+                on_progress=on_progress,
+                on_resolved=on_resolved,
+                concurrency=concurrency,
+                adaptive=adaptive,
+            )
         stats.fetch_seconds = clock() - fetch_started
         if buffer:
             enqueue(buffer[:])

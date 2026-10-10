@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -1617,3 +1619,104 @@ def test_load_owners_chunks_large_id_lists(clean_db, monkeypatch):
     loaded = runner_module._load_owners(engine, [1, 2, 3, 4, 5])
 
     assert set(loaded) == {1, 2, 3, 4, 5}
+
+
+def test_run_filter_adaptive_is_off_by_default(clean: Engine, monkeypatch):
+    monkeypatch.delenv("GITCRAWL_ADAPTIVE", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            return graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+        raise AssertionError(f"unexpected path {path}")
+
+    client, requests = scripted(handler)
+    payload = run_filter(make_deps(clean, client), spec_for(q="language:python"))
+    hydration = payload.field_stats["graphql"]["hydration"]
+    assert hydration["adaptive"] == {}
+    assert hydration["deferred"] == 0
+    assert len(requests) == 3  # count + page + hydration batch, unchanged
+
+
+def test_run_filter_adaptive_flag_reports_controller_state(clean: Engine, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_ADAPTIVE", "1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            body = graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+            return httpx.Response(
+                200,
+                json=json.loads(body.content),
+                headers={
+                    "x-ratelimit-remaining": "4999",
+                    "x-ratelimit-reset": str(int(time.time()) + 600),
+                },
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python"),
+        config=RunnerConfig(concurrency=32),  # the hydration envelope must exceed MIN_WINDOW
+    )
+    adaptive = payload.field_stats["graphql"]["hydration"]["adaptive"]
+    assert adaptive["window"] == 20
+    assert adaptive["batch"] == 29
+    assert adaptive["drops"] == 0
+    assert adaptive["deferred"] == 0
+
+
+def test_run_filter_warns_when_the_reserve_defers_hydration(clean: Engine, monkeypatch):
+    monkeypatch.setenv("GITCRAWL_ADAPTIVE", "1")
+    barrier = threading.Barrier(20, timeout=10)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 25)
+            return page_response([repo_item(index) for index in range(1, 26)])
+        if path == "/graphql":
+            body = json.loads(request.content)
+            matches = GRAPHQL_REPO_ALIAS_RE.findall(body["query"])
+            barrier.wait()
+            data: dict[str, object] = {}
+            for alias, _login, name in matches:
+                repo_id = int(name.removeprefix("repo"))
+                data[alias] = rest_item_to_graphql_node(repo_item(repo_id))
+            return httpx.Response(
+                200,
+                json={"data": data},
+                headers={
+                    "x-ratelimit-remaining": "100",
+                    "x-ratelimit-reset": str(int(time.time()) + 600),
+                },
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client, requests = scripted(handler)
+    payload = run_filter(
+        make_deps(clean, client),
+        spec_for(q="language:python"),
+        config=RunnerConfig(graphql_batch_size=1, max_hydrate=25, concurrency=32),
+    )
+    hydration = payload.field_stats["graphql"]["hydration"]
+    hydration_requests = [
+        request
+        for request in requests
+        if path_of(request) == "/graphql" and not is_search_request(request)
+    ]
+    assert len(hydration_requests) == 20  # the window sized the first wave
+    assert hydration["deferred"] == 5
+    assert any("deferred" in warning for warning in payload.warnings)
+    assert payload.incomplete is True
