@@ -301,6 +301,45 @@ def test_fetch_batch_runs_chunks_concurrently():
     assert outcome.stats.unresolved == 9
 
 
+def test_fetch_batch_reads_the_hook_cached_body_without_reparsing(monkeypatch):
+    payload = node_payload(["1"])
+    response = httpx.Response(200, json=payload)
+    calls = {"n": 0}
+    original_json = response.json
+
+    def counting_json():
+        calls["n"] += 1
+        return original_json()
+
+    def caching_hook(resp: httpx.Response, latency_ms: float) -> None:
+        resp.extensions["gitcrawl.json"] = resp.json()
+
+    monkeypatch.setattr(response, "json", counting_json)
+    client = client_from([response])
+    outcome = fetch_batch(DictAdapter(), ["1"], client=client, on_response=caching_hook)
+
+    assert outcome.values == {"1": "value-1"}
+    assert calls["n"] == 1
+
+
+def test_fetch_batch_parses_once_without_a_caching_hook(monkeypatch):
+    payload = node_payload(["1"])
+    response = httpx.Response(200, json=payload)
+    calls = {"n": 0}
+    original_json = response.json
+
+    def counting_json():
+        calls["n"] += 1
+        return original_json()
+
+    monkeypatch.setattr(response, "json", counting_json)
+    client = client_from([response])
+    outcome = fetch_batch(DictAdapter(), ["1"], client=client)
+
+    assert outcome.values == {"1": "value-1"}
+    assert calls["n"] == 1
+
+
 def test_on_resolved_streams_chunks_as_they_complete():
     resolved: list[tuple[list[str], dict[str, object]]] = []
     issued = 0

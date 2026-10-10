@@ -10,7 +10,7 @@ from typing import Protocol
 
 import httpx
 
-from lib import cancellation
+from lib import audit, cancellation
 from lib.deadlines import Deadline, DeadlineExceededError
 from lib.gh_client import PartialResultsError, RequestFailed, ThrottledError, request_with_retry
 from limiter.buckets import BucketLimiter
@@ -154,10 +154,12 @@ def _post(
         raise GraphQLAuthError("github rejected the token (HTTP 401)")
     if response.status_code != 200:
         raise RequestFailed(int(response.status_code), "graphql request failed")
-    try:
-        payload = response.json()
-    except ValueError:
-        raise MalformedResponse("graphql response is not JSON") from None
+    payload = audit.cached_json(response)
+    if payload is None:
+        try:
+            payload = response.json()
+        except ValueError:
+            raise MalformedResponse("graphql response is not JSON") from None
     if not isinstance(payload, dict):
         raise MalformedResponse("graphql response is not an object")
     parsed = adapter.parse(payload, aliases)
