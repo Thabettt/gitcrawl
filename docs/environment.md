@@ -103,6 +103,16 @@ Two per-user scheduled tasks start the services after login:
 | `gitcrawl-postgres` | `%LOCALAPPDATA%\gitcrawl\start-postgres.ps1` | `pg_ctl start` the 5433 cluster |
 | `gitcrawl-redis` | `%LOCALAPPDATA%\gitcrawl\start-redis.ps1` | `wsl -u root -- service redis-server start` |
 
+Both tasks have the power conditions **disabled** (`DisallowStartIfOnBatteries=false`, `StopIfGoingOnBatteries=false`) — set 2026-10-10 after a reboot on battery left the tasks stuck in `Queued` and `./start` timed out. On this laptop the services must start regardless of AC/battery; if a task ever sits `Queued`, check these two settings first:
+
+```powershell
+(Export-ScheduledTask -TaskName gitcrawl-postgres) -match 'Batteries'
+$t = Get-ScheduledTask -TaskName gitcrawl-postgres
+$t.Settings.DisallowStartIfOnBatteries = $false
+$t.Settings.StopIfGoingOnBatteries = $false
+Set-ScheduledTask -TaskName gitcrawl-postgres -Settings $t.Settings   # repeat for gitcrawl-redis
+```
+
 Manual control:
 
 ```powershell
@@ -286,6 +296,7 @@ During provisioning, a combined setup command was killed by the tool's pipe hand
 
 - **`fe_sendauth: no password supplied`** → use the DSN extraction snippet above, or `-w` will fail fast instead of prompting.
 - **`connection refused` on 5433** → cluster down: run the start command or `Start-ScheduledTask -TaskName gitcrawl-postgres`; check `%LOCALAPPDATA%\gitcrawl\pg.log`.
+- **`./start` times out waiting for PostgreSQL/Redis** → check the task state (`Get-ScheduledTask -TaskName gitcrawl-postgres`); `Queued` means it never ran — on battery that is the power-condition setting (see Auto-start at logon above). A machine reboot can also kill the cluster uncleanly; the next start does automatic recovery (`pg.log` shows "automatic recovery in progress"), which may take longer than the 30 s poll.
 - **Windows can't reach Redis** → `wsl -u root -- redis-cli ping` first (distro may be stopped); then the Python check. If localhost forwarding ever fails, use the WSL IP (`wsl hostname -I`) in `REDIS_URL` as a temporary fallback.
 - **Env vars "missing" in a shell** → that shell predates the change; restart opencode or read them from the registry as shown above.
 
