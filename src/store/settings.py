@@ -35,7 +35,7 @@ class RunSettings:
     max_enrich: int = 100
     request_deadline_seconds: int = 3600
     graphql_batch: bool = True
-    graphql_batch_size: int = 20
+    graphql_batch_size: int = 29
     limiter_max_concurrent: int = 10
     discovery_concurrency: int = 32
 

@@ -17,7 +17,7 @@ from limiter.buckets import BucketLimiter
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_BATCH_SIZE = 50
-DEFAULT_BATCH_SIZE = 20
+DEFAULT_BATCH_SIZE = 29
 DEFAULT_MAX_ATTEMPTS = 3
 _TIMEOUT_STATUSES = frozenset({499, 502, 504})
 _MAX_FALLBACK_WORKERS = 16

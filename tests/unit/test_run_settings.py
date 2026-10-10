@@ -41,6 +41,10 @@ def test_discovery_concurrency_defaults_to_32():
     assert RunSettings().discovery_concurrency == 32
 
 
+def test_graphql_batch_size_defaults_to_29():
+    assert RunSettings().graphql_batch_size == 29
+
+
 def test_env_pinned_fields_lists_only_set_variables(monkeypatch):
     monkeypatch.delenv("GITCRAWL_MAX_SHARDS", raising=False)
     monkeypatch.setenv("GITCRAWL_GRAPHQL_BATCH", "0")

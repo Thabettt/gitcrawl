@@ -125,6 +125,9 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "incomplete_results": True,
         "token_fp": False,
         "latency_ms": False,
+        "rl_used": True,
+        "run_id": True,
+        "phase": True,
     },
     "app_settings": {
         "id": False,
@@ -158,6 +161,7 @@ EXPECTED_INDEXES = {
     "fnh_repo_idx": "full_name_history",
     "shards_state_idx": "shards",
     "audit_ts_idx": "audit_log",
+    "audit_run_idx": "audit_log",
 }
 
 
@@ -294,6 +298,7 @@ def test_server_defaults(migrated: Engine):
         ("audit_log", "ts"): "now()",
         ("corpora", "frozen_at"): "now()",
         ("app_settings", "discovery_concurrency"): "32",
+        ("app_settings", "graphql_batch_size"): "29",
     }
     for (table, column), fragment in expected.items():
         assert fragment in (_columns(migrated, table)[column]["default"] or "")
@@ -393,7 +398,10 @@ def test_model_metadata_indexes_match_contract():
         "fnh_repo_idx"
     }
     assert {index.name for index in Base.metadata.tables["shards"].indexes} == {"shards_state_idx"}
-    assert {index.name for index in Base.metadata.tables["audit_log"].indexes} == {"audit_ts_idx"}
+    assert {index.name for index in Base.metadata.tables["audit_log"].indexes} == {
+        "audit_ts_idx",
+        "audit_run_idx",
+    }
     predicates = {
         str(index.dialect_options["postgresql"]["where"])
         for index in Base.metadata.tables["repos"].indexes

@@ -274,7 +274,7 @@ class AppSettings(Base):
         Boolean, nullable=False, server_default=text("true")
     )
     graphql_batch_size: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("20")
+        Integer, nullable=False, server_default=text("29")
     )
     limiter_max_concurrent: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("10")
@@ -289,7 +289,7 @@ class AppSettings(Base):
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
-    __table_args__ = (Index("audit_ts_idx", "ts"),)
+    __table_args__ = (Index("audit_ts_idx", "ts"), Index("audit_run_idx", "run_id"))
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(
@@ -309,3 +309,6 @@ class AuditLog(Base):
     incomplete_results: Mapped[bool | None] = mapped_column(Boolean)
     token_fp: Mapped[str] = mapped_column(Text, nullable=False)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    rl_used: Mapped[int | None] = mapped_column(Integer)
+    run_id: Mapped[int | None] = mapped_column(BigInteger)
+    phase: Mapped[str | None] = mapped_column(Text)
