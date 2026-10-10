@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
 import threading
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -133,7 +134,21 @@ def record_audit(engine: Engine, record: AuditRecord) -> None:
         connection.execute(insert(AuditLog).values(**asdict(record)))
 
 
+_WRITER_QUEUE_DEPTH = 4
+
+
 class AuditBuffer:
+    """Batch audit writes onto a bounded background writer thread.
+
+    ``add`` never performs a database round trip: records are handed to a
+    daemon writer through a bounded queue (at most ``_WRITER_QUEUE_DEPTH``
+    pending batches), so a network worker never blocks on the audit INSERT
+    unless the writer is more than four batches behind. ``flush`` is a
+    barrier: it submits the partial batch, waits for every submitted batch,
+    stops the writer, and re-raises the first write failure. Call ``flush``
+    only when no other thread is adding records.
+    """
+
     def __init__(self, engine: Engine, *, batch_size: int = 100) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -141,21 +156,63 @@ class AuditBuffer:
         self._batch_size = batch_size
         self._records: list[AuditRecord] = []
         self._lock = threading.Lock()
+        self._writer_lock = threading.Lock()
+        self._batches: queue.Queue[list[AuditRecord] | None] = queue.Queue(
+            maxsize=_WRITER_QUEUE_DEPTH
+        )
+        self._writer: threading.Thread | None = None
+        self._error: BaseException | None = None
 
     def add(self, record: AuditRecord) -> None:
         with self._lock:
             self._records.append(record)
             if len(self._records) < self._batch_size:
                 return
-        self.flush()
+            batch, self._records = self._records, []
+        self._submit(batch)
+        if self._error is not None:
+            raise self._error
 
     def flush(self) -> None:
         with self._lock:
-            if not self._records:
+            if self._records:
+                batch, self._records = self._records, []
+                self._submit(batch)
+            if self._writer is not None and self._writer.is_alive():
+                self._batches.put(None)
+                self._writer.join()
+            self._writer = None
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
+
+    def _submit(self, batch: list[AuditRecord]) -> None:
+        self._ensure_writer()
+        self._batches.put(batch)
+
+    def _ensure_writer(self) -> None:
+        with self._writer_lock:
+            if self._writer is not None and self._writer.is_alive():
                 return
-            records, self._records = self._records, []
-        with self._engine.begin() as connection:
-            connection.execute(insert(AuditLog), [asdict(record) for record in records])
+            self._writer = threading.Thread(
+                target=self._write_loop, name="gitcrawl-audit", daemon=True
+            )
+            self._writer.start()
+
+    def _write_loop(self) -> None:
+        while True:
+            batch = self._batches.get()
+            try:
+                if batch is None:
+                    return
+                try:
+                    with self._engine.begin() as connection:
+                        connection.execute(insert(AuditLog), [asdict(record) for record in batch])
+                except BaseException as exc:
+                    if self._error is None:
+                        self._error = exc
+            finally:
+                self._batches.task_done()
 
 
 _AUDIT_WINDOW_SQL = text("""

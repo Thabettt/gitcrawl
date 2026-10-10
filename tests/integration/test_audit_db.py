@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -122,6 +124,7 @@ def test_audit_buffer_batches_inserts(clean: Engine):
     try:
         for index in range(10):
             buffer.add(_record(index))
+        buffer.flush()
     finally:
         event.remove(clean, "before_cursor_execute", listener)
     assert len(statements) == 1
@@ -145,6 +148,89 @@ def test_audit_buffer_rejects_non_positive_batch_size(clean: Engine):
 
     with pytest.raises(ValueError):
         AuditBuffer(clean, batch_size=0)
+
+
+class _BlockingEngine:
+    def __init__(self, engine: Engine, started: threading.Event, release: threading.Event) -> None:
+        self._engine = engine
+        self.started = started
+        self.release = release
+
+    def begin(self):
+        self.started.set()
+        if not self.release.wait(timeout=5.0):
+            raise TimeoutError("the test never released the blocked insert")
+        return self._engine.begin()
+
+
+class _FailingEngine:
+    def begin(self):
+        raise RuntimeError("audit sink down")
+
+
+def test_audit_buffer_add_returns_while_the_insert_is_blocked(clean: Engine):
+    from lib.audit import AuditBuffer
+
+    started = threading.Event()
+    release = threading.Event()
+    buffer = AuditBuffer(_BlockingEngine(clean, started, release), batch_size=1)
+
+    buffer.add(_record(0))  # must return without waiting for the INSERT
+
+    assert started.wait(timeout=5.0)
+    release.set()
+    buffer.flush()
+    assert _audit_count(clean) == 1
+
+
+def test_audit_buffer_flush_waits_for_the_blocked_insert(clean: Engine):
+    from lib.audit import AuditBuffer
+
+    started = threading.Event()
+    release = threading.Event()
+    buffer = AuditBuffer(_BlockingEngine(clean, started, release), batch_size=10)
+    for index in range(3):
+        buffer.add(_record(index))
+
+    flushed = threading.Event()
+
+    def run_flush() -> None:
+        buffer.flush()
+        flushed.set()
+
+    flusher = threading.Thread(target=run_flush)
+    flusher.start()
+    assert started.wait(timeout=5.0)
+    assert not flushed.is_set()  # flush is a barrier: it is still waiting on the INSERT
+
+    release.set()
+    flusher.join(timeout=5.0)
+    assert flushed.is_set()
+    assert _audit_count(clean) == 3
+
+
+def test_audit_buffer_flush_raises_the_write_failure():
+    from lib.audit import AuditBuffer
+
+    buffer = AuditBuffer(_FailingEngine(), batch_size=10)
+    buffer.add(_record(0))
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        buffer.flush()
+
+
+def test_audit_buffer_add_raises_a_stored_write_failure():
+    from lib.audit import AuditBuffer
+
+    buffer = AuditBuffer(_FailingEngine(), batch_size=1)
+    buffer.add(_record(0))
+    deadline = time.monotonic() + 5.0
+    while buffer._error is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        buffer.add(_record(1))
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        buffer.flush()
 
 
 def test_slo_snapshot_empty_tables_returns_all_none(clean: Engine):
