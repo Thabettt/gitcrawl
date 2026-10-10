@@ -1,4 +1,4 @@
-# Transport and pipeline efficiency measurements (measured 2026-10-09)
+# Transport and pipeline efficiency measurements (measured 2026-10-10)
 
 Verification of the transport/pipeline efficiency work on branch `perf/runtime-adaptive-control`
 (HEAD `b721719` at measurement time). No source changes in this task: the focused deterministic
@@ -60,9 +60,9 @@ claimed here.
 
 ## 5. Residual risks
 
-- **Async audit writes persist at `flush()`.** A process kill loses at most the queued batches
-  plus the partial in-memory batch — the same bound as today's unwritten buffer; nothing that
-  `flush()` acknowledged is lost.
+- **Async audit writes persist at `flush()`.** A process kill loses at most the four queued batches
+  plus the partial in-memory batch — roughly 500 records at the default batch size of 100 — a
+  small, bounded loss; nothing that `flush()` acknowledged is lost.
 - **Window-level dedupe accounting.** Repeated ids within one flush window are deduped before the
   upsert, so per-batch upsert counters reflect unique ids rather than raw page items; the database
   end state is identical.
