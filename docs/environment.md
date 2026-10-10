@@ -129,7 +129,7 @@ Unregister-ScheduledTask -TaskName gitcrawl-redis -Confirm:$false
 | `TEST_DATABASE_URL` | `postgresql+psycopg://gitcrawl:<pw>@localhost:5433/gitcrawl_test` | DB integration tests (destructive-safe) |
 | `REDIS_URL` | `redis://localhost:6379/0` | limiter buckets at runtime |
 | `GITHUB_TOKEN` | OAuth token from the authenticated `gh` CLI keyring | live GitHub calls (fingerprint-only logging) |
-| `GITCRAWL_ADAPTIVE` | `1` enables the adaptive rate controller (default off) | hydration batching (`limiter/adaptive`) |
+| `GITCRAWL_ADAPTIVE` | `1` force-enables the adaptive rate controller (normally toggled on `/settings`; default off) | hydration batching (`limiter/adaptive`) |
 
 **Set/update pattern** (no secret echoed):
 
@@ -237,15 +237,16 @@ shows it read-only):
 | Request deadline (s) | `GITCRAWL_REQUEST_DEADLINE_SECONDS` | 3600 | 86400 |
 | GraphQL batching | `GITCRAWL_GRAPHQL_BATCH` | on | on |
 | Batch size | `GITCRAWL_GRAPHQL_BATCH_SIZE` | 29 | 29 |
+| Adaptive pacing | `GITCRAWL_ADAPTIVE` | off | off |
 | Concurrency | `GITCRAWL_MAX_CONCURRENT` | 10 | 32 |
 | Discovery workers | `GITCRAWL_DISCOVERY_CONCURRENCY` | 32 | 32 |
 
 These are the values the **Set to corpus-build limits** button applies; the ranges shown on the page are safety limits, and the preset sits well inside them. The derivation (and the multi-token scale-up) lives in `design/run-limits.md`.
 
 - `GITCRAWL_GRAPHQL_BATCH_SIZE` env overrides are clamped to 1..50 at settings load (a value above the API cap clamps to 50 instead of failing every run); the default stays 29 (the largest batch that still costs one GraphQL point).
-- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 32)` as the GraphQL batch concurrency. The corpus preset is 32, raised from the profiled 10 (which ran ~2,800 repos/min live against ~300–400 sequential); the per-run point cost is unchanged, so watch for secondary-limit 403s — the classifier backoff already handles them. The 32-worker ceiling is static for now (Theme 3 will make the submission window dynamic inside that ceiling).
+- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 32)` as the GraphQL batch concurrency. The corpus preset is 32, raised from the profiled 10 (which ran ~2,800 repos/min live against ~300–400 sequential); the per-run point cost is unchanged, so watch for secondary-limit 403s — the classifier backoff already handles them. The 32-worker ceiling stays static; the adaptive toggle below makes the submission window dynamic inside it.
 - `GITCRAWL_DISCOVERY_CONCURRENCY` is the discovery pool size: each run plans shards with batched GraphQL count probes, then fetches pages with one GraphQL search connection per worker. Default and corpus value 32 — the measured operating point (`design/corpus-building-efficient-engineering.md` §9.4).
-- `GITCRAWL_ADAPTIVE=1` turns on the three-loop adaptive controller for hydration: the AIMD window starts at 20 (bounds 8-48), the batch guard starts at the configured batch size capped at 29 (bounds 10-29), the quota pacer paces to `(remaining - 400) / seconds-to-reset` with a burst of 4, and any 403/429/502/504/rate-limit signal pauses the pool. It emits `field_stats.graphql.hydration.adaptive` and `.deferred`; keep it off until a soak run validates it.
+- **Adaptive pacing** is the normal switch for the three-loop adaptive controller, a checkbox on the `/settings` page (System → Limits → Request pacing), default **off**; the corpus preset also sets it off. When a run starts with it on, the AIMD window starts at 20 (bounds 8-48), the batch guard starts at the configured batch size capped at 29 (bounds 10-29), the quota pacer paces to `(remaining - 400) / seconds-to-reset` with a burst of 4, and any 403/429/502/504/rate-limit signal pauses the pool. It emits `field_stats.graphql.hydration.adaptive` and `.deferred`. `GITCRAWL_ADAPTIVE=1` still force-enables it as an ops override (and pins the checkbox read-only, like the other env-pinned fields); the default stays off per the 2026-10-09 soak evidence (`docs/findings/2026-10-09-adaptive-soak.md`).
 
 A corpus run occupies the single executor for its whole duration; within it, discovery fetches
 pages from the 32-worker pool before hydration begins. Run it overnight. The run page
@@ -256,7 +257,7 @@ resumable.
 
 ## Migrations
 
-Current head is **`0014`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64), `0013` raises the `graphql_batch_size` check to 1–50, and `0014` adds the three `audit_log` point-telemetry columns (`rl_used`, nullable `run_id`, nullable `phase`) plus the `audit_run_idx` index on `run_id`, and aligns `graphql_batch_size` to the new default 29 (server default plus a one-time `20 → 29` value update). None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
+Current head is **`0015`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64), `0013` raises the `graphql_batch_size` check to 1–50, `0014` adds the three `audit_log` point-telemetry columns (`rl_used`, nullable `run_id`, nullable `phase`) plus the `audit_run_idx` index on `run_id`, and aligns `graphql_batch_size` to the new default 29 (server default plus a one-time `20 → 29` value update), and `0015` adds the `app_settings.adaptive` boolean (default false, no backfill) for the settings-page toggle. None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
 
 ### Migration locking
 

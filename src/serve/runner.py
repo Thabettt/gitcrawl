@@ -74,6 +74,7 @@ class RunnerConfig:
     request_deadline_seconds: float | None = None
     graphql_batch: bool = True
     graphql_batch_size: int = 29
+    adaptive: bool = False
     concurrency: int = 1
     discovery_concurrency: int = 32
 
@@ -87,6 +88,7 @@ def runner_config_from(settings: RunSettings) -> RunnerConfig:
         request_deadline_seconds=float(settings.request_deadline_seconds),
         graphql_batch=settings.graphql_batch,
         graphql_batch_size=settings.graphql_batch_size,
+        adaptive=settings.adaptive,
         concurrency=min(settings.limiter_max_concurrent, HYDRATION_CONCURRENCY_CEILING),
         discovery_concurrency=settings.discovery_concurrency,
     )
@@ -249,7 +251,7 @@ def _hydrate(
     if not candidates:
         return RefreshStats()
     adaptive = None
-    if adaptive_enabled():
+    if cfg.adaptive or adaptive_enabled():
         ceiling = min(MAX_WINDOW, cfg.concurrency)
         if ceiling >= MIN_WINDOW:
             # The controller must share `refresh_repos_batched`'s clock: this call leaves

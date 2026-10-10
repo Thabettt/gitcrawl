@@ -276,6 +276,7 @@ class AppSettings(Base):
     graphql_batch_size: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("29")
     )
+    adaptive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     limiter_max_concurrent: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("10")
     )

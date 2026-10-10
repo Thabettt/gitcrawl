@@ -138,6 +138,7 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "request_deadline_seconds": False,
         "graphql_batch": False,
         "graphql_batch_size": False,
+        "adaptive": False,
         "limiter_max_concurrent": False,
         "discovery_concurrency": False,
         "updated_at": False,
@@ -299,6 +300,7 @@ def test_server_defaults(migrated: Engine):
         ("corpora", "frozen_at"): "now()",
         ("app_settings", "discovery_concurrency"): "32",
         ("app_settings", "graphql_batch_size"): "29",
+        ("app_settings", "adaptive"): "false",
     }
     for (table, column), fragment in expected.items():
         assert fragment in (_columns(migrated, table)[column]["default"] or "")

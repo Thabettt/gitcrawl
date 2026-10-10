@@ -14,6 +14,7 @@ def form(**overrides: str) -> dict[str, str]:
         "request_deadline_seconds": "3600",
         "graphql_batch": "on",
         "graphql_batch_size": "20",
+        "adaptive": "on",
         "limiter_max_concurrent": "10",
         "discovery_concurrency": "32",
     }
@@ -25,12 +26,19 @@ def test_parse_accepts_valid_form():
     parsed = parse_settings_form(form())
     assert parsed["max_hydrate"] == 200
     assert parsed["graphql_batch"] is True
+    assert parsed["adaptive"] is True
 
 
 def test_unchecked_checkbox_is_false():
     values = form()
     values.pop("graphql_batch")
     assert parse_settings_form(values)["graphql_batch"] is False
+
+
+def test_unchecked_adaptive_checkbox_is_false():
+    values = form()
+    values.pop("adaptive")
+    assert parse_settings_form(values)["adaptive"] is False
 
 
 def test_out_of_range_value_is_rejected_with_a_hint():
@@ -82,15 +90,17 @@ def test_corpus_preset_returns_the_coherent_profile():
         "limiter_max_concurrent": 32,
         "discovery_concurrency": 32,
         "graphql_batch": True,
+        "adaptive": False,
     }
 
 
 def test_corpus_preset_respects_pinned_fields():
     parsed = parse_settings_form(
-        {"preset": "corpus"}, pinned=frozenset({"max_shards", "graphql_batch"})
+        {"preset": "corpus"}, pinned=frozenset({"max_shards", "graphql_batch", "adaptive"})
     )
     assert "max_shards" not in parsed
     assert "graphql_batch" not in parsed
+    assert "adaptive" not in parsed
     assert parsed["max_candidates"] == 100_000
 
 
@@ -103,3 +113,4 @@ def test_bounds_text_lists_every_bounded_field():
     assert text["limiter_max_concurrent"] == "1–100"
     assert text["discovery_concurrency"] == "1–64"
     assert "graphql_batch" not in text
+    assert "adaptive" not in text

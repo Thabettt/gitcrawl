@@ -23,6 +23,7 @@ _CORPUS_VALUES: dict[str, object] = {
     "limiter_max_concurrent": 32,
     "discovery_concurrency": 32,
     "graphql_batch": True,
+    "adaptive": False,
 }
 
 
@@ -61,6 +62,8 @@ def parse_settings_form(
         values[field] = parsed
     if "graphql_batch" not in pinned:
         values["graphql_batch"] = form.get("graphql_batch") in {"on", "1", "true"}
+    if "adaptive" not in pinned:
+        values["adaptive"] = form.get("adaptive") in {"on", "1", "true"}
     hydrate = values.get("max_hydrate")
     candidates = values.get("max_candidates")
     if isinstance(hydrate, int) and isinstance(candidates, int) and hydrate > candidates:

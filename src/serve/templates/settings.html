@@ -97,6 +97,15 @@
       <h2>Request pacing</h2>
       <div class="field-grid">
         <label class="field">
+          <span class="field-label">Adaptive request pacing</span>
+          <input class="field-input" type="checkbox" name="adaptive"
+                 {% if values["adaptive"] %}checked{% endif %}
+                 {% if "adaptive" in pinned %}disabled{% endif %}>
+          <span class="muted">Automatically tunes concurrency and batch size to GitHub’s current
+            rate limits. Off = fixed limits.</span>
+          {% if "adaptive" in pinned %}<span class="badge">set by environment</span>{% endif %}
+        </label>
+        <label class="field">
           <span class="field-label">Simultaneous requests</span>
           <input class="field-input" type="number" name="limiter_max_concurrent"
                  value="{{ values["limiter_max_concurrent"] }}"
@@ -123,9 +132,9 @@
       <button class="button" type="submit" name="reset" value="1">Reset to defaults</button>
     </div>
     <p class="muted" id="limits-corpus-note">Set to corpus-build limits picks a coherent overnight
-      profile — 1,000 slices, 100,000 repos per stage, a 24-hour deadline, batching on, 29 repos
-      per call, 32 simultaneous requests — not the largest value of every field; environment-pinned
-      fields are left unchanged. The math behind it lives in <code>design/run-limits.md</code>.</p>
+      profile — 1,000 slices, 100,000 repos per stage, a 24-hour deadline, batching on, adaptive
+      pacing off, 29 repos per call, 32 simultaneous requests — not the largest value of every
+      field; environment-pinned fields are left unchanged. The math behind it lives in <code>design/run-limits.md</code>.</p>
   </form>
 </section>
 {% endblock %}

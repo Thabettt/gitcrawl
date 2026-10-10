@@ -96,6 +96,7 @@ def valid_form(**overrides: str) -> dict[str, str]:
         "request_deadline_seconds": "7200",
         "graphql_batch": "on",
         "graphql_batch_size": "10",
+        "adaptive": "on",
         "limiter_max_concurrent": "4",
         "discovery_concurrency": "32",
     }
@@ -110,6 +111,7 @@ def test_settings_page_renders_current_values(clean, tmp_path, monkeypatch):
     assert "max_hydrate" in response.text
     assert "limiter_max_concurrent" in response.text
     assert "discovery_concurrency" in response.text
+    assert 'name="adaptive"' in response.text
     assert "Discovery workers" in response.text
     assert "Run limits for new searches" in response.text
     assert "Part of System" in response.text
@@ -141,8 +143,25 @@ def test_post_saves_values_and_redirects(clean, tmp_path, monkeypatch):
     saved = load_run_settings(clean)
     assert saved.max_shards == 50
     assert saved.max_hydrate == 4000
+    assert saved.adaptive is True
     assert saved.limiter_max_concurrent == 4
     assert saved.discovery_concurrency == 48
+
+
+def test_unchecked_adaptive_checkbox_saves_false(clean, tmp_path, monkeypatch):
+    update_run_settings(clean, {"adaptive": True})
+    client = healthy_client(clean, tmp_path, monkeypatch)
+    token = csrf_token(client)
+    data = valid_form()
+    data.pop("adaptive")
+    response = client.post(
+        "/settings",
+        data=data,
+        headers={"x-csrf-token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert load_run_settings(clean).adaptive is False
 
 
 def test_pinned_fields_render_read_only_and_are_not_written(clean, tmp_path, monkeypatch):
@@ -307,6 +326,7 @@ def test_set_to_corpus_build_limits_saves_the_profile(clean, tmp_path, monkeypat
         request_deadline_seconds=86_400,
         graphql_batch=True,
         graphql_batch_size=29,
+        adaptive=False,
         limiter_max_concurrent=32,
         discovery_concurrency=32,
     )

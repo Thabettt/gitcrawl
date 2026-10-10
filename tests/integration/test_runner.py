@@ -1537,6 +1537,7 @@ def test_runner_config_from_maps_settings(clean: Engine):
             "max_candidates": 2,
             "max_hydrate": 1,
             "graphql_batch": False,
+            "adaptive": True,
             "discovery_concurrency": 48,
         },
     )
@@ -1545,6 +1546,7 @@ def test_runner_config_from_maps_settings(clean: Engine):
     assert config.max_candidates == 2
     assert config.max_hydrate == 1
     assert config.graphql_batch is False
+    assert config.adaptive is True
     assert config.discovery_concurrency == 48
 
 
@@ -1669,6 +1671,42 @@ def test_run_filter_adaptive_flag_reports_controller_state(clean: Engine, monkey
         spec_for(q="language:python"),
         config=RunnerConfig(concurrency=32),  # the hydration envelope must exceed MIN_WINDOW
     )
+    adaptive = payload.field_stats["graphql"]["hydration"]["adaptive"]
+    assert adaptive["window"] == 20
+    assert adaptive["batch"] == 29
+    assert adaptive["drops"] == 0
+    assert adaptive["deferred"] == 0
+
+
+def test_run_filter_settings_adaptive_reports_controller_state(clean: Engine, monkeypatch):
+    monkeypatch.delenv("GITCRAWL_ADAPTIVE", raising=False)
+    from serve.runner import runner_config_from
+    from store.settings import load_run_settings, update_run_settings
+
+    update_run_settings(clean, {"adaptive": True, "limiter_max_concurrent": 32})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 1)
+            return page_response([repo_item(1)])
+        if path == "/graphql":
+            body = graphql_batch_response(request, {"owner1/repo1": repo_item(1)})
+            return httpx.Response(
+                200,
+                json=json.loads(body.content),
+                headers={
+                    "x-ratelimit-remaining": "4999",
+                    "x-ratelimit-reset": str(int(time.time()) + 600),
+                },
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    client, _requests = scripted(handler)
+    config = runner_config_from(load_run_settings(clean))
+    assert config.adaptive is True
+    payload = run_filter(make_deps(clean, client), spec_for(q="language:python"), config=config)
     adaptive = payload.field_stats["graphql"]["hydration"]["adaptive"]
     assert adaptive["window"] == 20
     assert adaptive["batch"] == 29

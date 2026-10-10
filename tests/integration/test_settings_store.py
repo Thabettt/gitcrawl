@@ -27,6 +27,21 @@ def test_update_persists_and_returns_effective_settings(clean):
     assert load_run_settings(clean) == updated
 
 
+def test_update_persists_adaptive_and_reverts(clean):
+    updated = update_run_settings(clean, {"adaptive": True})
+    assert updated.adaptive is True
+    assert load_run_settings(clean) == updated
+    reverted = update_run_settings(clean, {"adaptive": False})
+    assert reverted.adaptive is False
+    assert load_run_settings(clean) == reverted
+
+
+def test_env_adaptive_force_enables(clean, monkeypatch):
+    assert load_run_settings(clean).adaptive is False
+    monkeypatch.setenv("GITCRAWL_ADAPTIVE", "1")
+    assert load_run_settings(clean).adaptive is True
+
+
 def test_env_overrides_the_row(clean, monkeypatch):
     update_run_settings(clean, {"max_shards": 25})
     monkeypatch.setenv("GITCRAWL_MAX_SHARDS", "3")

@@ -19,11 +19,12 @@ SETTINGS_ENV: Mapping[str, str] = {
     "request_deadline_seconds": "GITCRAWL_REQUEST_DEADLINE_SECONDS",
     "graphql_batch": "GITCRAWL_GRAPHQL_BATCH",
     "graphql_batch_size": "GITCRAWL_GRAPHQL_BATCH_SIZE",
+    "adaptive": "GITCRAWL_ADAPTIVE",
     "limiter_max_concurrent": "GITCRAWL_MAX_CONCURRENT",
     "discovery_concurrency": "GITCRAWL_DISCOVERY_CONCURRENCY",
 }
 
-_BOOL_FIELDS = frozenset({"graphql_batch"})
+_BOOL_FIELDS = frozenset({"graphql_batch", "adaptive"})
 _DISCOVERY_CONCURRENCY_MAX = 64
 
 
@@ -36,6 +37,7 @@ class RunSettings:
     request_deadline_seconds: int = 3600
     graphql_batch: bool = True
     graphql_batch_size: int = 29
+    adaptive: bool = False
     limiter_max_concurrent: int = 10
     discovery_concurrency: int = 32
 
