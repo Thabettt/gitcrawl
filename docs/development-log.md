@@ -2,7 +2,7 @@
 
 **Purpose**: durable, committed record of what has been done, decided, and is next — so nothing is lost when a session, tool, or the temporary SDD workspace disappears. Environment details live in `environment.md`.
 
-**Updated**: 2026-10-08 (GraphQL two-phase discovery engine) · **Branch**: `graphql-discovery` · **HEAD**: `61121c2`
+**Updated**: 2026-10-09 (quota utilization and limiter correctness) · **Branch**: `perf/runtime-adaptive-control` · **HEAD**: `439b35c`
 
 ## Objective (frozen 2026-09-30)
 
@@ -372,3 +372,19 @@ node --test tests/js/rownav.test.mjs tests/js/applib.test.mjs
 - The §9.4 "measured, not built" caveat is resolved: the engine is built and live-validated (Task 9: default build path, 109.3 s, 39,007 ids, 0/192 incomplete; `docs/findings/2026-10-08-hydration-profile.md`).
 
 **Verification:** full suite `1425 passed, 1 warning` at the Task 7 head; `ruff check src tests`, `black --check src tests`, and bare `mypy` clean. This entry lands with `docs: sync discovery docs with the graphql engine`.
+
+## Quota utilization and limiter correctness (2026-10-09)
+
+**Scope:** nine commits on `perf/runtime-adaptive-control` (base `e120283`): `5444e32` (batch default 29, migration `0014`), `7bbc923` (`rateLimit` cost/used/remaining into `BatchStats`), `1d91f20` (batched-request expectations), `b03dcbd` (`AuditRecord` `rl_used`/`run_id`/`phase` + `PointsLedger`), `0539373` (run/phase audit attribution + `field_stats["points"]`), `f633ce0` (hydration ceiling 32, corpus preset 32), `78c1f7e` (limiter window re-anchor + header limit), `4435932` (403 message preservation + 200-body pause), `439b35c` (deny-loop retry expectations). Plan: `docs/superpowers/plans/2026-10-09-quota-limiter-utilization.md`.
+
+**What shipped**
+
+- `graphql_batch_size` default 29 (the largest batch that still costs one GraphQL point) across `store.settings`, `settings_spec`, and `RunnerConfig`; migration `0014` aligns the `app_settings` server default and rewrites the stored `20` to `29` (downgrade restores `20`).
+- Migration `0014` also adds the `audit_log` point-telemetry columns (`rl_used`, nullable `run_id`, nullable `phase`) plus the `audit_run_idx` index on `run_id`.
+- Hydration queries request `rateLimit { cost used remaining }`; `BatchStats` carries `points_cost`/`points_used`/`points_remaining` and the runner persists a per-phase `PointsLedger` under `field_stats["points"]` (`{phase: {points, responses}}`).
+- `run_id`/`phase` are threaded from the runner and discovery pipeline into audit rows (`"count"`, `"discovery"`, `"hydration"`, `"enrich"`). Audit rows from legacy callers that pass no `run_id` now persist `phase="count"`/`"discovery"` (the call-site defaults) instead of `NULL` — a deferred-minor note from the telemetry wiring.
+- Hydration concurrency ceiling is the named `HYDRATION_CONCURRENCY_CEILING = 32`; each run snapshots `min(limiter_max_concurrent, 32)` and the corpus preset supplies 32 (was a hard 20). The static `min()` is the Theme 3 seam: the adaptive controller builds the pool at the ceiling and gates submissions with a live window.
+- The limiter's fixed window is anchored to a stored `window_end` taken from `x-ratelimit-reset` (first use: `now + window_seconds`) instead of `floor(now / window)`, reconcile uses the response's `x-ratelimit-limit` when present, and the in-window count ratchet is preserved.
+- Final 403/429 responses keep GitHub's message (`short_message`) into `BatchOutcome.unresolved`; a 200 body carrying rate-limit markers now pauses the bucket (reusing the classifier's header parser) instead of hot-requeueing.
+
+**Verification:** full suite `1514 passed, 1 warning` at this head (total coverage `94.86%`, gate `fail_under = 93`); `ruff check src tests`, `black --check src tests`, and bare `mypy` clean. This entry lands with `docs: sync quota utilization and limiter correctness changes`.

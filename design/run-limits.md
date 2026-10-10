@@ -8,7 +8,7 @@
 
 ## The one-paragraph version
 
-A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,000/hr, GraphQL 5,000 points/hr per token), GitHub's anti-abuse ceilings (100 concurrent requests shared across REST and GraphQL; 900/2,000 points per minute), and the wall-clock deadline. The Limits page controls how much of those budgets one run may spend. The right values are not "as high as possible" — they are a coherent operating point where discovery, saving, and checking all fit inside the deadline with headroom. The defaults are the interactive point (minutes, laptop-friendly). The old "maximum" preset was replaced with a **corpus-build** preset: 1,000 slices, 100,000 repos at each stage, 24-hour deadline, batching on, 10 concurrent, 32 discovery workers — about three hours of real budget on one token, so it finishes rather than aborting incomplete.
+A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,000/hr, GraphQL 5,000 points/hr per token), GitHub's anti-abuse ceilings (100 concurrent requests shared across REST and GraphQL; 900/2,000 points per minute), and the wall-clock deadline. The Limits page controls how much of those budgets one run may spend. The right values are not "as high as possible" — they are a coherent operating point where discovery, saving, and checking all fit inside the deadline with headroom. The defaults are the interactive point (minutes, laptop-friendly). The old "maximum" preset was replaced with a **corpus-build** preset: 1,000 slices, 100,000 repos at each stage, 24-hour deadline, batching on, 32 concurrent, 32 discovery workers — about three hours of real budget on one token, so it finishes rather than aborting incomplete.
 
 ---
 
@@ -22,7 +22,7 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 | `max_enrich` | Extra rules to check | 100 | 1–1,000,000 | Budget for file/country checks on hydrated repos |
 | `request_deadline_seconds` | Stop a search after (seconds) | 3,600 | 60–86,400 | Wall-clock cap; past it the run stops gracefully (partial), marked incomplete and resumable |
 | `graphql_batch` | Batch repo lookups | on | on/off | Whether GraphQL batching is used (off = one REST call per repo) |
-| `graphql_batch_size` | Repos per batch | 20 | 1–50 | Aliases per GraphQL query; larger batches mean fewer requests but more timeout risk |
+| `graphql_batch_size` | Repos per batch | 29 | 1–50 | Aliases per GraphQL query; larger batches mean fewer requests but more timeout risk |
 | `limiter_max_concurrent` | Simultaneous requests | 10 | 1–100 | In-flight requests per endpoint/token |
 | `discovery_concurrency` | Discovery workers | 32 | 1–64 | Discovery pages fetched in parallel (one GraphQL connection each) |
 
@@ -30,9 +30,9 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 
 ## 2. What backs them today (the honest audit)
 
-- **Defaults (10 / 500 / 200 / 100 / 3,600 / on / 20 / 10 / 32)** — inherited, not derived. The settings plan states it explicitly: "defaults equal today's values, so nothing changes until an operator edits." They are sensible interactive values (a run measured in minutes), but no document derived them from the meters. They survive this audit: keep them.
-- **`graphql_batch_size` 1–50** — backed. GitHub's GraphQL resource caps punish large `first` + nesting; the batch engine's own design says 20–50, and the default stays 20. The bound matches the implementation (`MAX_BATCH_SIZE=50`) and the DB check constraint. Env overrides are clamped to the bound at settings load: an override above 50 clamps down to 50, and a non-positive value falls back to the default.
-- **`limiter_max_concurrent` 1–100** — backed, but read it carefully: 100 is GitHub's *documented hard ceiling*, shared across REST and GraphQL. It is not a target. The page's own help text says so. The operational value is ~10 per endpoint per token (900 points/min ÷ ~700 ms p50). Keep the bound at 100 (platform truth); never preset it to 100. Hydration itself runs at `min(limiter_max_concurrent, 20)` workers, so raising the setting past 20 does not raise hydration parallelism.
+- **Defaults (10 / 500 / 200 / 100 / 3,600 / on / 29 / 10 / 32)** — inherited, not derived. The settings plan states it explicitly: "defaults equal today's values, so nothing changes until an operator edits." They are sensible interactive values (a run measured in minutes), but no document derived them from the meters. They survive this audit: keep them.
+- **`graphql_batch_size` 1–50** — backed. GitHub's GraphQL resource caps punish large `first` + nesting; the batch engine's own design says 20–50, and the default is 29 (the largest batch that still costs one GraphQL point). The bound matches the implementation (`MAX_BATCH_SIZE=50`) and the DB check constraint. Env overrides are clamped to the bound at settings load: an override above 50 clamps down to 50, and a non-positive value falls back to the default.
+- **`limiter_max_concurrent` 1–100** — backed, but read it carefully: 100 is GitHub's *documented hard ceiling*, shared across REST and GraphQL. It is not a target. The page's own help text says so. The operational value is ~10 per endpoint per token (900 points/min ÷ ~700 ms p50). Keep the bound at 100 (platform truth); never preset it to 100. Hydration itself runs at `min(limiter_max_concurrent, 32)` workers (the hydration concurrency ceiling), so raising the setting past 32 does not raise hydration parallelism.
 - **`discovery_concurrency` 1–64** — backed by the 2026-10-08 measurement: GraphQL discovery rides the points meter with one page per connection, and 32 pages in flight was the measured operating point (`corpus-building-efficient-engineering.md` §9.4) — comfortably under GitHub's 100-concurrent ceiling.
 - **`request_deadline_seconds` 60–86,400** — a product choice: 24 hours is the longest a single run may take. Fine.
 - **`max_shards` 1–10,000 and the three count limits 1–1,000,000** — round safety ceilings. Not wrong as guardrails, but they are not "proper limits": they ignore the rate budget entirely. The proper operating values are derived below.
@@ -45,14 +45,14 @@ All numbers verified 2026-10-04 (see Sources). Per token:
 |---|---|---|
 | Search | 30/min = 1,800/hr | Not used by the shipped paths — discovery is GraphQL, and `since`/org enumeration run on core |
 | Core (REST) | 5,000/hr | One hydrated repo per call (fallbacks, trees, contents) |
-| GraphQL | 5,000 points/hr | Discovery (20 count probes per query = 1 point; one search connection per page) and hydration batches (≤20 repos ≈ 1 point) |
+| GraphQL | 5,000 points/hr | Discovery (20 count probes per query = 1 point; one search connection per page) and hydration batches (≤29 repos ≈ 1 point) |
 | Secondary | 100 concurrent (REST+GraphQL shared); 900 pts/min REST; 2,000 pts/min GraphQL | Pacing ceiling — stay far below |
 
 Time estimates for a run of `C` candidates, `S` shards, batch size `B`:
 
 - **Discovery** ≈ `(plan probes + pages) / throughput` on the GraphQL points meter with `discovery_concurrency` workers (32 by default). Count probes batch 20 per query at 1 point per query; each page is one search connection. Measured 2026-10-08: 8.9 s to plan + 59.0 s to fetch 418 pages / 38,969 repos (`corpus-building-efficient-engineering.md` §9.4). For history, the old REST path cost `(S + C/100) / 30` minutes — a count query per shard, one page per 100 repos, planning bisection extra — but that arithmetic is no longer the shipped engine.
-- **Hydration** ≈ `C / (20 × 1)` GraphQL points ≈ `C/20 / 5,000` hours with batching; ≈ `C / 5,000` hours without.
-- **Enrichment** ≈ per check: one batched query per `B` repos (≈1 point per 20 repos per check type), or one core call per repo without batching.
+- **Hydration** ≈ `C / (29 × 1)` GraphQL points ≈ `C/29 / 5,000` hours with batching; ≈ `C / 5,000` hours without.
+- **Enrichment** ≈ per check: one batched query per `B` repos (≈1 point per 29 repos per check type), or one core call per repo without batching.
 - **Wall clock** = discovery + hydration + enrichment + overhead, and must be < `request_deadline_seconds`, or the run stops partial (incomplete, resumable).
 
 **Coherence rules** (a run that violates one of these will finish incomplete, waste calls, or both):
@@ -83,9 +83,9 @@ With batching off, the same run would need ~20 h of core for hydration alone and
 
 | Preset | shards | candidates | hydrate | enrich | deadline | batch | size | concurrent | discovery | Use when |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **Interactive (default)** | 10 | 500 | 200 | 100 | 3,600 | on | 20 | 10 | 32 | Exploring a filter; results in minutes |
-| **Corpus build (the button)** | 1,000 | 100,000 | 100,000 | 100,000 | 86,400 | on | 20 | 10 | 32 | A real corpus on one token, overnight (~3 h of budget) |
-| **Multi-token scale-up (documented, no button)** | 10,000 | 1,000,000 | 1,000,000 | 1,000,000 | 86,400 | on | 20 | 10/token | 32 | Only with 5–10 tokens; single-token 1M runs exceed the deadline and abort incomplete |
+| **Interactive (default)** | 10 | 500 | 200 | 100 | 3,600 | on | 29 | 10 | 32 | Exploring a filter; results in minutes |
+| **Corpus build (the button)** | 1,000 | 100,000 | 100,000 | 100,000 | 86,400 | on | 29 | 32 | 32 | A real corpus on one token, overnight (~3 h of budget) |
+| **Multi-token scale-up (documented, no button)** | 10,000 | 1,000,000 | 1,000,000 | 1,000,000 | 86,400 | on | 29 | 10/token | 32 | Only with 5–10 tokens; single-token 1M runs exceed the deadline and abort incomplete |
 
 The **corpus-build preset replaced the old "maximum" preset** (which set every field to its upper bound: 10,000 shards, 1M everywhere, 100 concurrent). That preset was internally contradictory — it set the concurrency to the ceiling the page warns against, spent hours on shard planning that the candidate cap then threw away, and produced a run that could not finish inside its own deadline on one token.
 

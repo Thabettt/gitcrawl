@@ -235,14 +235,14 @@ shows it read-only):
 | Enrichment checks | `GITCRAWL_MAX_ENRICH` | 100 | 100000 |
 | Request deadline (s) | `GITCRAWL_REQUEST_DEADLINE_SECONDS` | 3600 | 86400 |
 | GraphQL batching | `GITCRAWL_GRAPHQL_BATCH` | on | on |
-| Batch size | `GITCRAWL_GRAPHQL_BATCH_SIZE` | 20 | 20 |
-| Concurrency | `GITCRAWL_MAX_CONCURRENT` | 10 | 10 |
+| Batch size | `GITCRAWL_GRAPHQL_BATCH_SIZE` | 29 | 29 |
+| Concurrency | `GITCRAWL_MAX_CONCURRENT` | 10 | 32 |
 | Discovery workers | `GITCRAWL_DISCOVERY_CONCURRENCY` | 32 | 32 |
 
 These are the values the **Set to corpus-build limits** button applies; the ranges shown on the page are safety limits, and the preset sits well inside them. The derivation (and the multi-token scale-up) lives in `design/run-limits.md`.
 
-- `GITCRAWL_GRAPHQL_BATCH_SIZE` env overrides are clamped to 1..50 at settings load (a value above the API cap clamps to 50 instead of failing every run); the default stays 20.
-- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 20)` as the GraphQL batch concurrency. The corpus preset is 20, raised from the profiled 10 (which ran ~2,800 repos/min live against ~300–400 sequential); the per-run point cost is unchanged, so watch for secondary-limit 403s — the classifier backoff already handles them.
+- `GITCRAWL_GRAPHQL_BATCH_SIZE` env overrides are clamped to 1..50 at settings load (a value above the API cap clamps to 50 instead of failing every run); the default stays 29 (the largest batch that still costs one GraphQL point).
+- `GITCRAWL_MAX_CONCURRENT` is the limiter's cap **and** the hydration driver: each new run snapshots `min(limiter_max_concurrent, 32)` as the GraphQL batch concurrency. The corpus preset is 32, raised from the profiled 10 (which ran ~2,800 repos/min live against ~300–400 sequential); the per-run point cost is unchanged, so watch for secondary-limit 403s — the classifier backoff already handles them. The 32-worker ceiling is static for now (Theme 3 will make the submission window dynamic inside that ceiling).
 - `GITCRAWL_DISCOVERY_CONCURRENCY` is the discovery pool size: each run plans shards with batched GraphQL count probes, then fetches pages with one GraphQL search connection per worker. Default and corpus value 32 — the measured operating point (`design/corpus-building-efficient-engineering.md` §9.4).
 
 A corpus run occupies the single executor for its whole duration; within it, discovery fetches
@@ -254,7 +254,7 @@ resumable.
 
 ## Migrations
 
-Current head is **`0013`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64), and `0013` raises the `graphql_batch_size` check to 1–50 (default 20). None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
+Current head is **`0014`**: `0010` adds the nullable `runs.progress_*` live-progress columns, `0011` adds `progress_started_at` for the phase-relative ETA clock, `0012` adds `app_settings.discovery_concurrency` (default 32, checked 1–64), `0013` raises the `graphql_batch_size` check to 1–50, and `0014` adds the three `audit_log` point-telemetry columns (`rl_used`, nullable `run_id`, nullable `phase`) plus the `audit_run_idx` index on `run_id`, and aligns `graphql_batch_size` to the new default 29 (server default plus a one-time `20 → 29` value update). None of these rewrite a large table — the checks touch only the single-row `app_settings` — so the locking guidance below applies only to 0005–0007. Apply with `alembic upgrade head` from the repo root with `DATABASE_URL` set.
 
 ### Migration locking
 
