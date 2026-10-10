@@ -33,6 +33,37 @@ def test_bot_type_uses_user_query():
     assert 'n0: user(login: "dependabot[bot]") { location }' in query
 
 
+def test_build_query_requests_rate_limit_telemetry():
+    adapter = OwnerLocationAdapter({"alice": "User"})
+    query = adapter.build_query({"n0": "alice"})
+    assert "rateLimit { cost used remaining }" in query
+
+
+def test_parse_reads_the_rate_limit_block():
+    from lib.graphql_batch import RateLimitInfo
+
+    adapter = OwnerLocationAdapter({"alice": "User"})
+    payload = {
+        "data": {
+            "n0": {"location": "Berlin"},
+            "rateLimit": {"cost": 1, "used": 412, "remaining": 4588},
+        }
+    }
+    parsed = adapter.parse(payload, {"n0": "alice"})
+    assert parsed.values == {"alice": "Berlin"}
+    assert parsed.rate_limit == RateLimitInfo(cost=1, used=412, remaining=4588)
+
+
+def test_parse_reads_rate_limit_when_node_data_is_missing():
+    from lib.graphql_batch import RateLimitInfo
+
+    adapter = OwnerLocationAdapter({"ghost": "User"})
+    payload = {"data": {"rateLimit": {"cost": 1, "used": 412, "remaining": 4588}}}
+    parsed = adapter.parse(payload, {"n0": "ghost"})
+    assert parsed.values == {}
+    assert parsed.rate_limit == RateLimitInfo(cost=1, used=412, remaining=4588)
+
+
 def test_end_to_end_with_batch_core():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": {"n0": {"location": "Lagos"}}})

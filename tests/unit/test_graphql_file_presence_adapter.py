@@ -34,6 +34,37 @@ def test_null_repository_is_missing_not_false():
     assert parsed.failures == {}
 
 
+def test_build_query_requests_rate_limit_telemetry():
+    adapter = FilePresenceAdapter("Dockerfile", {"1": "octo/one"})
+    query = adapter.build_query({"n0": "1"})
+    assert "rateLimit { cost used remaining }" in query
+
+
+def test_parse_reads_the_rate_limit_block():
+    from lib.graphql_batch import RateLimitInfo
+
+    adapter = FilePresenceAdapter("Dockerfile", {"1": "octo/one"})
+    payload = {
+        "data": {
+            "n0": {"object": {"__typename": "Blob"}},
+            "rateLimit": {"cost": 1, "used": 412, "remaining": 4588},
+        }
+    }
+    parsed = adapter.parse(payload, {"n0": "1"})
+    assert parsed.values == {"1": True}
+    assert parsed.rate_limit == RateLimitInfo(cost=1, used=412, remaining=4588)
+
+
+def test_parse_reads_rate_limit_when_node_data_is_missing():
+    from lib.graphql_batch import RateLimitInfo
+
+    adapter = FilePresenceAdapter("Dockerfile", {"1": "octo/one"})
+    payload = {"data": {"rateLimit": {"cost": 1, "used": 412, "remaining": 4588}}}
+    parsed = adapter.parse(payload, {"n0": "1"})
+    assert parsed.values == {}
+    assert parsed.rate_limit == RateLimitInfo(cost=1, used=412, remaining=4588)
+
+
 def test_end_to_end_with_batch_core():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": {"n0": {"object": {"__typename": "Blob"}}}})
