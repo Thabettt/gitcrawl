@@ -117,10 +117,30 @@ def test_batched_hydration_saves_every_repo_in_one_request(clean_db):
     assert stats.refreshed == 25
     assert stats.unresolved == {}
     assert stats.commit_counts == {str(repo_id): repo_id * 10 for repo_id in range(1, 26)}
-    assert seen == ["/graphql", "/graphql"]  # 20 + 5
+    assert seen == ["/graphql"]  # 25 < 29: one request
     with engine.connect() as connection:
         count = connection.scalar(text("SELECT count(*) FROM repos WHERE stargazers IS NOT NULL"))
     assert count == 25
+
+
+def test_batched_hydration_splits_above_the_batch_size(clean_db):
+    engine = clean_db()
+    seed_repos(engine, 58)
+    seen: list[str] = []
+    chunk_sizes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        chunk_sizes.append(len(ALIAS_RE.findall(json.loads(request.content)["query"])))
+        return graphql_handler(seen)(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    stats = refresh_repos_batched(engine, client, rows_for(58))
+    assert stats.refreshed == 58
+    assert seen == ["/graphql", "/graphql"]  # 29 + 29
+    assert chunk_sizes == [29, 29]
+    with engine.connect() as connection:
+        count = connection.scalar(text("SELECT count(*) FROM repos WHERE stargazers IS NOT NULL"))
+    assert count == 58
 
 
 def test_batched_hydration_counts_renames(clean_db):
