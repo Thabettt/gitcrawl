@@ -28,6 +28,8 @@ A run's size is bounded by three things: GitHub's meters (search 30/min, core 5,
 
 **Two numbers, two jobs.** The *Allowed* column is a fence — the most the field will accept, there to stop typos and keep a run sane. The *Default* column is where the app starts. Neither is a recommendation for a big run; the presets in §5 are. The old "maximum" preset confused the three by pushing every field to its fence at once.
 
+**Operating note (2026-10-11).** For a full-corpus run the *settled* values are batch **20** and concurrency **17–20** — the defaults above are the interactive point and the bounds are guardrails. The evidence (two consecutive zero-403 record runs) is in §4's measured update.
+
 ## 2. What backs them today (the honest audit)
 
 - **Defaults (10 / 500 / 200 / 100 / 3,600 / on / 29 / 10 / 32)** — inherited, not derived. The settings plan states it explicitly: "defaults equal today's values, so nothing changes until an operator edits." They are sensible interactive values (a run measured in minutes), but no document derived them from the meters. They survive this audit: keep them.
@@ -60,7 +62,7 @@ Time estimates for a run of `C` candidates, `S` shards, batch size `B`:
 1. `max_hydrate ≤ max_candidates` — already enforced by the form.
 2. `max_candidates ≲ max_shards × max_pages × 100`. The filter-spec's `max_pages` (1–10) caps each shard's fetch. With the default `max_pages=3`, 10 shards can discover at most ~3,000 repos; raising `max_candidates` without raising `max_shards` just shows an incomplete-run warning.
 3. Large hydration/enrichment requires batching on. With batching off, the core meter buys 5,000 repos/hour — a 24-hour deadline caps you near ~120,000 saved repos, and 1M is physically impossible.
-4. `limiter_max_concurrent` ≈ 10 per token. The rate meters bind long before the concurrency ceiling; higher concurrency just queues against the limiter. **Empirical update (2026-10-10):** batched hydration at 32 concurrent tripped GitHub's secondary limit within seconds of starting (159× 403, `retry-after: 60`); 20 is the proven-clean point, and 16 is the margin setting after a secondary-limit storm.
+4. `limiter_max_concurrent` ≈ 10 per token. The rate meters bind long before the concurrency ceiling; higher concurrency just queues against the limiter. **Empirical update (2026-10-10):** batched hydration at 32 concurrent tripped GitHub's secondary limit within seconds of starting (159× 403, `retry-after: 60`); 20 is the proven-clean point, and 16 is the margin setting after a secondary-limit storm. **Settled (2026-10-11):** batch 20 at concurrency 17 delivered two consecutive zero-403 record runs (9m41s, 9m08s).
 5. Set the deadline above the estimate, not equal to it. Headroom absorbs retries and backoffs.
 6. The bounds are guardrails, not goals. The preset exists to pick a coherent point, not the maximum of every field.
 
@@ -79,16 +81,18 @@ With batching off, the same run would need ~20 h of core for hydration alone and
 
 **Measured (2026-10-08, GraphQL discovery engine).** The run-#9 filter's shard-and-fetch (38,969 unique repos) planned in 8.9 s (111 count probes in 9 batched queries → 56 shards) and fetched 418 pages in 59.0 s with `discovery_concurrency=32` — 67.9 s total, 0 retries, ~430–500 GraphQL points (~10% of the hourly budget), REST search untouched. The discovery line in the 100,000-repo estimate above is an extrapolation from that operating point. Full ledger: `corpus-building-efficient-engineering.md` §9.4.
 
-**Measured (2026-10-10): the walls.** Two live 39k-corpus runs after the runtime/adaptive work hit GitHub's secondary limit — the first badly, the second briefly:
+**Measured (2026-10-10 → 10-11): the walls, and the settled point.** Live 39k-corpus runs after the runtime/adaptive work:
 
 | Profile | Run | Outcome |
 |---|---|---|
-| B=20, C=20, static | run 19 (reference) | 39,128 repos in ~602 s; **zero 403s**; 2,916 points |
+| B=20, C=17, static | run 30 (10-11) | 39,485 repos in **9m08s**; zero 403s/timeouts/requeues; ended at 667 points |
+| B=20, C=17, static | run 29 (10-11) | 39,484 in 9m41s; zero 403s; one 25 s GitHub edge spike (9× 499) handled |
+| B=20, C=20, static | run 19 (reference) | 39,128 in ~602 s; **zero 403s**; 2,916 points |
 | B=29, W≤20, adaptive ON | soak | 20.9 min; 2 timeout drops; 0 403s; safe but slow |
 | B=29, C=32, static | run 24 | **159× 403** in hydration; cancelled at 26% |
 | B=25, C=20, adaptive ON | run 25 | 19× 403 absorbed in ~1 min; ~50% done at cancel; controller inert (retry-absorbed 403s never register as drops) |
 
-The lesson is not "batch size" — discovery at 32 was clean in both runs; hydration at 32 was not. The recommended single-token operating point is now **batch 20–25, concurrency 20** (16 after a storm), discovery 32, adaptive off, plus a **30–60+ minute cooldown after any secondary-limit storm** (repeated trips escalate). The full progressive log, including the failed attempts, is `runtime-audit-and-adaptive-control.md` §11.
+The lesson is not "batch size" — discovery at 32 was clean in every run; hydration at 32 was not. The settled single-token operating point is **batch 20, concurrency 17–20** (16 after a storm), discovery 32, adaptive off, plus a **30–60+ minute cooldown after any secondary-limit storm** (repeated trips escalate). Budget: ~2,400 points per 39.5k run at batch 20 → **two runs per hourly window**. The full progressive log, including the failed attempts, is `runtime-audit-and-adaptive-control.md` §11.
 
 ## 5. The presets
 
@@ -98,7 +102,7 @@ The lesson is not "batch size" — discovery at 32 was clean in both runs; hydra
 | **Corpus build (the button)** | 1,000 | 100,000 | 100,000 | 100,000 | 86,400 | on | 29 | 32 | 32 | A real corpus on one token, overnight (~3 h of budget) |
 | **Multi-token scale-up (documented, no button)** | 10,000 | 1,000,000 | 1,000,000 | 1,000,000 | 86,400 | on | 29 | 10/token | 32 | Only with 5–10 tokens; single-token 1M runs exceed the deadline and abort incomplete |
 
-The **corpus-build preset replaced the old "maximum" preset** (which set every field to its upper bound: 10,000 shards, 1M everywhere, 100 concurrent). That preset was internally contradictory — it set the concurrency to the ceiling the page warns against, spent hours on shard planning that the candidate cap then threw away, and produced a run that could not finish inside its own deadline on one token. **Update (2026-10-10):** the corpus row's `32` concurrent is the preset's shipped value; live runs showed 32 trips GitHub's secondary limit within seconds of hydration starting. Load the preset, then set **concurrent to 20** (see the measured update in §4).
+The **corpus-build preset replaced the old "maximum" preset** (which set every field to its upper bound: 10,000 shards, 1M everywhere, 100 concurrent). That preset was internally contradictory — it set the concurrency to the ceiling the page warns against, spent hours on shard planning that the candidate cap then threw away, and produced a run that could not finish inside its own deadline on one token. **Update (2026-10-10):** the corpus row's `32` concurrent is the preset's shipped value; live runs showed 32 trips GitHub's secondary limit within seconds of hydration starting. Load the preset, then set **concurrent to 20** (see the measured update in §4). Runs 29–30 then ran clean at concurrency 17.
 
 ## 6. What changed, and what did not
 

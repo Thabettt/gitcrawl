@@ -51,7 +51,7 @@ From the profiled run (`docs/findings/2026-10-08-hydration-profile.md`, 2026-10-
 
 ### 4.1 Raise hydration concurrency (biggest single win, smallest change)
 
-Hydration runs `min(limiter_max_concurrent, 20)` workers and the corpus preset sets `limiter_max_concurrent=10`. The profile shows latency-bound batches at concurrency 10; every additional slot is close to linear throughput up to GitHub's documented 100-concurrent ceiling, and the limiter's phase binding for discovery proves the machinery already exists. Raising the corpus preset (and the clamp) to 20 is one settings/code line and should cut the 20.7-minute hydration toward **10–12 minutes** at unchanged point cost. Watch for secondary-limit 403s at the higher concurrency; the backoff already exists.
+Hydration runs `min(limiter_max_concurrent, 32)` workers and the corpus preset sets `limiter_max_concurrent=32`. The profile shows latency-bound batches at concurrency 10; every additional slot is close to linear throughput up to GitHub's documented 100-concurrent ceiling, and the limiter's phase binding for discovery proves the machinery already exists. Raising the corpus preset (and the clamp) to 20 is one settings/code line and should cut the 20.7-minute hydration toward **10–12 minutes** at unchanged point cost. Watch for secondary-limit 403s at the higher concurrency; the backoff already exists. **Status (2026-10-11):** done and settled — the proven operating point is batch 20 at concurrency 17–20, with two consecutive zero-403 record runs (9m41s, 9m08s for 39.5k). Concurrency 32 was trialed and tripped GitHub's scraping-flavored secondary limit; the hardening and the full story are in `runtime-audit-and-adaptive-control.md` §11.
 
 ### 4.2 Stop paying for unchanged rows (biggest win for repeat runs)
 
@@ -72,7 +72,7 @@ Discovery's own 100 s is now ~27 s of planning probes and ~70–83 s of fetching
 
 ### 4.5 Make each run self-reporting
 
-The stage timers above lived in a scratch script. Persisting per-stage wall times (and GraphQL points spent) to the run payload would let every future run produce this document's evidence automatically, and would make regressions visible from the console instead of by profiling.
+The stage timers above lived in a scratch script. Persisting per-stage wall times (and GraphQL points spent) to the run payload would let every future run produce this document's evidence automatically, and would make regressions visible from the console instead of by profiling. **Shipped (2026-10-11):** stage timings live in every run bundle and per-phase GraphQL points are in `field_stats["points"]` (migration `0014` telemetry) — this document's evidence now comes free with every run.
 
 ## 5. Deferred items (small, recorded so they are not lost)
 
@@ -102,5 +102,5 @@ The stage timers above lived in a scratch script. Persisting per-stage wall time
 ## 8. Where the code lives
 
 - Engine: `src/discover/graphql_search.py` (counts, pages, mapping, halving), `src/discover/pipeline.py` (plan → shards → parallel workers), `src/scheduler/shard_planner.py` (`plan_shards`).
-- Limits and meters: `src/limiter/buckets.py` (`graphql` points bucket, `bound_concurrency`), `src/store/settings.py` + `src/serve/settings_spec.py` (`discovery_concurrency`, corpus preset), `src/serve/runner.py` (hydration concurrency `min(limiter_max_concurrent, 20)`).
+- Limits and meters: `src/limiter/buckets.py` (`graphql` points bucket, `bound_concurrency`), `src/store/settings.py` + `src/serve/settings_spec.py` (`discovery_concurrency`, corpus preset), `src/serve/runner.py` (hydration concurrency `min(limiter_max_concurrent, 32)`).
 - Evidence: `design/corpus-building-efficient-engineering.md` §9.4, `docs/findings/2026-10-08-hydration-profile.md`, `docs/development-log.md` (2026-10-08 entry).

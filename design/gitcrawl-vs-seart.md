@@ -109,7 +109,7 @@ Neither column is universally better — the point is that only one column can a
 
 - **A single run starts with small caps** (500 candidates, 200 saved, 100 checked), tunable at `/settings`; the corpus preset raises them to 100,000 candidates/hydrate/enrich and 1,000 shards (24 h deadline). SEART has no such caps.
 - **`cloc`-style LOC filters are recorded but not enforced yet** (`min_commits` and language-byte filters `min_language_bytes`/`max_language_bytes` are enforced; see `loc-dilemma.md`) — SEART is ahead on true LOC today.
-- **GraphQL batching is built** (2026-10-02) and now runs parallel batches (bounded concurrency; hydration uses `min(limiter_max_concurrent, 20)`, corpus preset 10) with the one-by-one REST path as fallback.
+- **GraphQL batching is built** (2026-10-02) and now runs parallel batches (bounded concurrency; hydration uses `min(limiter_max_concurrent, 32)`, corpus preset 32, settled operating point 17–20) with the one-by-one REST path as fallback.
 - **It needs infrastructure**: Postgres, Redis, a token, and operational care. SEART needs a browser.
 - **You own the rate-limit responsibility.** gitcrawl paces itself and records fingerprints, but the token and its behavior are yours (see `corpus-building-efficient-engineering.md` §5).
 

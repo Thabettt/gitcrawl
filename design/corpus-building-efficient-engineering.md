@@ -8,6 +8,8 @@
 
 **Status note (2026-10-10)**: the runtime/adaptive work landed (explicit HTTP pool, parse-once batch bodies, buffered discovery upserts, audit writer thread, batch default 29, hydration ceiling 32, per-call point telemetry, limiter window anchored to GitHub's real reset, and an adaptive controller behind a settings toggle that defaults off). Live runs then hit GitHub's secondary limits: concurrency 32 produced a 159×403 storm (run 24), and a follow-up run at batch 25 / concurrency 20 absorbed a 19×403 burst before being stopped (run 25). The proven-clean full-corpus point remains **batch 20 / concurrency 20**. The progressive log, including the failed attempts, lives in `runtime-audit-and-adaptive-control.md` §11.
 
+**Status note (2026-10-11)**: the secondary-limit hardening shipped (pool-wide 403/429 pause, escalation with jitter, per-pass hit budget, controller feed), and the settled operating point — **batch 20, concurrency 17–20, adaptive off** — delivered two consecutive zero-403 record runs: 39,484 repos in 9m41s (run 29) and 39,485 in **9m08s** (run 30), both inside a single hourly window (~2,400 points each; two runs per window).
+
 ---
 
 ## 1. The goal, in one paragraph
@@ -330,7 +332,7 @@ A small generic **batch core** plus three thin **adapters**:
 5. **REST fallback.** A repo that still fails as a single batch call is retried once through today's one-by-one path; if that fails too, it is recorded **unresolved with a reason**.
 6. **Explicit final states.** Every repo ends as *saved*, *fallback-saved*, or *unresolved (reason)*. Counts are reported at the end of the run; audit rows are written as failures happen.
 7. **No silent partials.** Any unresolved repo marks the run **partial**, consistent with the project rule that partial data is never presented as complete.
-8. **Bounded concurrency.** Batches run through a small thread pool under the shared limiter and the run deadline; hydration uses `min(limiter_max_concurrent, 20)` workers. Parallelism stays well inside GitHub's 100-concurrent politeness ceiling, and the point meters still cap the hour. (Measured: ~2,800 repos/min at concurrency 10, versus ~300–400/min sequential.)
+8. **Bounded concurrency.** Batches run through a small thread pool under the shared limiter and the run deadline; hydration uses `min(limiter_max_concurrent, 32)` workers (the settled operating point is 17–20 — see `run-limits.md` §4). Parallelism stays well inside GitHub's 100-concurrent politeness ceiling, and the point meters still cap the hour. (Measured: ~2,800 repos/min at concurrency 10, versus ~300–400/min sequential.)
 9. **Dedicated GraphQL meter.** A `graphql` bucket (5,000 points/hour) is added beside `search`/`core` in the limiter, and `/graphql` is recognized as its own resource.
 
 ### 10.3 Why not the old module as-is

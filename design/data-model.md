@@ -137,10 +137,16 @@ CREATE TABLE audit_log (
   retry_after     INTEGER, link_next BOOLEAN,
   total_count     INTEGER, incomplete_results BOOLEAN,
   token_fp        TEXT NOT NULL,             -- hash, never raw token
-  latency_ms      INTEGER NOT NULL
+  latency_ms      INTEGER NOT NULL,
+  rl_used         INTEGER,                   -- 0014: points used at response time
+  run_id          BIGINT,                    -- 0014: run attribution (plain BIGINT, not FK)
+  phase           TEXT                       -- 0014: count/discovery/hydration/enrich
 );
 CREATE INDEX audit_ts_idx ON audit_log (ts);
+CREATE INDEX audit_run_idx ON audit_log (run_id);   -- 0014
 ```
+
+**Amendment (migration `0014`)**: audit rows gained `rl_used`, `run_id`, and `phase` (plus `audit_run_idx`) for per-run, per-phase point attribution; `app_settings.graphql_batch_size`'s server default moved 20→29 with a one-time alignment of existing rows. `run_id` is deliberately a plain `BIGINT` — audit_log is append-only log data and must not couple to run-row lifecycle.
 
 ## Console tables (US4, migration `0003_console.py` — ruling R38)
 
@@ -154,7 +160,7 @@ CREATE INDEX audit_ts_idx ON audit_log (ts);
 
 | Table | Migration | Purpose |
 |---|---|---|
-| `app_settings` | `0008` | Single-row run limits and toggles (`max_shards`, `max_candidates`, `max_hydrate`, `max_enrich`, `request_deadline_seconds`, `graphql_batch`, `graphql_batch_size` 1–50, `limiter_max_concurrent` 1–100); editable at `/settings` (one-click corpus preset: 1,000 shards; 100,000 candidates/hydrate/enrich; 24 h deadline; batch 29; concurrency 32), env-pinnable |
+| `app_settings` | `0008` (+ `0015`) | Single-row run limits and toggles (`max_shards`, `max_candidates`, `max_hydrate`, `max_enrich`, `request_deadline_seconds`, `graphql_batch`, `graphql_batch_size` 1–50, `limiter_max_concurrent` 1–100, `adaptive` on/off); editable at `/settings` (one-click corpus preset: 1,000 shards; 100,000 candidates/hydrate/enrich; 24 h deadline; batch 29; concurrency 32 — the settled operating point is batch 20 / concurrency 17–20, see `run-limits.md` §4), env-pinnable |
 | `corpora` | `0009` | Named frozen corpora: unique name, `source_run_id` FK → runs, note, `repo_count`, `frozen_at` |
 
 ## Planned tables (designed, not implemented — thesis tracks parked)

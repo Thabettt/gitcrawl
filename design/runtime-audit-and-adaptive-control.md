@@ -12,6 +12,8 @@
 
 A 39,128-repo run takes about 10 minutes and spends about 2,916 of the 5,000 hourly GraphQL points. The slow part is **not** our client and **not** the network — it is GitHub's own per-query processing time (about 5 seconds per batch) multiplied by how many batches we allow in flight (20). Two simple levers get the run under 6 minutes: fetch 29 repos per call instead of 20 (still 1 point, 31% fewer calls), and let 32–40 calls run at once instead of 20. The 5,000-point allowance is **not** what limits our speed; the hidden ceilings are (a) an unadvertised CPU-time rule, (b) the documented 100-concurrent cap, (c) the 10-second query timeout, which *charges extra points* when it fires, and (d) our own client's fixed settings, which currently stall instead of adapting. The recommended fix is a small dynamic controller — not a rewrite — that shrinks the batch on the first timeout, halves concurrency on the first pushback, paces the hour so we never drain the meter to zero, and pauses the whole pool on a rate-limit signal instead of letting siblings keep knocking.
 
+**Status update (2026-10-11):** the 4.5–6-minute projection was trialed and revised by production. Concurrency 32 tripped GitHub's scraping-flavored secondary limit, and the settled point — **batch 20, concurrency 17–20, adaptive off** — has since delivered two consecutive zero-403 record runs (39.5k in 9m08s, run 30). The progressive log in §11 supersedes the projections above wherever they disagree.
+
 ---
 
 ## 2. How one run actually spends its ten minutes
@@ -110,6 +112,7 @@ From the recorded ledger (`docs/findings/2026-10-08-hydration-profile.md:75-77`)
 | Peak request rate (secondary-point meter) | 235/minute — **12%** of the 2,000/minute ceiling |
 | Concurrent requests | 20 — **20%** of the documented 100 |
 | Cost at batch 29 | ~2,300 points/run (~46–48%), ~85,000 repos/hour realistic, ~106,000 ideal |
+| Cost at batch 20 (the settled point) | **2,412 points measured per 39.5k run** (1,975 hydration + 436 discovery + 1 count) → a 5,000-point window fits **two runs, not three** (§11.6) |
 
 **Plain consequence:** we are using barely half the meter, and the unused half can be converted to either *speed* (finish 39k in ~4.5–6 minutes) or *volume* (about 85k repos per hour, or two 39k runs per hour with a slim margin). The meter is not the wall that speed runs into.
 
@@ -235,6 +238,8 @@ On a good day, W walks 20 → 32 → 40 (roughly 1.5–2x today's speed) with ze
 
 ## 8. Ranked recommendations
 
+**Status (2026-10-11):** recommendations 3–7 shipped (see §11.1 and §11.8). Recommendations 1–2 were trialed and revised by production: batch 29 and concurrency 32 both proved hot; the settled operating point is **batch 20, concurrency 17–20** (§11.6).
+
 Highest leverage first. Items 1–3 are safe to do now; items 4–6 should accompany the controller; item 7 is optional.
 
 1. **Batch size 20 → 29.** `src/lib/graphql_batch.py:20` (`DEFAULT_BATCH_SIZE`) and `src/serve/settings_spec.py:22` (corpus preset). Largest batch that still costs 1 point; −31% hydration calls. Never 30+ without item 5.
@@ -349,21 +354,33 @@ Plain consequence: enabling the toggle neither helped nor hurt this run; the fai
 
 ### 11.6 The scoreboard
 
-| Profile | Run | Outcome |
-|---|---|---|
-| B=20, C=20, static | run 19 (before this work) | 39,128 repos in ~602 s; **zero 403s**; 2,916 points |
-| B=29, W≤20, adaptive ON | soak | 20.9 min; 2 timeout drops; 0 403s; safe but slow |
-| B=29, C=32, static | run 24 | **159× 403** storm; cancelled at 26% |
-| B=25, C=20, adaptive ON | run 25 | 19× 403 absorbed in ~1 min; ~50% done at cancel; controller inert |
+Every run we have, with the settings it actually ran — this table is the handoff artifact: any agent can reproduce or diagnose a profile from it. Discovery ran 32 workers in every run below; "W" is the controller's live window when adaptive was on.
 
-The current recommended operating point for a single token: **batch 20–25, concurrency 20** (16 if a storm is recent), discovery 32, adaptive off, and **a cooldown of 30–60+ minutes after any secondary-limit storm** before the next run. The only profile with a zero-403, full-corpus history is batch 20 / concurrency 20.
+| # | Run (date, local) | Batch | Concurrency | Adaptive | Token state | Outcome |
+|---|---|---|---|---|---|---|
+| 1 | **run 30** (10-11 03:44) | 20 | **17** | off | cool, 2nd run in window | **39,485 repos in 9m08s; zero 403s/timeouts/requeues; max latency 8.6 s; ended at 667 points** |
+| 2 | run 29 (10-11 03:22) | 20 | 17 | off | cool | 39,484 in 9m41s; zero 403s; one 25 s GitHub edge spike (9× 499, 9 requeues) |
+| 3 | run 19 (10-09, pre-work) | 20 | 20 | off | cool | 39,128 in 10m02s; zero 403s; 2,916 points |
+| 4 | soak (10-09) | 29 | W≤20 | **on** | cool | 20.9 min; 2 timeout drops; W 20→8; 0 403s; safe but slow |
+| 5 | run 24 (10-10 20:09) | 29 | 32 | off | warm | **159× 403** storm; cancelled at 26% |
+| 6 | run 25 (10-10 20:56) | 25 | 20 | on | warm (after run 24) | 19× 403 absorbed in ~1 min; cancelled at 50%; controller inert |
+| 7 | run 27 (10-10 21:59) | 25 | 17 | off | warm | 48× 403 in synchronized waves; cancelled |
+| 8 | run 28 (10-11 00:18) | 25 | 17 | off | flagged (scraping) | 48× 403; recovered; cancelled at ~50% |
+
+**Run 30, in detail (the new reference).** 9m08s total: discovery 99.0 s (436 pages, clean), hydration 439.0 s at C=17/B=20, zero 403s, zero timeouts, zero requeues, zero unresolved, max latency 8.55 s, largest completion gap 2.1 s, throughput flat at 260–277 batches/min, 1,975 hydration points at exactly 1 per request. The cleanest run on record — and the second consecutive zero-403 run at this profile.
+
+**Run 29, in detail.** 9m41s: discovery 93.7 s, hydration 479.8 s. The one rough moment was a ~25-second GitHub edge spike at 03:28:17–42: a 7.7 s completion gap, 9 requests aborted with `499` after 11–19 s, several 200s taking 14–30 s (max 29.8 s — within 200 ms of our 30 s client timeout), and `x-ratelimit-remaining` alternating between two regions (~3,7xx vs ~4,86x). The engine treated the 499s as timeouts — 9 splits/requeues, +18 requests (~1% overhead), all resolved. No declared GitHub incident; an undeclared edge event.
+
+**The budget math.** At batch 20 a full 39.5k run costs ~2,400 points (1,975 hydration + 436 discovery + 1 count) — a single 5,000-point window fits **two runs, not three**. Runs 29 + 30 together ended at 667 points remaining. A third run, or a larger corpus, must wait for the window reset (the marathon-mode idea note covers pacing through it).
+
+The settled operating point for a single token: **batch 20, concurrency 17–20** (16 if a storm is recent), discovery 32, adaptive off, plus **a 30–60+ minute cooldown after any secondary-limit storm**. Zero-403, full-corpus history: run 30 (9m08s), run 29 (9m41s), run 19 (10m02s).
 
 ### 11.7 Open gaps and next moves
 
-1. **Pool-wide pause on 403/429.** The real missing piece: when a secondary-limit response arrives, pause the shared bucket for `retry-after` so every worker stops knocking, instead of each sleeping independently. This also makes the event visible to the controller.
+1. **Pool-wide pause on 403/429 — shipped** (`a723844` + `4620fb0`): any 403/429 now pauses the shared bucket for `retry-after` (atomic, extend-only), repeats escalate 60→120→240→480 s with jitter, and a hydration/enrichment pass stops cleanly after 15 hits instead of spiraling. Details in §11.8.
 2. **Cooldown discipline.** Repeated secondary storms escalate; GitHub's own words: *"Continuing to make requests while you are rate limited may result in the banning of your integration."* Space out runs after a storm.
 3. **Adaptive's role, clarified.** It is a seatbelt for concurrency > 20, not a speed feature; its drop signal does not see retry-absorbed 403s. Default stays off; the toggle (migration 0015) exists for experiments at higher ceilings.
-4. **Small knowns** (deferred from reviews): the controller's default clock is `time.monotonic` (production passes `time.time`); a `retry-after: 0` falls through to 60–120 s; the deferral reason always reads "point reserve"; the pause wait doesn't check the run deadline.
+4. **Small knowns** (deferred from reviews): the controller's default clock is `time.monotonic` (production passes `time.time`); a `retry-after: 0` falls through to 60–120 s; the pause wait doesn't check the run deadline. (The deferral-reason wording was fixed in `4620fb0` — it now covers both the point reserve and the secondary budget.)
 
 ### 11.8 The scraping flag, captured (run 28, 2026-10-11)
 
