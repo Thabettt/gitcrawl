@@ -642,3 +642,57 @@ def test_secondary_budget_stops_dispatch_pauses_pool_and_defers_remainder(redis)
         key for key, reason in outcome.unresolved.items() if reason.startswith("ThrottledError")
     ]
     assert len(throttled) == 20
+
+
+def test_secondary_budget_defers_requeued_keys_before_redispatch():
+    lock = threading.Lock()
+    counts: dict[str, int] = {}
+    captured: list[httpx.Request] = []
+    b_fifth = threading.Event()
+    release = threading.Event()
+    folds = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = keys_in(request)[0]
+        with lock:
+            counts[key] = counts.get(key, 0) + 1
+            count = counts[key]
+            captured.append(request)
+        if key == "1" and count >= 5:
+            b_fifth.set()
+            assert release.wait(timeout=10)
+        if key == "0" and count >= 5:
+            assert b_fifth.wait(timeout=10)
+        return httpx.Response(
+            403,
+            json={"message": "You have exceeded a secondary rate limit"},
+            headers={"retry-after": "60"},
+        )
+
+    def on_progress(done: int, total: int) -> None:
+        folds["n"] += 1
+        if folds["n"] == 3:
+            release.set()
+
+    adapter = KeyAdapter()
+    adapter.batch_size = 1
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    outcome = fetch_batch(
+        adapter,
+        ["0", "1", "2", "3", "4"],
+        client=client,
+        concurrency=2,
+        on_progress=on_progress,
+        now=lambda: 1000.0,
+        sleep=lambda _seconds: None,
+        jitter=lambda: 0.0,
+    )
+    deferred = {
+        key: reason
+        for key, reason in outcome.unresolved.items()
+        if reason == "secondary rate limit budget exhausted"
+    }
+    assert len(captured) == 20  # "0" x3 dispatches + "1" x1; the requeued "1" is not resent
+    assert set(deferred) == {"1", "2", "3", "4"}
+    assert outcome.stats.deferred == 4
+    assert "RequestFailed" in outcome.unresolved["0"]

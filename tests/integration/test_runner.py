@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import random
 import re
 import threading
 import time
@@ -1758,3 +1759,53 @@ def test_run_filter_warns_when_the_reserve_defers_hydration(clean: Engine, monke
     assert hydration["deferred"] == 5
     assert any("deferred" in warning for warning in payload.warnings)
     assert payload.incomplete is True
+
+
+def test_production_batch_calls_receive_jitter(clean: Engine, monkeypatch):
+    page = [repo_item(1, login="alice"), repo_item(2, login="bob")]
+    locations = {"alice": "Germany", "bob": "Berlin"}
+    blob_paths = {"alice/repo1": ["Dockerfile"], "bob/repo2": ["Dockerfile"]}
+
+    def handler(request: httpx.Request):
+        path = path_of(request)
+        if is_search_request(request):
+            if is_count(request):
+                return count_response(request, 2)
+            return page_response(page)
+        if path == "/graphql":
+            if is_owner_query(request):
+                return graphql_owner_response(request, locations)
+            if is_file_query(request):
+                return graphql_file_response(request, blob_paths, "Dockerfile")
+            return graphql_batch_response(request, {item["full_name"]: item for item in page})
+        if path.startswith("/repos/"):
+            repo_id = int(path.rsplit("repo", 1)[1])
+            return httpx.Response(200, json=repo_item(repo_id))
+        return httpx.Response(404)
+
+    client, _ = scripted(handler)
+    refresh_jitter: list[object] = []
+    fetch_jitter: list[object] = []
+    real_refresh = runner_module.refresh_repos_batched
+    real_fetch = runner_module.fetch_batch
+
+    def spy_refresh(*args, **kwargs):
+        refresh_jitter.append(kwargs.get("jitter"))
+        return real_refresh(*args, **kwargs)
+
+    def spy_fetch(*args, **kwargs):
+        fetch_jitter.append(kwargs.get("jitter"))
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "refresh_repos_batched", spy_refresh)
+    monkeypatch.setattr(runner_module, "fetch_batch", spy_fetch)
+    run_filter(
+        make_deps(clean, client),
+        spec_for(
+            q="language:python",
+            virtual={"owner_country": "DE", "min_geo_confidence": "name", "has_dockerfile": True},
+        ),
+        config=RunnerConfig(max_shards=1, max_enrich=4),
+    )
+    assert refresh_jitter == [random.random]
+    assert fetch_jitter == [random.random, random.random]

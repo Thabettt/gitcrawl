@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -275,6 +276,7 @@ def _hydrate(
         on_apply_progress=on_apply_progress,
         concurrency=cfg.concurrency,
         adaptive=adaptive,
+        jitter=random.random,
     )
 
 
@@ -433,6 +435,7 @@ def _apply_geo(
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
         allow_requests=cfg.graphql_batch,
         concurrency=cfg.concurrency,
+        jitter=random.random,
     )
     report["owners"] = outcome.stats.as_dict()
     for login, owner_id in rows_by_login.items():
@@ -555,6 +558,7 @@ def _apply_dockerfile(
         deadline=deps.limiter.deadline if deps.limiter is not None else None,
         allow_requests=cfg.graphql_batch,
         concurrency=cfg.concurrency,
+        jitter=random.random,
     )
     report["files"] = outcome.stats.as_dict()
     kept: list[dict] = []
@@ -932,8 +936,8 @@ def _run_filter(
     deferred = hydration.batch.get("deferred", 0)
     if isinstance(deferred, int) and deferred > 0:
         warnings.append(
-            f"{deferred} repo(s) deferred: the GraphQL point reserve was reached; "
-            "results are incomplete"
+            f"{deferred} repo(s) deferred: the GraphQL point reserve or the "
+            "secondary-limit budget was reached; results are incomplete"
         )
     if hydration.tombstoned > 0:
         warnings.append(

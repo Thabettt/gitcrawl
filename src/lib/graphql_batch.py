@@ -455,7 +455,6 @@ def fetch_batch(
         with ThreadPoolExecutor(max_workers=pool_workers) as pool:
             in_flight: dict[Future, tuple[list[str], float]] = {}
             secondary_baseline = secondary.total()
-            secondary_budget_stopped = False
             while queue or in_flight or fallback_futures:
                 cancellation.check()
                 throttle = 0.0
@@ -476,11 +475,7 @@ def fetch_batch(
                         stats.deferred += marked
                         adaptive.note_deferred(marked)
                     throttle = max(adaptive.pause_remaining(), adaptive.pacer_delay())
-                if (
-                    not secondary_budget_stopped
-                    and secondary.total() - secondary_baseline >= _MAX_SECONDARY_HITS_PER_RUN
-                ):
-                    secondary_budget_stopped = True
+                if secondary.total() - secondary_baseline >= _MAX_SECONDARY_HITS_PER_RUN:
                     marked = 0
                     while queue:
                         for key in queue.popleft():
